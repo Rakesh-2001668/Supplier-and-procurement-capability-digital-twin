@@ -39,6 +39,7 @@ class Invoice(TenantScoped, Base):
     payment_block: Mapped[bool] = mapped_column(Boolean, default=False)
     due_date: Mapped[Optional[date]] = mapped_column(Date)
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    retention_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # withheld until release
     erp_doc_no: Mapped[Optional[str]] = mapped_column(String(40))
     posting_key: Mapped[Optional[str]] = mapped_column(String(200))
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))

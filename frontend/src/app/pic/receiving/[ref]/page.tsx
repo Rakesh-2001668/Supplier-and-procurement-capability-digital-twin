@@ -9,7 +9,7 @@ import { api } from '@/lib/pic/api';
 import { date, dateTime, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, PoDetail, useSessionUser } from '../../invoices/_components';
-import { InspectionLot, UsageDecisionDialog } from '../_components';
+import { GrWarning, GrWarnings, InspectionLot, UsageDecisionDialog } from '../_components';
 
 type GrLine = { id: string; line_no: number; po_line_id: string; qty: string; accepted_qty: string; rejected_qty: string; batch: string;
   serials: string[]; expiry: string | null; stock_type: string; storage_location: string; movement_type: string };
@@ -18,7 +18,7 @@ type ReturnDelivery = { id: string; number: string; po_line_id: string; qty: str
 type Node = { type: string; id: string; ref: string };
 type Gr = { id: string; number: string; po_id: string; asn_id: string | null; status: string; posting_date: string; delivery_note: string | null;
   reversal_of: string | null; created_at: string; updated_at: string | null; lines: GrLine[]; inspectionLots: Omit<InspectionLot, 'gr'>[];
-  returns: ReturnDelivery[]; lineage: { nodes: Node[] } };
+  returns: ReturnDelivery[]; lineage: { nodes: Node[] }; warnings?: GrWarning[] };
 
 const REVERSIBLE = ['POSTED', 'ACCEPTED', 'QUALITY_HOLD'];
 
@@ -44,6 +44,8 @@ export default function GoodsReceiptPage() {
         status={gr?.status}
         actions={canReverse && <Button variant="danger" onClick={() => setDialog('reverse')}>Reverse</Button>}
         facts={gr && (
+          <div className="space-y-3">
+          <GrWarnings warnings={gr.warnings} />
           <Facts items={[
             ['Purchase order', poNumber ? <Link key="po" className="text-[#1A56DB] hover:underline" href={`/pic/purchase-orders/${encodeURIComponent(poNumber)}`}>{poNumber}</Link> : '–'],
             ['ASN', asnNumber ?? (gr.asn_id ? 'linked' : 'received without ASN')],
@@ -52,6 +54,7 @@ export default function GoodsReceiptPage() {
             ['Inspection lots', String(gr.inspectionLots.length)], ['Return deliveries', String(gr.returns.length)],
             ['Last change', dateTime(gr.updated_at ?? gr.created_at)],
           ]} />
+          </div>
         )}
         lines={gr && (
           <DataTable<GrLine> rows={gr.lines} columns={[
@@ -65,6 +68,8 @@ export default function GoodsReceiptPage() {
             { key: 'rejected_qty', header: 'Rejected', align: 'right', render: (l) => Number(l.rejected_qty)
               ? <span className="font-semibold text-red-700">{qty(l.rejected_qty)}</span> : qty(l.rejected_qty) },
             { key: 'batch', header: 'Batch', render: (l) => l.batch || '–' },
+            { key: 'expiry', header: 'Expiry', render: (l) => l.expiry || '–' },
+            { key: 'serials', header: 'Serials', render: (l) => l.serials?.length ? <span className="font-mono text-xs">{l.serials.join(', ')}</span> : '–' },
             { key: 'storage_location', header: 'Sloc' },
             { key: 'stock_type', header: 'Stock type', render: (l) => <StatusChip status={l.stock_type} /> },
             { key: 'movement_type', header: 'Mvt', render: (l) => <span className="font-mono text-xs">{l.movement_type}</span> },

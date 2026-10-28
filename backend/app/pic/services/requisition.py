@@ -21,6 +21,8 @@ from app.pic.services.common import material_by_number, principal
 
 PROCESS = "pic.requisition"
 NEEDS_ACCOUNT = ("NON_STOCK", "SERVICE", "EXPENSE", "ASSET")
+NEEDS_MATERIAL = ("CONSIGNMENT", "SUBCONTRACTING")  # P08: special stocks are kept per material master
+CAPEX_ACCOUNTS = ("ASSET", "WBS")
 
 SM = StateMachine("REQUISITION", {
     ("DRAFT", "submit"): "SUBMITTED",
@@ -39,6 +41,10 @@ SM = StateMachine("REQUISITION", {
     ("DRAFT", "cancel"): "CANCELLED",
     ("RETURNED", "cancel"): "CANCELLED",
     ("APPROVED", "cancel"): "CANCELLED",
+    # A cancelled purchase order gives its quantity back to the requisition (order.cancel).
+    ("ORDERED", "reopen"): "APPROVED",
+    ("PARTIALLY_ORDERED", "reopen"): "APPROVED",
+    ("ORDERED", "reopen_partially"): "PARTIALLY_ORDERED",
 })
 
 
@@ -130,10 +136,15 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
     purchase_type = data.get("purchase_type", "NON_STOCK").upper()
     material = material_by_number(session, data["material"]) if data.get("material") else None
     catalogue = None
+    # A line from a returned punch-out cart carries the supplier's live price and part number (M04).
+    punchout = data.get("punchout")
     if item_type == "CATALOGUE":
-        catalogue = session.get(CatalogueItem, uuid.UUID(str(data["catalogue_item_id"])))
-        if catalogue is None:
-            raise Problem(404, "NOT_FOUND", "Catalogue item not found")
+        if data.get("catalogue_item_id"):
+            catalogue = session.get(CatalogueItem, uuid.UUID(str(data["catalogue_item_id"])))
+            if catalogue is None:
+                raise Problem(404, "NOT_FOUND", "Catalogue item not found")
+        elif not punchout:
+            raise rule_violation("Catalogue lines need a catalogue item from the guided-buying search or a punch-out cart", "P03")
     if item_type == "FREE_TEXT" and material is not None:
         raise rule_violation("Free-text lines cannot reference a material master", "P04")
     if item_type in ("MATERIAL", "CONTRACT") and material is None:
@@ -153,7 +164,7 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
     if not description or not material_group:
         raise rule_violation("Every line needs a description and a material group", "P04")
     price = data.get("price_est_minor")
-    if catalogue is not None:
+    if catalogue is not None and not punchout:
         price = catalogue.price_minor
     if price is None:
         raise rule_violation("Every line needs an estimated price", "REQ-02")
@@ -170,12 +181,35 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
         plant=data.get("plant", pr.plant), storage_location=data.get("storage_location"),
         quotes_attached=int(data.get("quotes_attached", 0)), reusable=bool(data.get("reusable", False)),
         planned_order_id=data.get("planned_order_id"), source_determination=data.get("source_determination", {}),
-        created_by=pr.created_by,
+        preferred_supplier_id=data.get("preferred_supplier_id"), created_by=pr.created_by,
     )
 
 
 def _lines(session: Session, pr: Requisition) -> list[PrLine]:
     return session.execute(select(PrLine).where(PrLine.requisition_id == pr.id).order_by(PrLine.line_no)).scalars().all()
+
+
+def add_lines(session: Session, pr: Requisition, lines: list[dict], source: str) -> list[PrLine]:
+    """Append lines (e.g. a returned punch-out cart) to a draft or returned requisition; checks run again on submit."""
+    if pr.status not in ("DRAFT", "RETURNED"):
+        raise illegal_transition("Requisition", pr.number, pr.status, "add lines")
+    if principal(session).user_id != pr.requester_id:
+        raise Problem(403, "FORBIDDEN", "Only the requester can add lines to this requisition")
+    line_no = max((l.line_no for l in _lines(session, pr)), default=0)
+    added = []
+    for data in lines:
+        line_no += 10
+        line = _build_line(session, pr, line_no, data)
+        session.add(line)
+        added.append(line)
+    session.flush()
+    pr.total_minor = sum(line_amount(l.qty, l.price_est_minor) for l in _lines(session, pr))
+    audit.record(session, "REQUISITION", pr.id, "LINES_ADDED", object_ref=pr.number,
+                 after={"lines": [l.line_no for l in added], "source": source, "totalMinor": pr.total_minor})
+    instance = workflow.find(session, "REQUISITION", pr.id, PROCESS)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.step(session, instance, "F2-02", outcome=f"{len(added)} line(s) added from {source}")
+    return added
 
 
 # ---------------------------------------------------------------- submit: policy, budget, approval route
@@ -190,6 +224,12 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
     for line in lines:
         if line.purchase_type in NEEDS_ACCOUNT and not line.account_assignment_code:
             violations.append(f"line {line.line_no}: {line.purchase_type.lower()} purchases need an account assignment")
+        # BP §22: capital assets are assigned to an asset or a WBS element (capex); consignment and subcontracting need a material.
+        if line.purchase_type == "ASSET" and line.account_assignment_code and line.account_assignment_type not in CAPEX_ACCOUNTS:
+            violations.append(f"line {line.line_no}: capital assets are assigned to an asset or a WBS element (capex), "
+                              f"not {(line.account_assignment_type or 'none').lower().replace('_', ' ')}")
+        if line.purchase_type in NEEDS_MATERIAL and not line.material_id:
+            violations.append(f"line {line.line_no}: {line.purchase_type.lower()} purchases need a material master")
         if line.item_type == "FREE_TEXT":
             value = line_amount(line.qty, line.price_est_minor)
             required = 0 if value < quote_rule.body["noQuoteBelow"] else 1 if value < quote_rule.body["oneQuoteBelow"] else 3
@@ -202,6 +242,7 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
     if violations:
         raise rule_violation("; ".join(violations), "P01/P08/" + quote_rule.ref, violations=violations)
 
+    category_result, category_rules = category_budget_check(session, pr, lines, justification)
     budget_rule = rules.resolve(session, "BUDGET", company_code=pr.company_code)
     budget_result = _budget_check(session, pr, lines, budget_rule, justification)
     route_rule = rules.resolve(session, "DMN-01", company_code=pr.company_code, plant=pr.plant)
@@ -211,7 +252,15 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
     purchase_type = "ASSET" if any(l.purchase_type == "ASSET" for l in lines) else lines[0].purchase_type
     chain = rules.requisition_chain(route_rule, pr.total_minor, channel, account_type, purchase_type)
     pr.rule_set_version = rules.refs(route_rule, quote_rule, budget_rule)
+    for extra in category_rules:  # the full list stays in budget_result; the column holds 80 characters
+        if extra.ref not in pr.rule_set_version and len(pr.rule_set_version) + len(extra.ref) + 1 <= 80:
+            pr.rule_set_version += ";" + extra.ref
+    budget_result = {**budget_result, "categoryBudget": category_result}
     pr.budget_result = budget_result
+    if category_result["checks"]:
+        audit.record(session, "REQUISITION", pr.id, "CATEGORY_BUDGET_CHECKED", object_ref=pr.number, after=category_result,
+                     reason=justification if category_result["outcome"] == "EXCEEDED_JUSTIFIED" else None,
+                     rule_set_version=";".join(sorted({r.ref for r in category_rules})))
     pr.policy_hints = hints
     pr.approval_chain = chain
     pr.submitted_at = clock.now()
@@ -225,7 +274,7 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
                  rule_set_version=route_rule.ref)
         workflow.step(session, instance, "F2-08", outcome="auto-approved (DMN-01)")
         _approved(session, pr, instance)
-        return {"status": pr.status, "chain": chain}
+        return {"status": pr.status, "chain": chain, "categoryBudget": category_result}
     SM.apply(session, pr, "route", rule_set_version=route_rule.ref)
     workflow.start_approval(
         session, instance, "REQ_APPROVAL", object_type="REQUISITION", object_id=pr.id, object_ref=pr.number, chain=chain,
@@ -233,7 +282,7 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
         sla_business_days=int(route_rule.body.get("slaBusinessDays", 2)), rule_set_version=route_rule.ref,
         evidence={"totalMinor": pr.total_minor, "budget": budget_result},
     )
-    return {"status": pr.status, "chain": chain}
+    return {"status": pr.status, "chain": chain, "categoryBudget": category_result}
 
 
 def _scopes(lines: list[PrLine], chain: list[str]) -> dict:
@@ -272,6 +321,101 @@ def _budget_check(session: Session, pr: Requisition, lines: list[PrLine], rule, 
         checks.append({"costObject": f"{obj_type}:{code}", "amountMinor": amount, "availableMinor": available,
                        "control": "HARD" if hard else "SOFT", "result": "OK" if ok else "SOFT_STOP_JUSTIFIED"})
     return {"outcome": "OK" if all(c["result"] == "OK" for c in checks) else "SOFT_STOP_JUSTIFIED", "checks": checks}
+
+
+# ---------------------------------------------------------------- §24.1 / M01 category-plan budget
+CATEGORY_MEASURE = (
+    "committed = net value of purchase-order lines (any status except DRAFT and CANCELLED) on POs created in the fiscal year, "
+    "plus the not-yet-ordered value of requisition lines that are SUBMITTED, IN_APPROVAL, APPROVED or PARTIALLY_ORDERED and were "
+    "submitted in the fiscal year; a line's category is its requisition-line category (else material category, else material group)"
+)
+_RESULT_ORDER = {"OK": 0, "WARNING": 1, "EXCEEDED_JUSTIFIED": 2}
+
+
+def _fiscal_bounds(fiscal_year: str):
+    start = int(fiscal_year[:4])
+    return clock.at_ist(date(start, 4, 1), 0, 0), clock.at_ist(date(start + 1, 4, 1), 0, 0)
+
+
+def category_committed(session: Session, categories: set[str], fiscal_year: str,
+                       exclude_pr: Optional[uuid.UUID] = None) -> dict[str, int]:
+    """Committed spend per category for a fiscal year (see CATEGORY_MEASURE)."""
+    from app.pic.models import PoLine, PurchaseOrder
+
+    start, end = _fiscal_bounds(fiscal_year)
+    committed = {c: 0 for c in categories}
+    material_category = {m.id: m.category for m in session.execute(select(Material)).scalars()}
+
+    def category_of(line: PrLine) -> str:
+        return line.category or material_category.get(line.material_id) or line.material_group
+
+    for line, pr in session.execute(
+            select(PrLine, Requisition).join(Requisition, Requisition.id == PrLine.requisition_id).where(
+                Requisition.status.in_(("SUBMITTED", "IN_APPROVAL", "APPROVED", "PARTIALLY_ORDERED")),
+                Requisition.submitted_at >= start, Requisition.submitted_at < end)).all():
+        if pr.id == exclude_pr:
+            continue
+        category = category_of(line)
+        if category in committed and line.qty > line.ordered_qty:
+            committed[category] += line_amount(line.qty - line.ordered_qty, line.price_est_minor)
+    pos = session.execute(select(PoLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
+        PurchaseOrder.status.notin_(("DRAFT", "CANCELLED")), PurchaseOrder.created_at >= start, PurchaseOrder.created_at < end)).all()
+    sources = {(l.requisition_id, l.line_no): category_of(l) for l in session.execute(select(PrLine).where(
+        PrLine.requisition_id.in_({po_line.requisition_id for po_line, _ in pos if po_line.requisition_id}))).scalars()} if pos else {}
+    for po_line, _ in pos:
+        category = (sources.get((po_line.requisition_id, po_line.pr_line_no)) if po_line.requisition_id else None) \
+            or material_category.get(po_line.material_id) or po_line.material_group
+        if category in committed:
+            committed[category] += po_line.net_minor
+    return committed
+
+
+def category_budget_check(session: Session, pr: Requisition, lines: list[PrLine], justification: Optional[str]) -> tuple[dict, list]:
+    """Compare committed spend + this requisition with each APPROVED category plan's budget (rule CATEGORY-BUDGET).
+    SOFT: warning from warnAtPct, justification required above 100%. HARD: blocked above 100%."""
+    from app.pic.models import CategoryPlan
+
+    fiscal_year = clock.fiscal_year(clock.today())
+    amounts: dict[str, int] = {}
+    for line in lines:
+        category = line.category or line.material_group
+        amounts[category] = amounts.get(category, 0) + line_amount(line.qty, line.price_est_minor)
+    plans = {plan.category: plan for plan in session.execute(select(CategoryPlan).where(
+        CategoryPlan.category.in_(list(amounts)), CategoryPlan.fiscal_year == fiscal_year, CategoryPlan.status == "APPROVED",
+        CategoryPlan.budget_minor.is_not(None))).scalars()}
+    result = {"outcome": "NOT_APPLICABLE", "fiscalYear": fiscal_year, "measure": CATEGORY_MEASURE, "checks": [], "warnings": []}
+    if not plans:
+        return result, []
+    committed = category_committed(session, set(plans), fiscal_year, exclude_pr=pr.id)
+    used_rules = []
+    for category, plan in sorted(plans.items()):
+        rule = rules.resolve(session, "CATEGORY-BUDGET", company_code=pr.company_code, category=category)
+        used_rules.append(rule)
+        mode = str(rule.body.get("mode", "SOFT")).upper()
+        warn_at = Decimal(str(rule.body.get("warnAtPct", 90)))
+        projected = committed[category] + amounts[category]
+        used_pct = (Decimal(projected) * 100 / Decimal(plan.budget_minor)).quantize(Decimal("0.1")) if plan.budget_minor > 0 else Decimal(999)
+        status = "EXCEEDED" if used_pct > 100 else "WARNING" if used_pct >= warn_at else "OK"
+        check = {"category": category, "plan": plan.number, "budgetMinor": plan.budget_minor, "committedMinor": committed[category],
+                 "requisitionMinor": amounts[category], "projectedMinor": projected, "availableMinor": plan.budget_minor - committed[category],
+                 "usedPct": str(used_pct), "warnAtPct": str(warn_at), "mode": mode, "result": status, "ruleSetVersion": rule.ref}
+        if status == "EXCEEDED":
+            message = (f"{category}: this requisition takes the {fiscal_year} category budget ({plan.number}) to {used_pct}% "
+                       f"(committed {committed[category]} + this requisition {amounts[category]} of {plan.budget_minor} paise)")
+            if mode == "HARD":
+                raise Problem(422, "CATEGORY_BUDGET_EXCEEDED", f"{message}; hard stop", rule_ref=rule.ref, categoryBudget=check)
+            if not (justification or "").strip():
+                raise Problem(422, "CATEGORY_BUDGET_JUSTIFICATION_REQUIRED", f"{message}; add a justification", rule_ref=rule.ref,
+                              categoryBudget=check)
+            check["result"] = "EXCEEDED_JUSTIFIED"
+            check["justification"] = justification.strip()
+            result["warnings"].append(f"{message}; justified")
+        elif status == "WARNING":
+            result["warnings"].append(f"{category}: {used_pct}% of the {fiscal_year} category budget ({plan.number}) is committed "
+                                      f"with this requisition (warning from {warn_at}%)")
+        result["checks"].append(check)
+    result["outcome"] = max((c["result"] for c in result["checks"]), key=lambda r: _RESULT_ORDER[r])
+    return result, used_rules
 
 
 def _release_budget(session: Session, pr: Requisition) -> None:
@@ -350,6 +494,10 @@ def change_line(session: Session, pr: Requisition, line_no: int, changes: dict) 
         SM.apply(session, pr, "reapprove", reason="value, account or supplier changed after approval")
         rule = rules.resolve(session, "DMN-01", company_code=pr.company_code, plant=pr.plant)
         lines = _lines(session, pr)
+        # The budget commitment follows the changed value: release the old one and book the new one (same soft/hard rules).
+        _release_budget(session, pr)
+        rebooked = _budget_check(session, pr, lines, rules.resolve(session, "BUDGET", company_code=pr.company_code), None)
+        pr.budget_result = {**rebooked, "categoryBudget": (pr.budget_result or {}).get("categoryBudget"), "rebookedOnChange": True}
         chain = rules.requisition_chain(rule, pr.total_minor, "OTHER", line.account_assignment_type, line.purchase_type)
         instance = workflow.start(session, PROCESS, "REQUISITION", pr.id, pr.number, {"reapproval": True})
         workflow.start_approval(session, instance, "REQ_APPROVAL", object_type="REQUISITION", object_id=pr.id,

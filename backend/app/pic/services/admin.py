@@ -84,6 +84,24 @@ def convert(session: Session, amount_minor: int, from_ccy: str, to_ccy: str, on:
     raise Problem(422, "FX_RATE_MISSING", f"No {from_ccy}/{to_ccy} rate valid on {on}")
 
 
+def add_plant_holidays(session: Session, plant_code: str, holidays: list[date], source: str) -> list[date]:
+    """ADM-01 factory calendar: add public holidays to a plant (union with the dates already there; nothing is removed,
+    so planned dates already computed against the calendar keep their basis). Returns the dates actually added."""
+    _admin(session)
+    plant = session.execute(select(Plant).where(Plant.code == plant_code)).scalar_one_or_none()
+    if plant is None:
+        raise not_found("Plant", plant_code)
+    if not source or len(source.strip()) < 5:
+        raise Problem(422, "SOURCE_REQUIRED", "Name the holiday list (gazette notification / G.O.) the dates come from")
+    have = set(plant.holidays or [])
+    added = sorted(set(holidays) - have)
+    if added:
+        plant.holidays = sorted(have | set(added))
+        audit.record(session, "PLANT", plant.id, "CALENDAR_UPDATED", object_ref=plant.code, before={"holidays": len(have)},
+                     after={"added": [d.isoformat() for d in added], "holidays": len(plant.holidays)}, reason=source)
+    return added
+
+
 # ---------------------------------------------------------------- ADM-04 users and roles
 def users(session: Session) -> list[dict]:
     return [{"id": str(u.id), "email": u.email, "name": u.full_name, "roles": u.roles, "active": u.active, "mfaEnrolled": u.mfa_enrolled,

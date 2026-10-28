@@ -82,6 +82,17 @@ def _calendar(session: Session, plant: str) -> tuple[list[int], list[date]]:
     return list(row.working_days or [0, 1, 2, 3, 4, 5]), list(row.holidays or [])
 
 
+def _needed_on(on_hand: Decimal, gross_by_day: dict, receipt_by_day: dict, order: PlannedOrder, safety: Decimal) -> Optional[date]:
+    """First day projected stock falls below safety stock when the firmed order's own receipt is left out (None: never)."""
+    projected = on_hand
+    for day in sorted(set(gross_by_day) | set(receipt_by_day)):
+        projected += receipt_by_day.get(day, Decimal(0)) - (order.qty if day == order.need_date else Decimal(0))
+        projected -= gross_by_day.get(day, Decimal(0))
+        if projected < safety:
+            return day
+    return None
+
+
 def net_material(session: Session, material: Material, plant: str, run_date: date) -> dict:
     """Bucket-by-bucket netting. Returns the planned receipts needed and exceptions, without writing."""
     demand = session.execute(select(DemandElement).where(DemandElement.material_id == material.id,
@@ -119,6 +130,16 @@ def net_material(session: Session, material: Material, plant: str, run_date: dat
         if needs and needs[0] < order.need_date:
             exceptions.append({"code": "RESCHEDULE_IN", "message": f"{order.number} needed on {needs[0]} (firmed for {order.need_date})",
                                "action": f"Reschedule {order.number} in", "planned_order": order.number})
+            continue
+        # Without this firmed receipt, when would projected stock first drop below safety stock?
+        needed_on = _needed_on(supply["on_hand"], gross_by_day, receipt_by_day, order, safety)
+        if needed_on is None:
+            exceptions.append({"code": "CANCEL", "message": f"{order.number} ({order.qty} for {order.need_date}) is not needed: "
+                               "demand is covered without it", "action": f"Cancel {order.number} or keep it as buffer",
+                               "planned_order": order.number})
+        elif needed_on > order.need_date:
+            exceptions.append({"code": "RESCHEDULE_OUT", "message": f"{order.number} not needed until {needed_on} (firmed for {order.need_date})",
+                               "action": f"Reschedule {order.number} out", "planned_order": order.number})
     gross_total = sum(gross_by_day.values(), Decimal(0))
     return {
         "material": material.number, "plant": plant, "gross": gross_total, "on_hand": supply["on_hand"],
@@ -151,7 +172,7 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
     candidates = session.execute(query).scalars().all()
     if mode == "NET_CHANGE":
         last = session.execute(select(func.max(MrpRun.created_at)).where(MrpRun.plant == plant, MrpRun.id != mrp_run.id,
-                                                                         MrpRun.mode != "SIMULATION")).scalar()
+                                                                         MrpRun.mode.not_in(("SIMULATION", "ERP_IMPORT")))).scalar()
         if last is not None:
             changed = {row for row in session.execute(select(DemandElement.material_id).where(
                 DemandElement.plant == plant, DemandElement.changed_at > last)).scalars()}

@@ -101,7 +101,8 @@ def run(sc: Scenario, password: str) -> None:
     for code, (who, qty, batch) in shipments.items():
         with sc.act(who, at(date(2027, 2, 10), 9)) as s:
             a = receiving.create_asn(s, s.get(PurchaseOrder, pos[code][0]), lines=[{"line": 10, "qty": qty, "batches": [{"batch": batch, "qty": qty}]}],
-                                     ship_date=date(2027, 2, 10), expected_date=date(2027, 2, 12), eway_bill_no=f"3310{batch[-5:].replace('-', '')}00",
+                                     ship_date=date(2027, 2, 10), expected_date=date(2027, 2, 12), eway_bill_no=f"3310{batch[-5:].replace('-', '')}0000",
+                                     vehicle_no="TN45AB1234" if code == "TF001" else "TN38CK4521", distance_km=320 if code == "TF001" else 250,
                                      documents=[f"CoC-{batch}"])
             asns[code] = a.id
     for code, (_, qty, batch) in shipments.items():

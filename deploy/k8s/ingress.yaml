@@ -1,0 +1,79 @@
+# Public entry point: global external Application Load Balancer (GKE Ingress, class "gce") -> pic-web only.
+# The API has no Ingress and no external Service; it is reachable only from pic-web inside the cluster.
+#
+# Terraform creates the referenced global objects (names must match):
+#   static IP       pic-web-ip        (google_compute_global_address)
+#   SSL policy      pic-ssl-policy    (google_compute_ssl_policy, TLS >= 1.2)
+#   Cloud Armor     pic-web-armor     (google_compute_security_policy)
+# DNS: create an A record for the host below pointing at `terraform output ingress_ip_address` BEFORE applying;
+# the Google-managed certificate stays PROVISIONING until the name resolves to that IP (can take 15-60 min).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pic-web
+  labels:
+    app.kubernetes.io/name: pic-web
+  annotations:
+    # GKE still documents the class annotation for the built-in controller; spec.ingressClassName "gce" is
+    # equivalent on current GKE versions. Use one or the other, not both.
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "pic-web-ip"
+    networking.gke.io/managed-certificates: "pic-web"
+    networking.gke.io/v1beta1.FrontendConfig: "pic-web"
+    # HTTP stays enabled only so the FrontendConfig can 301 it to HTTPS.
+    kubernetes.io/ingress.allow-http: "true"
+spec:
+  rules:
+    - host: pic.example.com # PLACEHOLDER: public hostname (also in ManagedCertificate below)
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pic-web
+                port:
+                  number: 3000
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: pic-web
+spec:
+  domains:
+    - pic.example.com # PLACEHOLDER
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: pic-web
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+  sslPolicy: pic-ssl-policy
+---
+# Attached to Service pic-web via the cloud.google.com/backend-config annotation (web.yaml).
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: pic-web
+spec:
+  # Backend service timeout. /api/pic/v1/stream is a long-lived SSE response proxied by the BFF; the LB would
+  # otherwise cut it after the 30 s default. The client reconnects when the hour is up.
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 30
+  healthCheck:
+    type: HTTP
+    requestPath: /api/healthz
+    port: 3000
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+  securityPolicy:
+    name: pic-web-armor # PLACEHOLDER if you changed var.armor_policy_name in terraform
+  logging:
+    enable: true
+    sampleRate: 1.0

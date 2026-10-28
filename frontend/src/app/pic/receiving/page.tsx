@@ -8,10 +8,10 @@ import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, qty } from '@/lib/pic/format';
 import { useCommand, useList } from '@/lib/pic/hooks';
 import { hasRole, PoRow, useSessionUser } from '../invoices/_components';
-import { GoodsReceiptDialog, InspectionLot, UsageDecisionDialog } from './_components';
+import { EwayCell, GoodsReceiptDialog, InspectionLot, UsageDecisionDialog } from './_components';
 
 type Asn = { id: string; number: string; po: string; supplier_code: string; status: string; ship_date: string; expected_date: string;
-  eway_bill_no: string | null; documents: string[] };
+  eway_bill_no: string | null; eway_bill_valid_until: string | null; vehicle_no: string | null; documents: string[] };
 type Gr = { id: string; number: string; po: string; status: string; posting_date: string; delivery_note: string | null; reversal_of: string | null; created_at: string };
 type Ses = { id: string; number: string; po: string; status: string; method: string; period_from: string; period_to: string; total_minor: number; created_at: string };
 
@@ -58,7 +58,7 @@ function Inbound({ canPost }: { canPost: boolean }) {
               const late = new Date(`${a.expected_date}T23:59:59+05:30`) < new Date();
               return <span className={late ? 'font-medium text-amber-700' : ''}>{date(a.expected_date)}{late ? ' (overdue)' : ''}</span>;
             } },
-            { key: 'eway_bill_no', header: 'E-way bill', render: (a) => a.eway_bill_no ?? '–' },
+            { key: 'eway_bill_no', header: 'E-way bill', render: (a) => <EwayCell asn={a} /> },
             { key: 'documents', header: 'Documents', render: (a) => a.documents.length ? a.documents.join(', ') : '–' },
             { key: 'status', header: 'Status', render: (a) => <StatusChip status={a.status} /> },
             { key: 'action', header: '', render: (a) => canPost

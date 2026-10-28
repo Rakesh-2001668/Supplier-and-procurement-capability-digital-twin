@@ -35,13 +35,15 @@ function newKey(): string {
 
 async function request<T>(method: string, path: string, body?: unknown, options: Options = {}): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
-  if (body !== undefined) headers['content-type'] = 'application/json';
+  // FormData sets its own multipart content type (with the boundary).
+  const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
+  if (body !== undefined && !isForm) headers['content-type'] = 'application/json';
   if (method === 'POST' && options.idempotencyKey !== false) headers['idempotency-key'] = options.idempotencyKey || newKey();
   if (options.ifMatch) headers['if-match'] = options.ifMatch;
   const response = await fetch(`/api/pic/v1${path}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     cache: 'no-store',
   });
   if (response.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/pic/login')) {
@@ -60,6 +62,7 @@ export const api = {
   post: <T,>(path: string, body?: unknown, options?: Options) => request<T>('POST', path, body ?? {}, options),
   patch: <T,>(path: string, body: unknown, options?: Options) => request<T>('PATCH', path, body, options),
   put: <T,>(path: string, body: unknown, options?: Options) => request<T>('PUT', path, body, options),
+  upload: <T,>(path: string, form: FormData, options?: Options) => request<T>('POST', path, form, { idempotencyKey: false, ...options }),
 };
 
 export async function signIn(tenant: string, email: string, password: string) {

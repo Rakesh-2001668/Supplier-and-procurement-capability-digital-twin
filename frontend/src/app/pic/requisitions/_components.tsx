@@ -20,6 +20,22 @@ export function useReference() {
 }
 
 export type BudgetCheck = { result: string; control: string; costObject: string; amountMinor: number; availableMinor: number };
+/** §24.1 / M01 category-plan budget check at submit (rule CATEGORY-BUDGET). */
+export type CategoryBudgetCheck = {
+  category: string; plan: string; budgetMinor: number; committedMinor: number; requisitionMinor: number; projectedMinor: number;
+  availableMinor: number; usedPct: string; warnAtPct: string; mode: 'SOFT' | 'HARD'; result: string; ruleSetVersion: string; justification?: string;
+};
+export type CategoryBudget = { outcome: string; fiscalYear: string; measure: string; checks: CategoryBudgetCheck[]; warnings: string[] };
+
+function CategoryBudgetLine({ check }: { check: CategoryBudgetCheck }) {
+  return (
+    <li>
+      <span className="font-mono text-xs">{check.category}</span> · plan {check.plan}: {check.usedPct}% of {inr(check.budgetMinor)}
+      {' '}(committed {inr(check.committedMinor)} + this requisition {inr(check.requisitionMinor)}) · {check.mode === 'HARD' ? 'hard stop' : 'soft stop'} above 100%,
+      warning from {check.warnAtPct}%
+    </li>
+  );
+}
 export type Allocation = { qty: string; share: string | number | null; supplier: string; contractId: string | null; priceSource: string; unitPriceMinor: number | null };
 
 export type PrLine = {
@@ -33,7 +49,7 @@ export type PrLine = {
 export type Requisition = {
   id: string; number: string; origin: string; origin_ref: string | null; purpose_code: string | null; purpose_text: string | null;
   requester_id: string; plant: string; company_code: string; status: string; total_minor: number;
-  budget_result: { outcome?: string; checks?: BudgetCheck[] } | null; policy_hints: string[] | null; approval_chain: string[] | null;
+  budget_result: { outcome?: string; checks?: BudgetCheck[]; categoryBudget?: CategoryBudget } | null; policy_hints: string[] | null; approval_chain: string[] | null;
   rule_set_version: string | null; submitted_at: string | null; approved_at: string | null; created_at: string; lines?: PrLine[];
 };
 
@@ -88,6 +104,9 @@ export function SubmitPanel({ pr, onDone }: { pr: Pick<Requisition, 'number' | '
   }), { success: (r) => `${r.number} submitted: ${label(r.status)}`, onSuccess: onDone });
   const code = submit.error?.problem?.code;
   const result = submit.data;
+  const needsJustification = code === 'BUDGET_JUSTIFICATION_REQUIRED' || code === 'CATEGORY_BUDGET_JUSTIFICATION_REQUIRED';
+  const refusedCategory = submit.error?.problem?.categoryBudget as CategoryBudgetCheck | undefined;
+  const categoryResult = result?.budget_result?.categoryBudget;
 
   if (result) {
     return (
@@ -97,6 +116,12 @@ export function SubmitPanel({ pr, onDone }: { pr: Pick<Requisition, 'number' | '
         </div>
         <p className="mt-1">Approval route: {result.approval_chain?.length ? result.approval_chain.map(label).join(' → ') : 'none — auto-approved by policy (DMN-01)'}</p>
         <p>Budget: {label(result.budget_result?.outcome ?? '')}</p>
+        {categoryResult && categoryResult.checks.length > 0 && (
+          <div className={categoryResult.outcome === 'OK' ? '' : 'text-amber-800'}>
+            <p>Category budget {categoryResult.fiscalYear}: {label(categoryResult.outcome)}</p>
+            <ul className="list-disc pl-5 text-xs">{categoryResult.checks.map((c) => <CategoryBudgetLine key={c.category} check={c} />)}</ul>
+          </div>
+        )}
         {result.policy_hints?.length ? <p className="text-amber-800">Policy hints: {result.policy_hints.join('; ')}</p> : null}
         <Link href={`/pic/requisitions/${result.number}`} className="mt-2 inline-block font-medium text-[#1A56DB] hover:underline">Open {result.number} →</Link>
       </div>
@@ -109,19 +134,26 @@ export function SubmitPanel({ pr, onDone }: { pr: Pick<Requisition, 'number' | '
         Submitting runs the policy checks (purpose code, account assignment, quote policy for free text), checks budget for {inr(pr.total_minor)} and
         routes the requisition for approval.
       </p>
-      <Field label={`Budget justification${code === 'BUDGET_JUSTIFICATION_REQUIRED' ? ' *' : ' (optional)'}`}
-        hint="Only needed when a cost object is over budget with a soft stop. Hard stops cannot be justified.">{(id) => (
+      <Field label={`Budget justification${needsJustification ? ' *' : ' (optional)'}`}
+        hint="Only needed when a cost object or the category plan is over budget with a soft stop. Hard stops cannot be justified.">{(id) => (
         <Textarea id={id} value={justification} onChange={(e) => setJustification(e.target.value)}
-          className={code === 'BUDGET_JUSTIFICATION_REQUIRED' ? 'border-amber-400' : ''} />
+          className={needsJustification ? 'border-amber-400' : ''} />
       )}</Field>
       <label className="flex items-start gap-2 text-sm">
         <input type="checkbox" className="mt-0.5" checked={requestSourcing} onChange={(e) => setRequestSourcing(e.target.checked)} />
         <span>Request a sourcing event instead of attaching three quotes (high-value free-text lines)</span>
       </label>
       <PolicyProblem error={submit.error} />
+      {refusedCategory && (
+        <div className={`rounded-lg border px-3 py-2 text-sm ${code === 'CATEGORY_BUDGET_EXCEEDED' ? 'border-red-200 bg-red-50 text-red-900' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+          <p className="font-semibold">{code === 'CATEGORY_BUDGET_EXCEEDED' ? 'Category budget exhausted (hard stop)' : 'Category budget exceeded – justification required'}</p>
+          <ul className="list-disc pl-5 text-xs"><CategoryBudgetLine check={refusedCategory} /></ul>
+          {code === 'CATEGORY_BUDGET_EXCEEDED' && <p className="mt-1 text-xs">Reduce the value or ask the category owner to raise the approved plan budget.</p>}
+        </div>
+      )}
       <div className="flex justify-end">
-        <Button variant="primary" busy={submit.isPending}
-          disabled={code === 'BUDGET_JUSTIFICATION_REQUIRED' && !justification.trim()} onClick={() => submit.mutate()}>Submit for approval</Button>
+        <Button type="button" variant="primary" busy={submit.isPending}
+          disabled={needsJustification && !justification.trim()} onClick={() => submit.mutate()}>Submit for approval</Button>
       </div>
     </div>
   );

@@ -52,6 +52,16 @@ export type InvoiceRow = { id: string; number: string; supplier_invoice_no: stri
 // ---------------------------------------------------------------- capture / submit invoice (INV-01, SLM-05)
 type DraftLine = { include: boolean; line: PoLine; qty: string; unit_price: string; gst_rate: string; hsn: string };
 
+/** What the document-capture engine read from an invoice PDF/image (POST /invoices/documents). Nothing is stored server-side. */
+type Extracted = {
+  header: { supplierGstin: string | null; supplierInvoiceNo: string | null; invoiceDate: string | null; irn: string | null; poNumber: string | null;
+    netMinor: number | null; taxMinor: number | null; grossMinor: number | null };
+  supplier: { code: string; name: string } | null;
+  lines: { po: string | null; po_line: number | string; description: string | null; hsn: string | null; qty: string | null; unit_price: string | null;
+    gst_rate: string | null }[];
+  document: { fileName: string; sha256: string; bytes: number };
+};
+
 const CHANNELS = ['PORTAL', 'PDF_OCR', 'E_INVOICE', 'EDI'];
 
 /** AP clerk capture (supplier taken from the PO) or supplier portal submission (supplier omitted; the API uses the signed-in supplier). */
@@ -66,18 +76,45 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
   const [invoiceDate, setInvoiceDate] = useState(today());
   const [channel, setChannel] = useState(supplierMode ? 'PORTAL' : 'PDF_OCR');
   const [irn, setIrn] = useState('');
+  const [signedQr, setSignedQr] = useState('');
+  const [extracted, setExtracted] = useState<Extracted | null>(null);
 
-  // Prefill lines from the chosen PO: open quantity (accepted − invoiced for goods, ordered − invoiced otherwise) at PO price.
+  // Prefill lines from the chosen PO: open quantity (accepted − invoiced for goods, ordered − invoiced otherwise) at PO price,
+  // overlaid with what was read from the invoice document for the same PO line.
   const [prefilledFor, setPrefilledFor] = useState('');
   if (po.data && po.data.number === poNumber && prefilledFor !== poNumber) {
     setPrefilledFor(poNumber);
+    const read = extracted?.lines.filter((x) => !x.po || x.po === poNumber) ?? [];
     setLines(po.data.lines.map((l) => {
       const goods = l.gr_required && !l.ses_required;
       const open = goods ? minus(l.accepted_qty, l.invoiced_qty) : minus(l.qty, l.invoiced_qty);
-      return { include: Number(open) > 0, line: l, qty: open === '0' ? minus(l.qty, l.invoiced_qty) : open,
+      const base = { include: Number(open) > 0, line: l, qty: open === '0' ? minus(l.qty, l.invoiced_qty) : open,
         unit_price: (l.unit_price_minor / 100).toFixed(2), gst_rate: l.gst_rate ?? '', hsn: l.hsn_code ?? '' };
+      if (!read.length) return base;
+      const doc = read.find((x) => Number(x.po_line) === l.line_no);
+      if (!doc) return { ...base, include: false };
+      return { ...base, include: true, qty: doc.qty ?? base.qty, unit_price: doc.unit_price ?? base.unit_price,
+        gst_rate: doc.gst_rate ?? base.gst_rate, hsn: doc.hsn ?? base.hsn };
     }));
   }
+
+  // Read an invoice PDF/image with the document-capture engine and prefill the form; the clerk still reviews every field.
+  const scan = useCommand((file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.upload<Extracted>('/invoices/documents', form);
+  }, {
+    success: (r) => `Read ${r.document.fileName}: ${r.lines.length} line${r.lines.length === 1 ? '' : 's'}. Check every field before capture.`,
+    onSuccess: (r) => {
+      setExtracted(r);
+      if (r.header.supplierInvoiceNo) setInvoiceNo(r.header.supplierInvoiceNo);
+      if (r.header.invoiceDate) setInvoiceDate(r.header.invoiceDate);
+      if (r.header.irn) setIrn(r.header.irn);
+      const poRef = r.header.poNumber ?? r.lines.find((l) => l.po)?.po;
+      if (poRef && poRef !== poNumber) { setPoNumber(poRef); setLines([]); }
+      setPrefilledFor('');
+    },
+  });
 
   const chosen = lines.filter((l) => l.include);
   const net = chosen.reduce((s, l) => s + (isNumber(l.qty) && isNumber(l.unit_price) ? Number(l.qty) * rupeesToMinor(l.unit_price) : 0), 0);
@@ -95,6 +132,7 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
   const capture = useCommand(() => api.post<{ id: string; number: string; status: string }>('/invoices', {
     supplier: supplierMode ? undefined : po.data?.supplier.code,
     supplier_invoice_no: invoiceNo.trim(), invoice_date: invoiceDate, channel, irn: irn.trim() || undefined,
+    signed_qr: channel === 'E_INVOICE' && signedQr.trim() ? signedQr.trim() : undefined,
     lines: chosen.map((l) => ({ po: poNumber, po_line: l.line.line_no, qty: l.qty, unit_price: l.unit_price, gst_rate: l.gst_rate,
       hsn: l.hsn || undefined })),
   }), {
@@ -106,6 +144,28 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
 
   return (
     <Dialog open title={supplierMode ? 'Submit invoice' : 'Capture invoice'} onClose={onClose}>
+      {!supplierMode && (
+        <div className="mb-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-3">
+          <Field label="Read from invoice document (PDF, PNG, JPEG or TIFF, up to 10 MB)"
+            hint="The document-capture engine prefills the form. Nothing is stored; review every field before capture.">
+            {(id) => (
+              <input id={id} type="file" accept="application/pdf,image/png,image/jpeg,image/tiff" disabled={scan.isPending}
+                className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-sm"
+                onChange={(e) => { const file = e.target.files?.[0]; if (file) { setChannel('PDF_OCR'); scan.mutate(file); } e.target.value = ''; }} />
+            )}
+          </Field>
+          {scan.isPending && <Loading text="Reading the document…" />}
+          {extracted && (
+            <p className="mt-2 text-xs text-slate-600" role="status">
+              Read {extracted.document.fileName}
+              {extracted.supplier ? ` · supplier ${extracted.supplier.code} (${extracted.supplier.name})`
+                : extracted.header.supplierGstin ? ` · GSTIN ${extracted.header.supplierGstin} not found among suppliers` : ''}
+              {extracted.header.grossMinor != null ? ` · document total ${inr(extracted.header.grossMinor)}` : ''}
+              {po.data && extracted.supplier && extracted.supplier.code !== po.data.supplier.code ? ' · the document supplier differs from the PO supplier' : ''}
+            </p>
+          )}
+        </div>
+      )}
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Purchase order">
           {(id) => (
@@ -129,6 +189,13 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
         <Field label={channel === 'E_INVOICE' ? 'IRN (required for e-invoice)' : 'IRN (optional)'} hint="Validated against the supplier GSTIN, fiscal year and invoice number">
           {(id) => <Input id={id} value={irn} onChange={(e) => setIrn(e.target.value)} />}
         </Field>
+        {channel === 'E_INVOICE' && (
+          <div className="md:col-span-2">
+            <Field label="Signed QR code (optional)" hint="The e-invoice QR (JWT). Its IRN, seller GSTIN, document number and total are checked; at the IRP when configured.">
+              {(id) => <Input id={id} value={signedQr} onChange={(e) => setSignedQr(e.target.value)} className="font-mono text-xs" />}
+            </Field>
+          </div>
+        )}
       </div>
 
       <div className="mt-4">
@@ -172,7 +239,7 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
-        On capture the invoice is duplicate-checked and matched (2-way, 3-way against accepted quantity, or against approved service entries).
+        On capture the invoice is duplicate-checked and matched (2-way, 3-way against received quantity, 4-way against inspection-accepted quantity for quality-managed lines, or against approved service entries).
         Differences outside tolerance raise exceptions and a payment block.
       </p>
       {problems.length > 0 && (poNumber || invoiceNo) && <p className="mt-2 text-xs text-amber-700" role="status">{problems[0]}</p>}

@@ -1,0 +1,198 @@
+# pic-api: FastAPI on :8080. Internal only (ClusterIP); the only caller is the pic-web BFF.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pic-api
+  labels:
+    app.kubernetes.io/name: pic-api
+    app.kubernetes.io/component: api
+spec:
+  # spec.replicas is deliberately omitted: the HPA below owns the count (min 2, max 10). Declaring it here would
+  # make every `kubectl apply -k` reset a scaled-out Deployment back to that number.
+  revisionHistoryLimit: 10 # kept for `kubectl rollout undo`
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pic-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pic-api
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: pic-api
+      automountServiceAccountToken: false
+      # Long enough for in-flight requests to finish after preStop; open /v1/stream SSE connections are cut and
+      # the browser's EventSource reconnects to another pod.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-api
+          matchLabelKeys: ["pod-template-hash"]
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-api
+          matchLabelKeys: ["pod-template-hash"]
+      containers:
+        - name: api
+          image: pic-api # rewritten by kustomization.yaml images:
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: pic-config
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pic-api
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: DATABASE_URL
+            - name: PIC_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: PIC_JWT_SECRET
+            - name: PIC_FIELD_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: PIC_FIELD_KEY
+            - name: PIC_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: PIC_METRICS_TOKEN
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+              ephemeral-storage: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24 # up to 2 minutes to boot
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            # 503 while Neon is unreachable or the schema is behind the code (migrations run by neon.yml),
+            # so a new image never takes traffic before its migrations are applied.
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+            successThreshold: 1
+          lifecycle:
+            preStop:
+              # Give kube-proxy / the BFF time to drop this endpoint before uvicorn stops accepting connections.
+              exec:
+                command: ["sleep", "10"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pic-api
+  labels:
+    app.kubernetes.io/name: pic-api
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pic-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pic-api
+  labels:
+    app.kubernetes.io/name: pic-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pic-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pic-api
+  labels:
+    app.kubernetes.io/name: pic-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pic-api

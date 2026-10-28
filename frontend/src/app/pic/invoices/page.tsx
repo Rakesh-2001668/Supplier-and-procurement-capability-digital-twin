@@ -8,6 +8,7 @@ import { api } from '@/lib/pic/api';
 import { date, inr, qty } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { BlockChip, CaptureInvoiceDialog, hasRole, InvoiceRow, MatchChip, today, useSessionUser } from './_components';
+import { PaymentFilesCard } from './_ops';
 
 const STATUSES = ['', 'CAPTURED', 'DUPLICATE_CHECK', 'MATCHING', 'EXCEPTION', 'MATCHED', 'APPROVED', 'POSTED', 'PAID', 'REJECTED'];
 
@@ -27,7 +28,7 @@ export default function Invoices() {
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="INV-01 · Invoice worklist" title="Invoices"
-        subtitle="Captured invoices are duplicate-checked, matched 2-way, 3-way (against accepted quantity) or against approved service entries, then approved, posted to ERP exactly once and paid."
+        subtitle="Captured invoices are duplicate-checked, matched 2-way, 3-way (against received quantity), 4-way for quality-managed lines (against inspection-accepted quantity) or against approved service entries, then approved, posted to ERP exactly once and paid."
         actions={<>
           {canCapture && <Button variant="primary" onClick={() => setDialog('capture')}>Capture invoice</Button>}
           {canRun && <Button onClick={() => setDialog('run')}>Payment run</Button>}
@@ -60,6 +61,8 @@ export default function Invoices() {
       </Card>
 
       <GrirCard />
+
+      {hasRole(user, 'AP_CLERK', 'FINANCE_CONTROLLER') && <PaymentFilesCard canManage={canRun} />}
 
       {dialog === 'capture' && <CaptureInvoiceDialog onClose={() => setDialog(null)} onCaptured={(inv) => router.push(`/pic/invoices/${inv.id}`)} />}
       {dialog === 'run' && <PaymentRunDialog onClose={() => setDialog(null)} />}

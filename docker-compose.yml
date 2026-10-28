@@ -1,18 +1,44 @@
-# Local stack: PostgreSQL 16 + PIC API + worker + web.
-#   cp .env.compose.example .env   (fill in the secrets)
-#   docker compose up --build
-#   docker compose run --rm api python -m app.pic.tools.neon_setup   (first run: schema, seed, legacy data)
-# For Neon, point DATABASE_URL at Neon instead and drop the db service.
+# PIC stack: API + worker + web, with an optional local PostgreSQL (profile local-db).
+#
+#   cp .env.compose.example .env                 # fill in the secrets (never commit .env)
+#   docker compose --profile local-db up -d --build
+#   docker compose --profile local-db run --rm migrate          # schema (local db only)
+#   docker compose --profile local-db run --rm api python -m app.pic.seed   # demo data (local db only)
+#
+# Against a hosted database (Neon staging branch): set DATABASE_URL in .env (sslmode=require) and run without the profile:
+#   docker compose up -d --build
+# Production schema changes are applied only by .github/workflows/neon.yml — never from this file.
+# Ports bind to 127.0.0.1 only. Images default to PIC_ENV=production; this file defaults to PIC_ENV=dev for local use.
+
+x-backend: &backend
+  build:
+    context: ./backend
+    args:
+      WITH_OTEL: ${WITH_OTEL:-false}
+  image: ${PIC_API_IMAGE:-pic-api:local}
+  env_file:
+    - path: .env
+      required: true
+  environment:
+    DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-pic}:${POSTGRES_PASSWORD:-}@db:5432/${POSTGRES_DB:-pic}}
+    PIC_ENV: ${PIC_ENV:-dev}
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
 
 services:
   db:
+    profiles: ["local-db"]
     image: postgres:16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-pic}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-pic}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,43 +47,55 @@ services:
       retries: 10
     restart: unless-stopped
 
-  api:
-    build: ./backend
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-pic}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pic}}
-      PIC_JWT_SECRET: ${PIC_JWT_SECRET:?set PIC_JWT_SECRET in .env}
-      PIC_FIELD_KEY: ${PIC_FIELD_KEY:?set PIC_FIELD_KEY in .env}
-      PIC_SEED_PASSWORD: ${PIC_SEED_PASSWORD:-}
-      PIC_CORS_ORIGINS: ${PIC_CORS_ORIGINS:-http://localhost:3000}
-    ports:
-      - "127.0.0.1:8080:8080"
+  migrate:
+    <<: *backend
+    profiles: ["local-db"]
+    command: ["python", "-m", "alembic", "-c", "alembic_pic.ini", "upgrade", "head"]
+    restart: "no"
     depends_on:
       db:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/readyz')"]
-      interval: 10s
-      retries: 6
-    restart: unless-stopped
+
+  api:
+    <<: *backend
+    ports:
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
 
   worker:
-    build: ./backend
+    <<: *backend
     command: ["python", "-m", "app.pic.worker"]
-    environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-pic}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pic}}
-      PIC_JWT_SECRET: ${PIC_JWT_SECRET}
-      PIC_FIELD_KEY: ${PIC_FIELD_KEY}
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.pic.worker", "--check-heartbeat"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 4
     depends_on:
       api:
         condition: service_healthy
-    restart: unless-stopped
 
   web:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_PIC_ENV: ${PIC_ENV:-dev}
+    image: ${PIC_WEB_IMAGE:-pic-web:local}
     environment:
       PIC_API_URL: http://api:8080
+      PIC_ENV: ${PIC_ENV:-dev}
+      PIC_ENABLE_LEGACY_DEMO: ${PIC_ENABLE_LEGACY_DEMO:-}
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /app/.next/cache:uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     depends_on:
       api:
         condition: service_healthy

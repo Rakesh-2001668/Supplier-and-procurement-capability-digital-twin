@@ -39,6 +39,8 @@ DOC_TYPES = {
     "MATERIAL_MASTER": ("MM", 100000331),
     "SUPPLIER_MASTER": ("KR", 300001),
     "PAYMENT": ("ZP", 1500002210),
+    # Vendor credit memo for a credit note received after its invoice was posted (reduces the posted liability).
+    "SUPPLIER_CREDIT_MEMO": ("KG", 5105000001),
 }
 
 
@@ -70,7 +72,11 @@ def enqueue(session: Session, *, target_system: str, message_type: str, idempote
     return message
 
 
-class ConnectorTimeout(Exception):
+class ConnectorError(Exception):
+    """Any connector failure that the retry / dead-letter path handles (timeouts, not configured, rejected by the ERP)."""
+
+
+class ConnectorTimeout(ConnectorError):
     pass
 
 
@@ -108,22 +114,50 @@ class SapS4Connector:
 CONNECTORS = {"SAP_S4": SapS4Connector()}
 
 
+DEFAULT_TARGET = "SAP_S4"
+
+
+def target_system(session: Session, company_code: Optional[str] = None) -> str:
+    """The ERP a tenant (or one company code) posts to: rule ERP-TARGET, effective-dated and scoped per company code.
+    Without the rule (older tenants) the SAP S/4HANA connector is used."""
+    from app.pic.platform import rules  # local import: rules has no dependency on integration
+
+    try:
+        return rules.resolve(session, "ERP-TARGET", company_code=company_code).body.get("system") or DEFAULT_TARGET
+    except Problem:
+        return DEFAULT_TARGET
+
+
+def connector_for(system: str):
+    """Connector registry (platform/connectors.py, TD §12.1); SAP_S4 is the simulator above."""
+    from app.pic.platform import connectors  # local import: the registry wraps SapS4Connector
+    return connectors.get(system)
+
+
+def _find_quietly(connector, session: Session, message: IntegrationMessage):
+    try:
+        return connector.find(session, message) if connector is not None else None
+    except ConnectorError:
+        return None
+
+
 def process(session: Session, message: IntegrationMessage) -> IntegrationMessage:
     if message.status == "POSTED":
         return message
-    connector = CONNECTORS[message.target_system]
     message.attempts += 1
-    # Query-before-retry: if the ERP already has the document, acknowledge without reposting.
-    existing = connector.lookup(session, message.idempotency_key)
+    connector = None
     try:
+        connector = connector_for(message.target_system)
+        # Query-before-retry: if the ERP already has the document, acknowledge without reposting.
+        existing = connector.find(session, message)
         if existing is not None:
             doc_no = existing.doc_no
         else:
             with session.begin_nested():
                 doc_no = connector.post(session, message)
             connector.after_post()
-    except ConnectorTimeout as exc:
-        existing = connector.lookup(session, message.idempotency_key)
+    except ConnectorError as exc:
+        existing = _find_quietly(connector, session, message)
         if existing is None:
             message.last_error = str(exc)
             if message.attempts >= MAX_ATTEMPTS:

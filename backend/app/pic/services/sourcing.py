@@ -19,6 +19,7 @@ from app.pic.platform import agents, audit, clock, crypto, outbox, rules, sod, w
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, fmt_inr
+from app.pic.services import auction as auction_svc
 from app.pic.services import supplier as supplier_svc
 from app.pic.services.common import category_status, principal, supplier_by_code
 
@@ -123,6 +124,8 @@ def publish(session: Session, event: SourcingEvent) -> SourcingEvent:
         raise rule_violation("Invite at least one qualified supplier", "P06")
     if event.close_at <= clock.now():
         raise rule_violation("Close time must be in the future", "SRC-CLOSE")
+    if event.type == "REVERSE_AUCTION":
+        auction_svc.on_publish(session, event)  # freeze AUCTION settings, start the live clock
     event.weights_locked = True
     event.published_at = clock.now()
     SM.apply(session, event, "publish", reason="weights locked")
@@ -133,7 +136,9 @@ def publish(session: Session, event: SourcingEvent) -> SourcingEvent:
                  "lines": [{"material": str(l.material_id), "annualQty": str(l.annual_qty)} for l in _lines(session, event)]})
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
     workflow.step(session, instance, "F3-02", outcome="published; weights locked")
-    workflow.wait(session, instance, "F3-03", outcome=f"round {event.round}: bids sealed until {event.close_at.isoformat()}")
+    workflow.wait(session, instance, "F3-03", outcome=(f"round {event.round}: live reverse auction until {event.close_at.isoformat()} (soft close)"
+                                                       if event.type == "REVERSE_AUCTION" else
+                                                       f"round {event.round}: bids sealed until {event.close_at.isoformat()}"))
     return event
 
 
@@ -146,6 +151,8 @@ def submit_bid(session: Session, event: SourcingEvent, supplier: Supplier, lines
     p = principal(session)
     if event.status != "OPEN":
         raise illegal_transition("Sourcing event", event.number, event.status, "bid")
+    if event.type == "REVERSE_AUCTION":
+        raise Problem(409, "USE_AUCTION_BIDDING", f"{event.number} is a live reverse auction; bid through /auction/bids", rule_ref="SRC-AUCTION")
     if clock.now() >= event.close_at:
         raise Problem(409, "EVENT_CLOSED", f"{event.number} closed at {event.close_at.isoformat()}")
     if not session.execute(select(Invitee).where(Invitee.event_id == event.id, Invitee.supplier_id == supplier.id)).first():
@@ -184,10 +191,13 @@ def bids_view(session: Session, event: SourcingEvent) -> list[dict]:
 
 
 def close(session: Session, event: SourcingEvent) -> dict:
-    if clock.now() < event.close_at:
-        raise Problem(409, "CLOSE_TIME_NOT_REACHED", f"{event.number} closes at {event.close_at.isoformat()}")
+    closes_at = auction_svc.ends_at(event)  # a reverse auction may have been extended (soft close)
+    if clock.now() < closes_at:
+        raise Problem(409, "CLOSE_TIME_NOT_REACHED", f"{event.number} closes at {closes_at.isoformat()}")
     SM.apply(session, event, "close")
     event.closed_at = clock.now()
+    if event.type == "REVERSE_AUCTION":
+        auction_svc.to_sealed_bids(session, event)  # last auction prices become sealed bids for the normal evaluation
     unsealed = _unseal(session, event)
     SM.apply(session, event, "evaluate")
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
@@ -206,7 +216,8 @@ def close(session: Session, event: SourcingEvent) -> dict:
 @workflow.on_timer("SOURCING_CLOSE")
 def _close_timer(session: Session, timer) -> None:
     event = session.get(SourcingEvent, timer.object_id)
-    if event and event.status == "OPEN" and timer.payload.get("round") == event.round:
+    # An extended auction leaves earlier close timers behind; only the one at or after the live end closes it.
+    if event and event.status == "OPEN" and timer.payload.get("round") == event.round and clock.now() >= auction_svc.ends_at(event):
         close(session, event)
 
 
@@ -326,6 +337,7 @@ def new_round(session: Session, event: SourcingEvent, close_at: datetime, note: 
     event.round += 1
     event.close_at = close_at
     event.unsealed_at = None
+    auction_svc.on_new_round(event)
     workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, close_at, {"round": event.round})
     workflow.wait(session, instance, "F3-03", outcome=f"round {event.round}: sealed bids until {close_at.isoformat()}")
     return event
@@ -486,7 +498,8 @@ def _award(session: Session, event: SourcingEvent, decision: AwardDecision, inst
     for pr_line in session.execute(select(PrLine).where(PrLine.requisition_id == line.requisition_id,
                                                         PrLine.line_no == line.pr_line_no)).scalars():
         pr_line.sourcing_status = "SOURCED"
-    payload = {"category": event.category, "materialId": str(line.material_id), "plant": line.plant,
+    payload = {"category": event.category, "materialId": str(line.material_id) if line.material_id else None,
+               "description": line.description, "plant": line.plant,
                "annualQty": str(line.annual_qty), "monthlyQty": str(line.monthly_qty), "uom": line.uom,
                "baselineMinor": event.baseline_price_minor, "weightedPriceMinor": scenario.weighted_price_minor,
                "allocations": scenario.allocations, "requisitionId": str(line.requisition_id), "prLine": line.pr_line_no,

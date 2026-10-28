@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { ObjectPage } from '@/components/pic/object';
 import { Button, DataTable, Dialog, Empty, Facts, Field, Input, Loading, ProblemBox, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, readSessionUser, SessionUser } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import { AmendKind, AmendmentDialog, AmendmentsTab, AmendmentSummary, useAmendmentRule } from './_amendments';
 
 type ContractLine = { id: string; line_no: number; description: string; plant: string; uom: string; target_qty: string; released_qty: string;
   released_value_minor: number };
@@ -20,7 +21,8 @@ type Contract = {
   id: string; number: string; type: string; title: string; status: string; supplier: { id: string; code: string; name: string };
   company_code: string; valid_from: string; valid_to: string; payment_terms: string; incoterms: string | null; over_tolerance_pct: string;
   under_tolerance_pct: string; price_tolerance_pct: string; target_value_minor: number; index_ref: IndexRef | null; source_event_id: string | null;
-  thresholds_hit: number[] | null; rule_set_version: string; activated_at: string | null;
+  thresholds_hit: number[] | null; rule_set_version: string; activated_at: string | null; version: number;
+  terminated_at: string | null; termination_reason: string | null;
   lines: ContractLine[]; priceValidity: PriceValidity[]; clauses: Clause[]; signatures: Signature[];
 };
 type Review = { risk: number; findings: { clause: string; position: string; risk: number; fallback: string | null }[]; aiRef: string };
@@ -31,16 +33,21 @@ type Consumption = { contract: string; status: string; thresholdsHit: number[] |
 type IndexResult = { contract: string; changePct: string; adjustPct: string; lines: { line: number; oldPriceMinor: number; newPriceMinor: number }[] };
 
 const REVIEWABLE = ['DRAFT', 'IN_NEGOTIATION'];
+const noSubscribe = () => () => {};
+const AMENDABLE = ['ACTIVE', 'EXPIRING'];
 
 export default function ContractPage() {
   const { ref } = useParams<{ ref: string }>();
   const path = `/contracts/${encodeURIComponent(ref)}`;
   const { data: c, isLoading, error } = useApi<Contract>(path);
-  const [user, setUser] = useState<SessionUser | null>(null);
-  const [ready, setReady] = useState(false);
-  useEffect(() => { setUser(readSessionUser()); setReady(true); }, []);
+  // Session user from the cookie; not available while rendering on the server.
+  const cookie = useSyncExternalStore(noSubscribe, () => document.cookie, () => null);
+  const ready = cookie !== null;
+  const user = useMemo<SessionUser | null>(() => (cookie === null ? null : readSessionUser()), [cookie]);
   const manager = ready && (!user || user.roles.includes('CONTRACT_MANAGER'));
   const [dialog, setDialog] = useState<'sign' | 'index' | null>(null);
+  const [amend, setAmend] = useState<AmendKind | null>(null);
+  const amendRule = useAmendmentRule(c && AMENDABLE.includes(c.status) ? c.number : undefined);
   const [review, setReview] = useState<Review | null>(null);
 
   const runReview = useCommand(() => api.post<Review>(`${path}/review`), {
@@ -48,6 +55,8 @@ export default function ContractPage() {
   const submit = useCommand(() => api.post<{ status: string; chain: string[] }>(`${path}/submit`), {
     success: (r) => `Submitted for approval: ${r.chain.map(label).join(' → ')}` });
   const activate = useCommand(() => api.post(`${path}/activate`), { success: 'Contract active – price validity published to source determination' });
+  const envelope = useCommand(() => api.post<{ provider: string; envelopeId: string }>(`${path}/signature-envelopes`, {}), {
+    success: (r) => `Sent to ${label(r.provider)} for e-signature – envelope ${r.envelopeId}; signatures are recorded when the signers complete` });
 
   const parties = new Set(c?.signatures.map((s) => s.party));
   const nonStandard = c?.clauses.filter((x) => x.position !== 'STANDARD').length ?? 0;
@@ -63,12 +72,17 @@ export default function ContractPage() {
             {REVIEWABLE.includes(c.status) && <Button busy={runReview.isPending} onClick={() => runReview.mutate()}>AI review</Button>}
             {c.status === 'IN_NEGOTIATION' && <Button variant="primary" busy={submit.isPending} onClick={() => submit.mutate()}>Submit for approval</Button>}
             {c.status === 'OUT_FOR_SIGNATURE' && !parties.has('BUYER') && <Button variant="primary" onClick={() => setDialog('sign')}>Sign as buyer</Button>}
+            {c.status === 'OUT_FOR_SIGNATURE' && !(parties.has('BUYER') && parties.has('SUPPLIER')) && (
+              <Button busy={envelope.isPending} onClick={() => envelope.mutate()} title="Uses the configured e-signature provider (DocuSign, Adobe Sign, Leegality or eMudhra)">Send via e-sign provider</Button>
+            )}
             {c.status === 'OUT_FOR_SIGNATURE' && (
               <Button variant={parties.has('BUYER') ? 'primary' : 'secondary'} busy={activate.isPending} disabled={!(parties.has('BUYER') && parties.has('SUPPLIER'))}
                 title={!(parties.has('BUYER') && parties.has('SUPPLIER')) ? 'Both buyer and supplier must sign first' : undefined}
                 onClick={() => activate.mutate()}>Activate</Button>
             )}
             {['ACTIVE', 'EXPIRING'].includes(c.status) && c.index_ref && <Button onClick={() => setDialog('index')}>Index reset</Button>}
+            {AMENDABLE.includes(c.status) && <Button onClick={() => setAmend('VARIATION')}>Amend</Button>}
+            {AMENDABLE.includes(c.status) && <Button variant="danger" onClick={() => setAmend('TERMINATION')}>Terminate</Button>}
           </>
         )}
         facts={c && (
@@ -86,7 +100,10 @@ export default function ContractPage() {
               ['Company code', c.company_code],
               ['Activated', dateTime(c.activated_at)],
               ['Playbook', <span key="p" className="font-mono text-xs">{c.rule_set_version}</span>],
+              ['Version', `v${c.version ?? 1}`],
+              ...(c.terminated_at ? [['Terminated', `${dateTime(c.terminated_at)} – ${c.termination_reason ?? ''}`] as [string, string]] : []),
             ]} />
+            {AMENDABLE.includes(c.status) && <AmendmentSummary contractNumber={c.number} />}
             {review && <ReviewPanel review={review} />}
             {c.status === 'OUT_FOR_SIGNATURE' && (
               <p className="text-sm text-slate-600">Signatures: buyer {parties.has('BUYER') ? '✓ signed' : '– pending'} · supplier {parties.has('SUPPLIER') ? '✓ signed' : '– pending (signs in the supplier portal)'}.</p>
@@ -123,10 +140,12 @@ export default function ContractPage() {
             ),
           },
           { id: 'consumption', label: 'Consumption & obligations', content: <ConsumptionTab path={path} canManage={manager} /> },
+          { id: 'amendments', label: `Amendments (v${c.version ?? 1})`, content: <AmendmentsTab contract={c} canManage={manager} /> },
         ] : []}
       />
       {c && dialog === 'sign' && <SignDialog contract={c} defaultName={user ? `${user.name}` : ''} onClose={() => setDialog(null)} />}
       {c && dialog === 'index' && c.index_ref && <IndexResetDialog contract={c} indexRef={c.index_ref} onClose={() => setDialog(null)} />}
+      {c && amend && <AmendmentDialog contract={c} initialKind={amend} noticeDays={amendRule?.noticeDays} onClose={() => setAmend(null)} />}
     </>
   );
 }

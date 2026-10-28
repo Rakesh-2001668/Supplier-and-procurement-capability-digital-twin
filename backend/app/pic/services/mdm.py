@@ -172,7 +172,7 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
     outbox.emit(session, "material_request.approved", "MATERIAL_REQUEST", request.id, request.number,
                 {"material": material.number, "materialId": str(material.id)})
     message = integration.enqueue(
-        session, target_system="SAP_S4", message_type="MATERIAL_MASTER", idempotency_key=f"MAT|{material.number}",
+        session, target_system=integration.target_system(session), message_type="MATERIAL_MASTER", idempotency_key=f"MAT|{material.number}",
         object_type="MATERIAL_REQUEST", object_id=request.id, object_ref=request.number,
         payload={"material": material.number, "description": material.description, "group": material.material_group,
                  "uom": material.base_uom, "valuationClass": material.valuation_class},

@@ -2,10 +2,11 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { readSessionUser, SessionUser, signOut } from '@/lib/pic/api';
 import { dateTime } from '@/lib/pic/format';
+import { NotificationBell } from '@/app/pic/notifications/_notifications';
 import { ToastProvider } from './toast';
 
 type LiveEvent = { id: string; type: string; ref: string; objectType: string; actor: string; at: string };
@@ -21,7 +22,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/spend', label: 'Spend', roles: ['CATEGORY_MANAGER', 'FINANCE_CONTROLLER', 'PROCUREMENT_HEAD', 'CPO'] },
     { href: '/pic/savings', label: 'Savings' },
   ] },
-  { group: 'My work', items: [{ href: '/pic/tasks', label: 'Task inbox' }] },
+  { group: 'My work', items: [{ href: '/pic/tasks', label: 'Task inbox' }, { href: '/pic/notifications', label: 'Notifications' }, { href: '/pic/account', label: 'My account & security' }] },
   { group: 'Plan & request', items: [
     { href: '/pic/mrp', label: 'MRP & planning' },
     { href: '/pic/mrp/forecast', label: 'Demand forecast', roles: ['MRP_CONTROLLER', 'TENANT_ADMIN'] },
@@ -52,7 +53,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/admin', label: 'Administration', roles: ['TENANT_ADMIN'] },
   ] },
 ];
-const SUPPLIER_NAV: { group: string; items: NavItem[] }[] = [{ group: 'Supplier portal', items: [{ href: '/pic/portal', label: 'Overview' }, { href: '/pic/copilot', label: 'Ask about my documents' }] }];
+const SUPPLIER_NAV: { group: string; items: NavItem[] }[] = [{ group: 'Supplier portal', items: [{ href: '/pic/portal', label: 'Overview' }, { href: '/pic/copilot', label: 'Ask about my documents' }, { href: '/pic/notifications', label: 'Notifications' }, { href: '/pic/account', label: 'My account & security' }] }];
 
 function useLiveStream(enabled: boolean): Live {
   const client = useQueryClient();
@@ -109,12 +110,17 @@ function useLiveStream(enabled: boolean): Live {
   return live;
 }
 
+const subscribeNothing = () => () => {};
+const readCookies = () => document.cookie;
+
 export default function WorkspaceShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const [user, setUser] = useState<SessionUser | null>(null);
+  // The display profile cookie is read on every render on the client (it changes at sign-in), never on the server.
+  const profileCookie = useSyncExternalStore(subscribeNothing, readCookies, () => '');
+  const user = useMemo<SessionUser | null>(() => (profileCookie ? readSessionUser() : null), [profileCookie]);
   const [menuOpen, setMenuOpen] = useState(false);
-  useEffect(() => setUser(readSessionUser()), [pathname]);
-  const isLogin = pathname === '/pic/login';
+  // Sign-in and the public supplier registration page render without the workspace chrome.
+  const isLogin = pathname === '/pic/login' || pathname === '/pic/register' || pathname.startsWith('/pic/register/');
   const live = useLiveStream(!isLogin && !!user);
 
   if (isLogin) return <ToastProvider>{children}</ToastProvider>;
@@ -183,10 +189,11 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                     {live.events[0].type} · {live.events[0].ref} · {dateTime(live.events[0].at)}
                   </span>
                 )}
-                <div className="text-right">
+                {user && <NotificationBell />}
+                <Link href="/pic/account" prefetch={false} className="rounded-md px-1 text-right hover:bg-slate-50" title="My account & security">
                   <p className="text-sm font-medium leading-tight">{user?.name ?? ''}</p>
                   <p className="text-[11px] leading-tight text-slate-500">{user?.roles.map((r) => r.replace(/_/g, ' ').toLowerCase()).join(', ')}</p>
-                </div>
+                </Link>
                 <button onClick={signOut} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-50">Sign out</button>
               </div>
             </header>

@@ -1,0 +1,385 @@
+# HSN/SAC master with GST rates (total GST = CGST + SGST/UTGST = IGST; notifications state CGST, the file holds 2 x CGST).
+# Source: CBIC Tax Information Portal, official English notification PDFs (https://taxinformation.cbic.gov.in/).
+# Goods: Notification No. 9/2025-Central Tax (Rate) dated 17.09.2025 (G.S.R. 641(E)), Schedules I (5%), II (18%), III (40%);
+#   exempt goods 10/2025-CT(Rate) dated 17.09.2025; bricks 14/2025-CT(Rate) dated 17.09.2025 (12%). In force 22.09.2025.
+# Services: Notification No. 11/2017-Central Tax (Rate) dated 28.06.2017 as amended, last by 15/2025-CT(Rate) dated 17.09.2025
+#   (in force 22.09.2025); 6-digit SAC descriptions from the Annexure (Scheme of Classification of Services) to 11/2017.
+# Later amendments checked up to 28.10.2026: 19/2025-CT(Rate) (tobacco, pan masala; Sch VII omitted from 01.02.2026) and
+#   01/2026-CT(Rate) (2202 beverage codes, from 01.05.2026) change none of these rows.
+# As of: 2026-10-28. Every rate below was read from the notification entry named in schedule_ref.
+# code_spec is the entry as the notification writes it; prefixes/excludes are the HSN/SAC digit prefixes it covers / leaves out.
+# A code can have several rows when the notification sets conditional rates (e.g. 4015 surgical vs other gloves, GTA 5%/18%):
+# every rate on the longest matching prefix is a valid rate for that code.
+# Not included (no single verifiable rate): leasing of machinery 997311-997319 (same rate as like goods), 996511, the
+#   residual goods entry Sch II S.No. 639 (18%, no code). Reverse charge (13/2017) and service exemptions (12/2017) not covered.
+code_spec,prefixes,excludes,type,description,gst_rate,schedule_ref,notification,effective_from,category_hint
+2505,2505,,HSN,Natural sands of all kinds (other than metal-bearing sands),5,Sch I S.No. 166,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+2517,2517,,HSN,"Pebbles, gravel, broken or crushed stone (concrete aggregates, road metal, ballast)",5,Sch I S.No. 182,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+2520,2520,,HSN,Gypsum; anhydrite; plasters of calcined gypsum or calcium sulphate,5,Sch I S.No. 185,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+2522,2522,,HSN,"Quicklime, slaked lime and hydraulic lime",5,Sch I S.No. 187,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+2523,2523,,HSN,"Portland, aluminous, slag and similar hydraulic cements, incl. clinkers",18,Sch II S.No. 9,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+2710,2710,,HSN,"Petroleum oils other than crude incl. lubricating oils and preparations >=70% petroleum oil; waste oils (petrol, diesel, ATF, kerosene PDS outside GST)",18,Sch II S.No. 29,9/2025-CT(Rate),2025-09-22,CHEMICALS
+2711,2711,,HSN,"Petroleum gases and gaseous hydrocarbons (propane, butane, ethylene etc.) other than LPG for domestic/non-domestic exempted category",18,Sch II S.No. 30,9/2025-CT(Rate),2025-09-22,CHEMICALS
+2713,2713,,HSN,"Petroleum coke, petroleum bitumen and other residues of petroleum oils",18,Sch II S.No. 32,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+2715,2715,,HSN,"Bituminous mixtures (bituminous mastics, cut-backs)",18,Sch II S.No. 34,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+28,28,,HSN,Inorganic chemicals (other than those exempted or in other Schedules),18,Sch II S.No. 35,9/2025-CT(Rate),2025-09-22,CHEMICALS
+2804 40 10,28044010,,HSN,Medical grade oxygen,5,Sch I S.No. 212,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+2807,2807,,HSN,Sulphuric acid,5,Sch I S.No. 214,9/2025-CT(Rate),2025-09-22,CHEMICALS
+2808,2808,,HSN,Nitric acid,5,Sch I S.No. 215,9/2025-CT(Rate),2025-09-22,CHEMICALS
+2814,2814,,HSN,Ammonia,5,Sch I S.No. 217,9/2025-CT(Rate),2025-09-22,CHEMICALS
+29,29,,HSN,Organic chemicals (other than gibberellic acid),18,Sch II S.No. 36,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3004,3004,,HSN,"Medicaments for therapeutic or prophylactic use, in measured doses or retail packs",5,Sch I S.No. 234,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+3005,3005,,HSN,"Wadding, gauze, bandages, dressings, adhesive plasters for medical/surgical use",5,Sch I S.No. 235,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+3006,3006,,HSN,"Pharmaceutical goods of Note 4 to Ch 30: sterile sutures, tissue adhesives, haemostatics, ostomy appliances etc.",5,Sch I S.No. 236,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+3208,3208,,HSN,Paints and varnishes based on synthetic/modified natural polymers in non-aqueous medium,18,Sch II S.No. 50,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3209,3209,,HSN,Paints and varnishes based on synthetic/modified natural polymers in aqueous medium,18,Sch II S.No. 51,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3210,3210,,HSN,Other paints and varnishes incl. distempers,18,Sch II S.No. 52,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3214,3214,,HSN,"Glaziers' putty, resin cements, caulking compounds and other mastics; painters' fillings",18,Sch II S.No. 56,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+3215,3215,,HSN,"Printing ink, writing or drawing ink and other inks",18,Sch II S.No. 57,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+3401,3401,,HSN,Soap and organic surface-active preparations in bars/cakes (other than toilet soap),18,Sch II S.No. 66,9/2025-CT(Rate),2025-09-22,FACILITIES
+3402,3402,,HSN,Organic surface-active agents; washing and cleaning preparations (detergents),18,Sch II S.No. 67,9/2025-CT(Rate),2025-09-22,FACILITIES
+3403,3403,,HSN,"Lubricating preparations incl. cutting oils, anti-rust and mould release preparations",18,Sch II S.No. 68,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3506,3506,,HSN,Prepared glues and other prepared adhesives n.e.s.,18,Sch II S.No. 75,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3808,3808,,HSN,"Insecticides, fungicides, herbicides, disinfectants and similar products (other than specified bio-pesticides)",18,Sch II S.No. 95,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3810,3810,,HSN,"Pickling preparations for metal surfaces; soldering, brazing and welding fluxes and powders",18,Sch II S.No. 97,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3813,3813,,HSN,Preparations and charges for fire-extinguishers; charged fire-extinguishing grenades,18,Sch II S.No. 100,9/2025-CT(Rate),2025-09-22,FACILITIES
+3814,3814,,HSN,Organic composite solvents and thinners; paint or varnish removers,18,Sch II S.No. 101,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3816,3816,,HSN,"Refractory cements, mortars, concretes (other than dolomite ramming mix)",18,Sch II S.No. 103,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+3822,3822,,HSN,Diagnostic kits or reagents incl. certified reference materials,5,Sch I S.No. 263,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+3824,3824,,HSN,Prepared binders for foundry moulds or cores; chemical products and preparations n.e.s.,18,Sch II S.No. 110,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3901 to 3913,3901 3902 3903 3904 3905 3906 3907 3908 3909 3910 3911 3912 3913,,HSN,"Polymers and plastics in primary forms (PE, PP, PVC, epoxy, polyesters, polyamides, PU, silicones etc.)",18,Sch II S.No. 114,9/2025-CT(Rate),2025-09-22,CHEMICALS
+3917,3917,,HSN,"Tubes, pipes and hoses, and fittings therefor, of plastics",18,Sch II S.No. 118,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+3919,3919,,HSN,"Self-adhesive plates, sheets, film, foil, tape and strip of plastics",18,Sch II S.No. 120,9/2025-CT(Rate),2025-09-22,PACKAGING
+3920,3920,,HSN,"Other plates, sheets, film, foil and strip of plastics, non-cellular, not reinforced",18,Sch II S.No. 121,9/2025-CT(Rate),2025-09-22,PACKAGING
+3921,3921,,HSN,"Other plates, sheets, film, foil and strip of plastics",18,Sch II S.No. 122,9/2025-CT(Rate),2025-09-22,PACKAGING
+3922,3922,,HSN,"Baths, sinks, wash-basins, lavatory seats, cisterns and similar sanitary ware of plastics",18,Sch II S.No. 123,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+3923,3923,,HSN,"Articles for conveyance or packing of goods of plastics; stoppers, lids, caps and closures",18,Sch II S.No. 124,9/2025-CT(Rate),2025-09-22,PACKAGING
+3923 or 6305,3923 6305,,HSN,"Woven and non-woven bags and sacks of polyethylene or polypropylene strip, for packing of goods",18,Sch II S.No. 200,9/2025-CT(Rate),2025-09-22,PACKAGING
+3925,3925,,HSN,"Builders' ware of plastics n.e.s. (tanks, doors, windows, shutters etc.)",18,Sch II S.No. 126,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+3926,3926,,HSN,"Other articles of plastics (other than bangles, beads and feeding bottles)",18,Sch II S.No. 127,9/2025-CT(Rate),2025-09-22,PACKAGING
+4001,4001,,HSN,"Natural rubber, balata, gutta-percha and similar natural gums, in primary forms",5,Sch I S.No. 266,9/2025-CT(Rate),2025-09-22,RUBBER
+4002,4002,,HSN,"Synthetic rubber and factice, in primary forms or plates, sheets, strip",18,Sch II S.No. 128,9/2025-CT(Rate),2025-09-22,RUBBER
+4008,4008,,HSN,"Plates, sheets, strip, rods and profile shapes of vulcanised rubber",18,Sch II S.No. 134,9/2025-CT(Rate),2025-09-22,RUBBER
+4009,4009,,HSN,"Tubes, pipes and hoses of vulcanised rubber, with or without fittings",18,Sch II S.No. 135,9/2025-CT(Rate),2025-09-22,RUBBER
+4010,4010,,HSN,Conveyor or transmission belts or belting of vulcanised rubber,18,Sch II S.No. 136,9/2025-CT(Rate),2025-09-22,RUBBER
+4011,4011,,HSN,"New pneumatic tyres of rubber (other than bicycle, rear tractor and aircraft tyres)",18,Sch II S.No. 137,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+4013,4013,,HSN,Inner tubes of rubber (other than bicycle and rear tractor tyre tubes),18,Sch II S.No. 139,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+4014,4014,,HSN,"Hygienic or pharmaceutical articles of vulcanised rubber (hot water bottles, ice bags etc.)",18,Sch II S.No. 140,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+4015,4015,,HSN,Surgical rubber gloves or medical examination rubber gloves,5,Sch I S.No. 275,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+4015,4015,,HSN,Rubber apparel and clothing accessories incl. gloves for all purposes (other than surgical gloves),18,Sch II S.No. 141,9/2025-CT(Rate),2025-09-22,RUBBER
+4016,4016,,HSN,"Other articles of vulcanised rubber (gaskets, washers, seals, mountings) other than erasers and rubber bands",18,Sch II S.No. 142,9/2025-CT(Rate),2025-09-22,RUBBER
+4412,4412,,HSN,"Plywood, veneered panels and similar laminated wood",18,Sch II S.No. 159,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+4415,4415,,HSN,"Packing cases, boxes, crates, drums of wood; cable-drums; pallets, box pallets, pallet collars",5,Sch I S.No. 300,9/2025-CT(Rate),2025-09-22,PACKAGING
+4418,4418,,HSN,"Builders' joinery and carpentry of wood (doors, windows, shuttering, flooring panels)",18,Sch II S.No. 162,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+4802,4802,,HSN,Uncoated writing/printing paper and paperboard (paper used for exercise/note books is exempt under Notif 10/2025 S.No.128),18,Sch II S.No. 167,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+4808,4808,,HSN,"Corrugated, creped, crinkled or embossed paper and paperboard in rolls or sheets",18,Sch II S.No. 175,9/2025-CT(Rate),2025-09-22,PACKAGING
+4817 [Except 4817 30],4817,481730,HSN,"Envelopes, letter cards, plain postcards and correspondence cards of paper",18,Sch II S.No. 183,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+4818,4818,,HSN,"Toilet paper, tissues, towels, napkins and similar household/sanitary paper articles",18,Sch II S.No. 184,9/2025-CT(Rate),2025-09-22,FACILITIES
+"4819 10, 4819 20",481910 481920,,HSN,"Cartons, boxes and cases of corrugated or non-corrugated paper or paperboard",5,Sch I S.No. 322,9/2025-CT(Rate),2025-09-22,PACKAGING
+"4819 (except 4819 10, 4819 20)",4819,481910 481920,HSN,"Other paper packing containers (sacks, bags, box files etc.)",18,Sch II S.No. 185,9/2025-CT(Rate),2025-09-22,PACKAGING
+4820,4820,,HSN,"Registers, account books, order books, letter pads, diaries, binders, file covers, forms (exercise/note books exempt under Notif 10/2025 S.No.130)",18,Sch II S.No. 186,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+4821,4821,,HSN,"Paper or paperboard labels of all kinds, printed or not",18,Sch II S.No. 187,9/2025-CT(Rate),2025-09-22,PACKAGING
+5607,5607,,HSN,"Twine, cordage, ropes and cables of textile materials",5,Sch I S.No. 355,9/2025-CT(Rate),2025-09-22,PACKAGING
+5910,5910,,HSN,Transmission or conveyor belts or belting of textile material,5,Sch I S.No. 385,9/2025-CT(Rate),2025-09-22,MACHINERY
+6305 32 00,63053200,,HSN,Flexible intermediate bulk containers (FIBC / jumbo bags),18,Sch II S.No. 201,9/2025-CT(Rate),2025-09-22,PACKAGING
+64,64,,HSN,Footwear of sale value not exceeding Rs 2500 per pair (incl. safety footwear),5,Sch I S.No. 392,9/2025-CT(Rate),2025-09-22,FACILITIES
+6402,6402,,HSN,Other footwear with outer soles and uppers of rubber or plastics (sale value above Rs 2500/pair),18,Sch II S.No. 203,9/2025-CT(Rate),2025-09-22,FACILITIES
+6403,6403,,HSN,Footwear with uppers of leather incl. leather safety shoes (sale value above Rs 2500/pair),18,Sch II S.No. 204,9/2025-CT(Rate),2025-09-22,FACILITIES
+6506,6506,,HSN,Other headgear incl. safety helmets,18,Sch II S.No. 212,9/2025-CT(Rate),2025-09-22,FACILITIES
+6802,6802,,HSN,Worked monumental or building stone and articles thereof,18,Sch II S.No. 218,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6804,6804,,HSN,"Millstones, grindstones, grinding wheels and the like, without frameworks",18,Sch II S.No. 220,9/2025-CT(Rate),2025-09-22,TOOLING
+6805,6805,,HSN,"Natural or artificial abrasive powder or grain on a base (sandpaper, abrasive cloth)",18,Sch II S.No. 221,9/2025-CT(Rate),2025-09-22,TOOLING
+6806,6806,,HSN,"Slag wool, rock wool and similar mineral wools; heat or sound insulating materials",18,Sch II S.No. 222,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6810,6810,,HSN,"Articles of cement, concrete or artificial stone, reinforced or not (blocks, pipes, precast)",18,Sch II S.No. 226,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6813,6813,,HSN,"Friction material and articles (brake linings, pads, clutch facings), not mounted",18,Sch II S.No. 229,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+6902,6902,,HSN,"Refractory bricks, blocks, tiles and similar refractory ceramic constructional goods",18,Sch II S.No. 233,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6907,6907,,HSN,"Ceramic flags and paving, hearth or wall tiles; ceramic mosaic cubes",18,Sch II S.No. 238,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6910,6910,,HSN,"Ceramic sinks, wash basins, baths, WC pans, cisterns, urinals and similar sanitary fixtures",18,Sch II S.No. 240,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7005,7005,,HSN,"Float glass and surface ground or polished glass, in sheets",18,Sch II S.No. 245,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7007,7007,,HSN,Safety glass of toughened (tempered) or laminated glass,18,Sch II S.No. 247,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7010,7010,,HSN,"Glass bottles, jars, phials, ampoules and other containers for packing goods",18,Sch II S.No. 250,9/2025-CT(Rate),2025-09-22,PACKAGING
+7017,7017,,HSN,"Laboratory, hygienic or pharmaceutical glassware",18,Sch II S.No. 256,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+7201,7201,,HSN,Pig iron and spiegeleisen in primary forms,18,Sch II S.No. 260,9/2025-CT(Rate),2025-09-22,METALS
+7202,7202,,HSN,Ferro-alloys,18,Sch II S.No. 261,9/2025-CT(Rate),2025-09-22,METALS
+7204,7204,,HSN,Ferrous waste and scrap; remelting scrap ingots of iron or steel,18,Sch II S.No. 263,9/2025-CT(Rate),2025-09-22,METALS
+7207,7207,,HSN,"Semi-finished products of iron or non-alloy steel (billets, blooms, slabs)",18,Sch II S.No. 266,9/2025-CT(Rate),2025-09-22,METALS
+7208 to 7212,7208 7209 7210 7211 7212,,HSN,"Flat-rolled products of iron or non-alloy steel (HR/CR coils, sheets, plates, coated sheets)",18,Sch II S.No. 267,9/2025-CT(Rate),2025-09-22,METALS
+7213 to 7215,7213 7214 7215,,HSN,"Bars and rods of iron or non-alloy steel (incl. TMT rebars, wire rods)",18,Sch II S.No. 268,9/2025-CT(Rate),2025-09-22,METALS
+7216,7216,,HSN,"Angles, shapes and sections of iron or non-alloy steel (beams, channels)",18,Sch II S.No. 269,9/2025-CT(Rate),2025-09-22,METALS
+7217,7217,,HSN,Wire of iron or non-alloy steel,18,Sch II S.No. 270,9/2025-CT(Rate),2025-09-22,METALS
+"7219, 7220",7219 7220,,HSN,Flat-rolled products of stainless steel,18,Sch II S.No. 272,9/2025-CT(Rate),2025-09-22,METALS
+"7221, 7222",7221 7222,,HSN,Bars and rods of stainless steel,18,Sch II S.No. 273,9/2025-CT(Rate),2025-09-22,METALS
+"7225, 7226",7225 7226,,HSN,Flat-rolled products of other alloy steel,18,Sch II S.No. 276,9/2025-CT(Rate),2025-09-22,METALS
+"7227, 7228",7227 7228,,HSN,Bars and rods of other alloy steel,18,Sch II S.No. 277,9/2025-CT(Rate),2025-09-22,METALS
+7301,7301,,HSN,"Sheet piling of iron or steel; welded angles, shapes and sections",18,Sch II S.No. 279,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7303,7303,,HSN,"Tubes, pipes and hollow profiles of cast iron",18,Sch II S.No. 281,9/2025-CT(Rate),2025-09-22,CASTINGS
+7304,7304,,HSN,"Seamless tubes, pipes and hollow profiles of iron or steel",18,Sch II S.No. 282,9/2025-CT(Rate),2025-09-22,METALS
+7306,7306,,HSN,"Other tubes, pipes and hollow profiles of iron or steel (ERW, open seam)",18,Sch II S.No. 284,9/2025-CT(Rate),2025-09-22,METALS
+7307,7307,,HSN,"Tube or pipe fittings of iron or steel (couplings, elbows, flanges, sleeves)",18,Sch II S.No. 285,9/2025-CT(Rate),2025-09-22,METALS
+7308,7308,,HSN,"Structures and parts of structures of iron or steel (bridges, towers, doors, scaffolding, plates and rods prepared for structures)",18,Sch II S.No. 286,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7309,7309,,HSN,"Reservoirs, tanks and vats of iron or steel, capacity > 300 l",18,Sch II S.No. 287,9/2025-CT(Rate),2025-09-22,MACHINERY
+7310,7310,,HSN,"Tanks, casks, drums, cans and boxes of iron or steel, capacity <= 300 l",18,Sch II S.No. 288,9/2025-CT(Rate),2025-09-22,PACKAGING
+7311,7311,,HSN,Containers for compressed or liquefied gas of iron or steel (gas cylinders),18,Sch II S.No. 289,9/2025-CT(Rate),2025-09-22,PACKAGING
+7312,7312,,HSN,"Stranded wire, ropes, cables, slings of iron or steel, not electrically insulated",18,Sch II S.No. 290,9/2025-CT(Rate),2025-09-22,METALS
+7314,7314,,HSN,"Cloth, grill, netting and fencing of iron or steel wire; expanded metal",18,Sch II S.No. 292,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7315,7315,,HSN,"Chain and parts thereof of iron or steel (7315 20, 7315 81, 7315 82, 7315 89, 7315 90)",18,Sch II S.No. 293,9/2025-CT(Rate),2025-09-22,MACHINERY
+7317,7317,,HSN,"Nails, tacks, drawing pins, staples and similar articles of iron or steel",18,Sch II S.No. 295,9/2025-CT(Rate),2025-09-22,FASTENERS
+7318,7318,,HSN,"Screws, bolts, nuts, coach screws, rivets, cotters, washers (incl. spring washers) of iron or steel",18,Sch II S.No. 296,9/2025-CT(Rate),2025-09-22,FASTENERS
+7320,7320,,HSN,Springs and leaves for springs of iron and steel,18,Sch II S.No. 298,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+7324,7324,,HSN,Sanitary ware and parts thereof of iron and steel,18,Sch II S.No. 303,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7325,7325,,HSN,Other cast articles of iron or steel,18,Sch II S.No. 304,9/2025-CT(Rate),2025-09-22,CASTINGS
+7326,7326,,HSN,"Other articles of iron or steel (forgings, stampings, wire articles etc.)",18,Sch II S.No. 305,9/2025-CT(Rate),2025-09-22,METALS
+7403,7403,,HSN,"Refined copper and copper alloys, unwrought (cathodes, billets)",18,Sch II S.No. 308,9/2025-CT(Rate),2025-09-22,METALS
+7407,7407,,HSN,"Copper bars, rods and profiles",18,Sch II S.No. 312,9/2025-CT(Rate),2025-09-22,METALS
+7408,7408,,HSN,Copper wire,18,Sch II S.No. 313,9/2025-CT(Rate),2025-09-22,METALS
+7409,7409,,HSN,"Copper plates, sheets and strip, thickness > 0.15 mm",18,Sch II S.No. 314,9/2025-CT(Rate),2025-09-22,METALS
+7411,7411,,HSN,Copper tubes and pipes,18,Sch II S.No. 316,9/2025-CT(Rate),2025-09-22,METALS
+7412,7412,,HSN,Copper tube or pipe fittings,18,Sch II S.No. 317,9/2025-CT(Rate),2025-09-22,METALS
+7415,7415,,HSN,"Nails, screws, bolts, nuts, rivets, washers and similar articles of copper",18,Sch II S.No. 319,9/2025-CT(Rate),2025-09-22,FASTENERS
+7419,7419,,HSN,Other articles of copper (other than brass kerosene pressure stove),18,Sch II S.No. 321,9/2025-CT(Rate),2025-09-22,METALS
+7601,7601,,HSN,"Unwrought aluminium (ingots, billets)",18,Sch II S.No. 330,9/2025-CT(Rate),2025-09-22,METALS
+7602,7602,,HSN,Aluminium waste and scrap,18,Sch II S.No. 331,9/2025-CT(Rate),2025-09-22,METALS
+7604,7604,,HSN,"Aluminium bars, rods and profiles (extrusions)",18,Sch II S.No. 333,9/2025-CT(Rate),2025-09-22,METALS
+7606,7606,,HSN,"Aluminium plates, sheets and strip, thickness > 0.2 mm",18,Sch II S.No. 335,9/2025-CT(Rate),2025-09-22,METALS
+7607,7607,,HSN,"Aluminium foil, thickness <= 0.2 mm",18,Sch II S.No. 336,9/2025-CT(Rate),2025-09-22,PACKAGING
+7608,7608,,HSN,Aluminium tubes and pipes,18,Sch II S.No. 337,9/2025-CT(Rate),2025-09-22,METALS
+7610,7610,,HSN,"Aluminium structures and parts of structures (doors, windows, frames, balustrades)",18,Sch II S.No. 339,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+7612,7612,,HSN,"Aluminium casks, drums, cans, boxes (other than milk cans)",18,Sch II S.No. 341,9/2025-CT(Rate),2025-09-22,PACKAGING
+7614,7614,,HSN,"Stranded wires, cables of aluminium, not electrically insulated (e.g. ACSR conductors)",18,Sch II S.No. 343,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+7616,7616,,HSN,"Other articles of aluminium (incl. aluminium nails, screws, bolts, rivets, castings)",18,Sch II S.No. 345,9/2025-CT(Rate),2025-09-22,METALS
+8101 to 8112,8101 8102 8103 8104 8105 8106 8107 8108 8109 8110 8111 8112,,HSN,"Other base metals (tungsten, molybdenum, magnesium, cobalt, titanium, manganese etc.) and articles",18,Sch II S.No. 360,9/2025-CT(Rate),2025-09-22,METALS
+8202,8202,,HSN,Hand saws; blades for saws of all kinds,18,Sch II S.No. 362,9/2025-CT(Rate),2025-09-22,TOOLING
+8203,8203,,HSN,"Files, rasps, pliers, pincers, tweezers, metal cutting shears, pipe-cutters, bolt croppers, punches",18,Sch II S.No. 363,9/2025-CT(Rate),2025-09-22,TOOLING
+8204,8204,,HSN,Hand-operated spanners and wrenches incl. torque wrenches; interchangeable sockets,18,Sch II S.No. 364,9/2025-CT(Rate),2025-09-22,TOOLING
+8205,8205,,HSN,"Hand tools n.e.s. (hammers, screwdrivers etc.); blow lamps; vices, clamps; anvils",18,Sch II S.No. 365,9/2025-CT(Rate),2025-09-22,TOOLING
+8207,8207,,HSN,"Interchangeable tools for hand tools or machine-tools (drills, taps, dies, milling cutters, inserts)",18,Sch II S.No. 367,9/2025-CT(Rate),2025-09-22,TOOLING
+8208,8208,,HSN,Knives and cutting blades for machines or mechanical appliances,18,Sch II S.No. 368,9/2025-CT(Rate),2025-09-22,TOOLING
+8301,8301,,HSN,Padlocks and locks of base metal; keys,18,Sch II S.No. 376,9/2025-CT(Rate),2025-09-22,FACILITIES
+8302,8302,,HSN,"Base metal mountings, fittings and similar articles for furniture, doors, windows; castors",18,Sch II S.No. 377,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+8304,8304,,HSN,"Filing cabinets, paper trays, pen trays and similar office equipment of base metal",18,Sch II S.No. 379,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+8305,8305,,HSN,"Fittings for loose-leaf binders, paper clips, staples in strips and similar office articles",18,Sch II S.No. 380,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+8309,8309,,HSN,"Stoppers, caps and lids of base metal (crown corks, screw caps), seals and packing accessories",18,Sch II S.No. 383,9/2025-CT(Rate),2025-09-22,PACKAGING
+8311,8311,,HSN,"Wire, rods, electrodes of base metal coated or cored with flux, for welding, brazing or soldering",18,Sch II S.No. 385,9/2025-CT(Rate),2025-09-22,TOOLING
+8402,8402,,HSN,Steam or other vapour generating boilers; super-heated water boilers,18,Sch II S.No. 389,9/2025-CT(Rate),2025-09-22,MACHINERY
+8407,8407,,HSN,Spark-ignition internal combustion piston engines (other than aircraft engines),18,Sch II S.No. 394,9/2025-CT(Rate),2025-09-22,MACHINERY
+8408,8408,,HSN,Compression-ignition (diesel) internal combustion piston engines,18,Sch II S.No. 395,9/2025-CT(Rate),2025-09-22,MACHINERY
+8409,8409,,HSN,Parts for engines of heading 8407 or 8408,18,Sch II S.No. 396,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+8412,8412,,HSN,Other engines and motors incl. hydraulic and pneumatic power engines/cylinders (other than wind turbine),18,Sch II S.No. 399,9/2025-CT(Rate),2025-09-22,MACHINERY
+8413,8413,,HSN,"Pumps: concrete, rotary positive displacement, power-driven water pumps (centrifugal, submersible etc.), fuel dispensing and engine fuel/lube/coolant pumps (other 8413 pumps: residual Sch II S.No. 639, also 18%)",18,Sch II S.No. 400,9/2025-CT(Rate),2025-09-22,MACHINERY
+"8413, 8413 91",8413 841391,,HSN,Hand pumps and parts thereof,5,Sch I S.No. 425,9/2025-CT(Rate),2025-09-22,MACHINERY
+8414,8414,,HSN,"Air or vacuum pumps, air or gas compressors and fans; ventilating hoods; biological safety cabinets",18,Sch II S.No. 401,9/2025-CT(Rate),2025-09-22,MACHINERY
+8415,8415,,HSN,Air-conditioning machines,18,Sch II S.No. 404,9/2025-CT(Rate),2025-09-22,FACILITIES
+8418,8418,,HSN,"Refrigerators, freezers and other refrigerating equipment; heat pumps",18,Sch II S.No. 407,9/2025-CT(Rate),2025-09-22,FACILITIES
+8419 [other than 8419 12],8419,841912,HSN,"Machinery and plant for treatment of materials by temperature change (heat exchangers, dryers, sterilisers, distillation)",18,Sch II S.No. 408,9/2025-CT(Rate),2025-09-22,MACHINERY
+8421,8421,,HSN,Centrifuges; filtering or purifying machinery for liquids or gases,18,Sch II S.No. 410,9/2025-CT(Rate),2025-09-22,MACHINERY
+8422,8422,,HSN,"Dish washing machines; machinery for filling, closing, sealing, labelling and packing",18,Sch II S.No. 411,9/2025-CT(Rate),2025-09-22,MACHINERY
+8423,8423,,HSN,Weighing machinery (excluding balances of 5 cg sensitivity or better); weights,18,Sch II S.No. 412,9/2025-CT(Rate),2025-09-22,MACHINERY
+8424,8424,,HSN,"Spraying appliances; fire extinguishers, spray guns, steam or sand blasting machines",18,Sch II S.No. 413,9/2025-CT(Rate),2025-09-22,FACILITIES
+8425,8425,,HSN,Pulley tackle and hoists; winches and capstans; jacks,18,Sch II S.No. 414,9/2025-CT(Rate),2025-09-22,MACHINERY
+8426,8426,,HSN,"Derricks; cranes incl. cable cranes; mobile lifting frames, straddle carriers",18,Sch II S.No. 415,9/2025-CT(Rate),2025-09-22,MACHINERY
+8427,8427,,HSN,Fork-lift trucks; other works trucks fitted with lifting or handling equipment,18,Sch II S.No. 416,9/2025-CT(Rate),2025-09-22,MACHINERY
+8428,8428,,HSN,"Other lifting, handling, loading machinery (lifts, escalators, conveyors)",18,Sch II S.No. 417,9/2025-CT(Rate),2025-09-22,MACHINERY
+8429,8429,,HSN,"Self-propelled bulldozers, graders, excavators, shovel loaders, road rollers",18,Sch II S.No. 418,9/2025-CT(Rate),2025-09-22,MACHINERY
+8430,8430,,HSN,"Other earth moving, excavating, boring machinery; pile-drivers",18,Sch II S.No. 419,9/2025-CT(Rate),2025-09-22,MACHINERY
+8431,8431,,HSN,Parts for machinery of headings 8425 to 8430,18,Sch II S.No. 420,9/2025-CT(Rate),2025-09-22,MACHINERY
+8443,8443,,HSN,"Printing machinery; other printers, copying machines and facsimile machines; parts",18,Sch II S.No. 430,9/2025-CT(Rate),2025-09-22,IT_HARDWARE
+8454,8454,,HSN,"Converters, ladles, ingot moulds and casting machines for metallurgy or foundries",18,Sch II S.No. 440,9/2025-CT(Rate),2025-09-22,CASTINGS
+8456,8456,,HSN,"Machine-tools working by laser, ultrasonic, electro-discharge, plasma arc, water-jet processes",18,Sch II S.No. 442,9/2025-CT(Rate),2025-09-22,MACHINERY
+8457,8457,,HSN,"Machining centres, unit construction and multi-station transfer machines for metal",18,Sch II S.No. 443,9/2025-CT(Rate),2025-09-22,MACHINERY
+8458,8458,,HSN,Lathes (incl. turning centres) for removing metal,18,Sch II S.No. 444,9/2025-CT(Rate),2025-09-22,MACHINERY
+8459,8459,,HSN,"Machine-tools for drilling, boring, milling, threading or tapping metal",18,Sch II S.No. 445,9/2025-CT(Rate),2025-09-22,MACHINERY
+8460,8460,,HSN,"Machine-tools for deburring, grinding, honing, lapping, polishing metal",18,Sch II S.No. 446,9/2025-CT(Rate),2025-09-22,MACHINERY
+8461,8461,,HSN,"Machine-tools for planing, shaping, slotting, broaching, gear cutting, sawing metal",18,Sch II S.No. 447,9/2025-CT(Rate),2025-09-22,MACHINERY
+8462,8462,,HSN,"Machine-tools incl. presses for forging, bending, folding, shearing, punching metal",18,Sch II S.No. 448,9/2025-CT(Rate),2025-09-22,MACHINERY
+8466,8466,,HSN,"Parts and accessories for machine-tools of 8456 to 8465 (tool holders, work holders, dividing heads)",18,Sch II S.No. 452,9/2025-CT(Rate),2025-09-22,TOOLING
+8467,8467,,HSN,"Tools for working in the hand, pneumatic, hydraulic or with self-contained motor (power tools)",18,Sch II S.No. 453,9/2025-CT(Rate),2025-09-22,TOOLING
+8468,8468,,HSN,"Machinery for soldering, brazing or welding (non-electric); gas-operated surface tempering",18,Sch II S.No. 454,9/2025-CT(Rate),2025-09-22,MACHINERY
+8471,8471,,HSN,"Automatic data processing machines (computers, laptops, servers) and units thereof",18,Sch II S.No. 456,9/2025-CT(Rate),2025-09-22,IT_HARDWARE
+8473,8473,,HSN,Parts and accessories for machines of headings 8470 to 8472,18,Sch II S.No. 458,9/2025-CT(Rate),2025-09-22,IT_HARDWARE
+8474,8474,,HSN,"Machinery for sorting, crushing, grinding, mixing earth, stone, ores; concrete mixers",18,Sch II S.No. 459,9/2025-CT(Rate),2025-09-22,MACHINERY
+8477,8477,,HSN,"Machinery for working rubber or plastics (injection moulding, extruders)",18,Sch II S.No. 462,9/2025-CT(Rate),2025-09-22,MACHINERY
+8479,8479,,HSN,Machines and mechanical appliances having individual functions n.e.s. (other than composting machines),18,Sch II S.No. 464,9/2025-CT(Rate),2025-09-22,MACHINERY
+8480,8480,,HSN,"Moulding boxes for metal foundry; mould bases; moulding patterns; moulds for metal, glass, rubber, plastics",18,Sch II S.No. 465,9/2025-CT(Rate),2025-09-22,TOOLING
+8481,8481,,HSN,"Taps, cocks, valves and similar appliances for pipes, boilers, tanks",18,Sch II S.No. 466,9/2025-CT(Rate),2025-09-22,MACHINERY
+8482,8482,,HSN,"Ball bearings, roller bearings",18,Sch II S.No. 467,9/2025-CT(Rate),2025-09-22,MACHINERY
+8483,8483,,HSN,"Transmission shafts, bearing housings, plain bearings, gears, gear boxes, flywheels, pulleys, clutches, couplings",18,Sch II S.No. 468,9/2025-CT(Rate),2025-09-22,MACHINERY
+8484,8484,,HSN,Gaskets and similar joints of metal sheeting; mechanical seals,18,Sch II S.No. 469,9/2025-CT(Rate),2025-09-22,MACHINERY
+8485,8485,,HSN,Machines for additive manufacturing (3D printers),18,Sch II S.No. 470,9/2025-CT(Rate),2025-09-22,MACHINERY
+8501,8501,,HSN,Electric motors and generators (excluding generating sets),18,Sch II S.No. 474,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8502,8502,,HSN,Electric generating sets (DG sets) and rotary converters,18,Sch II S.No. 475,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8503,8503,,HSN,Parts for machines of heading 8501 or 8502,18,Sch II S.No. 476,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8504,8504,,HSN,"Electrical transformers, static converters (rectifiers, UPS, inverters) and inductors (other than EV chargers)",18,Sch II S.No. 477,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8504,8504,,HSN,Charger or charging station for electrically operated vehicles,5,Sch I S.No. 438,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8507,8507,,HSN,"Electric accumulators (lead-acid, lithium-ion batteries) incl. separators",18,Sch II S.No. 480,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8511,8511,,HSN,"Electrical ignition or starting equipment for IC engines (spark plugs, starter motors, alternators)",18,Sch II S.No. 484,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+8512,8512,,HSN,"Electrical lighting/signalling equipment, wipers, defrosters for cycles or motor vehicles",18,Sch II S.No. 485,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+8514,8514,,HSN,Industrial or laboratory electric furnaces and ovens (incl. induction); heat treatment equipment,18,Sch II S.No. 487,9/2025-CT(Rate),2025-09-22,MACHINERY
+8515,8515,,HSN,"Electric, laser, ultrasonic or plasma soldering, brazing and welding machines",18,Sch II S.No. 488,9/2025-CT(Rate),2025-09-22,MACHINERY
+8517,8517,,HSN,"Telephone sets, smartphones and apparatus for transmission/reception of voice, images or data (routers, switches)",18,Sch II S.No. 490,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8518,8518,,HSN,"Microphones, loudspeakers, headphones, audio amplifiers",18,Sch II S.No. 491,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8523,8523,,HSN,"Discs, tapes, solid-state non-volatile storage devices (SSD, flash), smart cards and other recording media",18,Sch II S.No. 495,9/2025-CT(Rate),2025-09-22,IT_HARDWARE
+8525,8525,,HSN,"CCTV, transmission apparatus, television cameras, digital cameras (other than walkie-talkies for defence/police)",18,Sch II S.No. 497,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8528,8528,,HSN,"Monitors and projectors (incl. computer monitors), television sets",18,Sch II S.No. 500,9/2025-CT(Rate),2025-09-22,IT_HARDWARE
+8531,8531,,HSN,"Electric sound or visual signalling apparatus (bells, sirens, indicator panels, burglar or fire alarms)",18,Sch II S.No. 503,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8532,8532,,HSN,"Electrical capacitors, fixed, variable or adjustable",18,Sch II S.No. 504,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8533,8533,,HSN,Electrical resistors incl. rheostats and potentiometers,18,Sch II S.No. 505,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8534 00 00,85340000,,HSN,Printed circuits,18,Sch II S.No. 506,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8535,8535,,HSN,"Electrical apparatus for switching/protecting circuits, voltage exceeding 1000 V (switches, fuses, lightning arresters)",18,Sch II S.No. 507,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8536,8536,,HSN,"Electrical apparatus for switching/protecting circuits, voltage not exceeding 1000 V (switches, relays, MCBs, plugs, sockets)",18,Sch II S.No. 508,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8537,8537,,HSN,"Boards, panels, consoles, cabinets for electric control or distribution (incl. PLC panels)",18,Sch II S.No. 509,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8538,8538,,HSN,"Parts for apparatus of heading 8535, 8536 or 8537",18,Sch II S.No. 510,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8539,8539,,HSN,Electrical filament or discharge lamps; LED lamps; UV or IR lamps; arc lamps,18,Sch II S.No. 511,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8541,8541,,HSN,"Semiconductor devices (diodes, transistors), photosensitive devices, LEDs, mounted piezo-electric crystals",18,Sch II S.No. 513,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8542,8542,,HSN,Electronic integrated circuits,18,Sch II S.No. 514,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8543,8543,,HSN,Electrical machines and apparatus having individual functions n.e.s.,18,Sch II S.No. 515,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+8544,8544,,HSN,"Insulated wire and cable (incl. co-axial, enamelled winding wire) and optical fibre cables",18,Sch II S.No. 516,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8546,8546,,HSN,Electrical insulators of any material,18,Sch II S.No. 518,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+"84, 85 or 94",84 85 94,,HSN,"Renewable energy devices and parts: solar power devices/generators, PV cells and modules, wind mills, biogas and waste-to-energy plants",5,Sch I S.No. 437,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+8704,8704,,HSN,"Motor vehicles for transport of goods (trucks, incl. refrigerated)",18,Sch II S.No. 540,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+8707,8707,,HSN,Bodies (incl. cabs) for motor vehicles of 8701 to 8705,18,Sch II S.No. 543,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+8708,8708,,HSN,Parts and accessories of motor vehicles of 8701 to 8705 (specified tractor parts are 5% under Sch I S.No. 443-454),18,Sch II S.No. 544,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+8709,8709,,HSN,"Self-propelled works trucks not fitted with lifting equipment (factory, warehouse, airport)",18,Sch II S.No. 545,9/2025-CT(Rate),2025-09-22,MACHINERY
+8716,8716,,HSN,Trailers and semi-trailers; other non-mechanically propelled vehicles; parts,18,Sch II S.No. 549,9/2025-CT(Rate),2025-09-22,AUTO_PARTS
+9004,9004,,HSN,"Spectacles and goggles, other than corrective (incl. safety goggles)",18,Sch II S.No. 558,9/2025-CT(Rate),2025-09-22,FACILITIES
+9017,9017,,HSN,"Drawing, marking-out and mathematical instruments; hand-held length measuring instruments (rules, tapes, calipers, micrometers)",18,Sch II S.No. 570,9/2025-CT(Rate),2025-09-22,TOOLING
+9018,9018,,HSN,"Instruments and appliances used in medical, surgical, dental or veterinary sciences incl. electro-medical apparatus",5,Sch I S.No. 483,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9019,9019,,HSN,"Mechano-therapy and massage apparatus; oxygen, aerosol and artificial respiration therapy apparatus",5,Sch I S.No. 484,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9020,9020,,HSN,Other breathing appliances and gas masks (excl. masks without mechanical parts or replaceable filters),5,Sch I S.No. 485,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9021,9021,,HSN,"Orthopaedic appliances, splints, artificial body parts, implants, intraocular lens (other than hearing aids)",5,Sch I S.No. 486,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9022,9022,,HSN,"X-ray and alpha/beta/gamma radiation apparatus for medical, surgical, dental or veterinary use",5,Sch I S.No. 487,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9022,9022,,HSN,"X-ray and ionising radiation apparatus other than for medical use (industrial radiography, baggage scanners)",18,Sch II S.No. 571,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9025,9025,,HSN,"Thermometers for medical, surgical, dental or veterinary use",5,Sch I S.No. 488,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9025,9025,,HSN,"Hydrometers, thermometers, pyrometers, barometers, hygrometers (other than medical thermometers)",18,Sch II S.No. 574,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9026,9026,,HSN,"Instruments for measuring flow, level, pressure of liquids or gases (flow meters, gauges, manometers)",18,Sch II S.No. 575,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9027,9027,,HSN,"Instruments and apparatus for medical, surgical, dental or veterinary uses, for physical or chemical analysis",5,Sch I S.No. 489,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9027,9027,,HSN,"Instruments for physical or chemical analysis (spectrometers, gas analysers, viscosity meters) other than medical",18,Sch II S.No. 576,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9028,9028,,HSN,"Gas, liquid or electricity supply or production meters",18,Sch II S.No. 577,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+9030,9030,,HSN,"Oscilloscopes, multimeters and instruments for measuring electrical quantities or radiation",18,Sch II S.No. 579,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9031,9031,,HSN,"Measuring or checking instruments and machines n.e.s.; profile projectors (CMMs, gauges)",18,Sch II S.No. 580,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9032,9032,,HSN,"Automatic regulating or controlling instruments (thermostats, controllers)",18,Sch II S.No. 581,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+9033,9033,,HSN,Parts and accessories n.e.s. for Chapter 90 machines and instruments,18,Sch II S.No. 582,9/2025-CT(Rate),2025-09-22,ELECTRONICS
+90,90,,HSN,Coronary stents and coronary stent systems for use with cardiac catheters,5,Sch I S.No. 473,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+90 or any other Chapter,90,,HSN,Blood glucose monitoring system (glucometer) and test strips,5,Sch I S.No. 475,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9401 [other than 9401 10 00],9401,94011000,HSN,"Seats and parts thereof (office chairs, vehicle seats), other than aircraft seats",18,Sch II S.No. 610,9/2025-CT(Rate),2025-09-22,FACILITIES
+9402,9402,,HSN,"Medical, surgical, dental or veterinary furniture (operating tables, hospital beds)",18,Sch II S.No. 611,9/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+9403,9403,,HSN,"Other furniture and parts (office, laboratory, industrial furniture) other than of bamboo, cane or rattan",18,Sch II S.No. 612,9/2025-CT(Rate),2025-09-22,FACILITIES
+9405,9405,,HSN,"Luminaires and lighting fittings incl. searchlights, spotlights; illuminated signs",18,Sch II S.No. 614,9/2025-CT(Rate),2025-09-22,ELECTRICAL
+9406,9406,,HSN,Prefabricated buildings,18,Sch II S.No. 615,9/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+9603 [other than 9603 10 00 and 9603 21 00],9603,96031000 96032100,HSN,"Brushes (incl. machine brushes), hand-operated floor sweepers, mops and dusters",18,Sch II S.No. 623,9/2025-CT(Rate),2025-09-22,FACILITIES
+9608,9608,,HSN,"Ball point pens, felt-tipped pens and markers, fountain pens and parts",18,Sch II S.No. 626,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+9610 00 00,96100000,,HSN,Boards with writing or drawing surface (white boards),18,Sch II S.No. 627,9/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+4802,4802,,HSN,"Uncoated writing/printing paper and paperboard used for exercise books, graph books, laboratory note books and notebooks (exempt)",0,Notif 10/2025 S.No. 128,10/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+4820,4820,,HSN,"Exercise book, graph book, laboratory note book and notebooks (exempt)",0,Notif 10/2025 S.No. 130,10/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+9021,9021,,HSN,Hearing aids (exempt),0,Notif 10/2025 S.No. 160,10/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+"9608,9609",9608 9609,,HSN,"Pencils, crayons, pastels, drawing charcoals, writing or drawing chalks and tailor's chalk (exempt)",0,Notif 10/2025 S.No. 163,10/2025-CT(Rate),2025-09-22,OFFICE_SUPPLIES
+6815,6815,,HSN,Fly ash bricks; fly ash aggregates; fly ash blocks,12,Notif 14/2025 Sch S.No. 1,14/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6901 00 10,69010010,,HSN,Bricks of fossil meals or similar siliceous earths,12,Notif 14/2025 Sch S.No. 2,14/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6904 10 00,69041000,,HSN,Building bricks,12,Notif 14/2025 Sch S.No. 3,14/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+6905 10 00,69051000,,HSN,Earthen or roofing tiles,12,Notif 14/2025 Sch S.No. 4,14/2025-CT(Rate),2025-09-22,CONSTRUCTION_GOODS
+9954,9954,,SAC,"Construction services incl. composite supply of works contract, other than specified concessional items (residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+9954,9954,,SAC,"Composite works contract predominantly earth work (>75% of value) supplied to Central/State Govt, UT or local authority",18,Notif 11/2017 S.No. 3(vii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,CONSTRUCTION_WORKS
+9954,9954,,SAC,Composite works contract by sub-contractor to main contractor for earth-work contracts of item (vii) for Govt/local authority,18,Notif 11/2017 S.No. 3(x),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,CONSTRUCTION_WORKS
+9954,9954,,SAC,Composite works contract and associated services for offshore oil and gas E&P beyond 12 nautical miles,18,Notif 11/2017 S.No. 3(viii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,CONSTRUCTION_WORKS
+995413,995413,,SAC,"Construction services of industrial buildings (production, assembly, workshops, storage buildings) (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995414,995414,,SAC,"Construction services of commercial buildings (offices, malls, hotels, terminals, parking) (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995415,995415,,SAC,"Construction services of other non-residential buildings (educational institutions, hospitals, clinics) (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995421,995421,,SAC,"General construction services of highways, streets, roads, railways, airfield runways, bridges and tunnels (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995424,995424,,SAC,"General construction services of local water and sewage pipelines, electricity and communication cables (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995425,995425,,SAC,"General construction services of mines and industrial plants (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995426,995426,,SAC,"General construction services of power plants and related infrastructure (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995428,995428,,SAC,"General construction services of other civil engineering works n.e.c. (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995433,995433,,SAC,"Excavating and earthmoving services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995439,995439,,SAC,"Repair, alteration, addition, replacement and maintenance of civil constructions (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995454,995454,,SAC,"Concrete services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995455,995455,,SAC,"Structural steel erection services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995461,995461,,SAC,"Electrical installation services incl. electrical wiring and fitting, fire alarm and burglar alarm installation (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995462,995462,,SAC,"Water plumbing and drain laying services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995463,995463,,SAC,"Heating, ventilation and air conditioning (HVAC) equipment installation services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995466,995466,,SAC,"Lift and escalator installation services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995469,995469,,SAC,"Repair, alteration, maintenance of installations (electrical, plumbing, HVAC, lifts) (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+995473,995473,,SAC,"Painting services (works contract/construction, residual entry)",18,Notif 11/2017 S.No. 3(xii),11/2017-CT(Rate) as amended,2025-09-22,CONSTRUCTION_WORKS
+9965,9965,,SAC,"Goods transport services other than specified items (residual), incl. air cargo within India",18,Notif 11/2017 S.No. 9(vii),11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996791,996791,,SAC,"Goods transport agency (GTA) services (road, consignment note issued): 5% without ITC; a GTA opting (Annexure V) to pay tax itself may pay 5% without ITC or 18% with ITC",5,Notif 11/2017 S.No. 9(iii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+996791,996791,,SAC,"Goods transport agency (GTA) services (road, consignment note issued): 5% without ITC; a GTA opting (Annexure V) to pay tax itself may pay 5% without ITC or 18% with ITC",18,Notif 11/2017 S.No. 9(iii) (option: 18% with ITC),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+996512,996512,,SAC,Transport of goods by rail (other than containers by rail by non-Indian Railways operators); ITC on goods not to be utilised,5,Notif 11/2017 S.No. 9(i),11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996512,996512,,SAC,"Transport of goods in containers by rail by any person other than Indian Railways: 5% without ITC, or 18% with ITC",5,Notif 11/2017 S.No. 9(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+996512,996512,,SAC,"Transport of goods in containers by rail by any person other than Indian Railways: 5% without ITC, or 18% with ITC",18,Notif 11/2017 S.No. 9(iv) (option: 18% with ITC),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+996513,996513,,SAC,"Transport of natural gas, petroleum crude, petrol, HSD or ATF through pipeline: 5% without ITC, or 18% with ITC",5,Notif 11/2017 S.No. 9(v),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+996513,996513,,SAC,"Transport of natural gas, petroleum crude, petrol, HSD or ATF through pipeline: 5% without ITC, or 18% with ITC",18,Notif 11/2017 S.No. 9(v) (option: 18% with ITC),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+996521,996521,,SAC,Transport of goods in a vessel (inland/coastal); ITC on goods other than ships/vessels not taken,5,Notif 11/2017 S.No. 9(ii),11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996531,996531,,SAC,Air transport services of goods within India (residual goods transport entry),18,Notif 11/2017 S.No. 9(vii),11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+9965,9965,,SAC,Multimodal transportation of goods within India with no air leg: 5% with ITC restricted (ITC on input goods transport capped at 5%),5,Notif 11/2017 S.No. 9(vi)(a),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+9965,9965,,SAC,Multimodal transportation of goods within India where at least one mode is air,18,Notif 11/2017 S.No. 9(vi)(b),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+9966,9966,,SAC,"Renting of goods carriage with fuel included: 5% (ITC limited to same-line input services at 5%), or 18% with full ITC",5,Notif 11/2017 S.No. 10(ia),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+9966,9966,,SAC,"Renting of goods carriage with fuel included: 5% (ITC limited to same-line input services at 5%), or 18% with full ITC",18,Notif 11/2017 S.No. 10(ia) (option: 18% with ITC),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+9966,9966,,SAC,"Rental services of transport vehicles with operators, other than specified items (residual)",18,Notif 11/2017 S.No. 10(iii),11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+9967,9967,,SAC,"Supporting services in transport (excludes GTA, which falls under 9965)",18,Notif 11/2017 S.No. 11,11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996711,996711,,SAC,Container handling services,18,Notif 11/2017 S.No. 11,11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996712,996712,,SAC,Customs house agent services,18,Notif 11/2017 S.No. 11,11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996713,996713,,SAC,Clearing and forwarding services,18,Notif 11/2017 S.No. 11,11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996719,996719,,SAC,Other cargo and baggage handling services,18,Notif 11/2017 S.No. 11,11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996729,996729,,SAC,Other storage and warehousing services (non-agricultural produce),18,Notif 11/2017 S.No. 11,11/2017-CT(Rate) as amended,2025-09-22,FREIGHT
+996812,996812,,SAC,Courier services,18,Notif 11/2017 S.No. 12(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FREIGHT
+997331,997331,,SAC,Licensing services for the right to use computer software and databases (temporary or permanent transfer / permitting use of IP right),18,Notif 11/2017 S.No. 17(ii),11/2017-CT(Rate) as amended,2025-09-22,IT_SERVICES
+9981,9981,,SAC,Research and development services,18,Notif 11/2017 S.No. 19,11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+9982,9982,,SAC,Legal and accounting services,18,Notif 11/2017 S.No. 20,11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+998221,998221,,SAC,Financial auditing services,18,Notif 11/2017 S.No. 20,11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+998222,998222,,SAC,Accounting and bookkeeping services,18,Notif 11/2017 S.No. 20,11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+9983,9983,,SAC,"Other professional, technical and business services (other than print-media ad space and S.No. 38 renewable-energy EPC)",18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998311,998311,,SAC,Management consulting and management services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998312,998312,,SAC,Business consulting services including public relations services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998313,998313,,SAC,Information technology consulting and support services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,IT_SERVICES
+998314,998314,,SAC,Information technology design and development services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,IT_SERVICES
+998315,998315,,SAC,Hosting and information technology infrastructure provisioning services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,IT_SERVICES
+998316,998316,,SAC,Information technology infrastructure and network management services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,IT_SERVICES
+998319,998319,,SAC,Other information technology services n.e.c.,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,IT_SERVICES
+998331,998331,,SAC,Engineering advisory services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998332,998332,,SAC,Engineering services for building projects,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998333,998333,,SAC,Engineering services for industrial and manufacturing projects,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998339,998339,,SAC,Project management services for construction projects,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+998346,998346,,SAC,Technical testing and analysis services,18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998399,998399,,SAC,"Other professional, technical and business services n.e.c.",18,Notif 11/2017 S.No. 21(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,PROFESSIONAL_SERVICES
+9984,9984,,SAC,"Telecommunications, broadcasting and information supply services",18,Notif 11/2017 S.No. 22,11/2017-CT(Rate) as amended,2025-09-22,IT_SERVICES
+998414,998414,,SAC,"Private network services (leased lines, MPLS)",18,Notif 11/2017 S.No. 22,11/2017-CT(Rate) as amended,2025-09-22,IT_SERVICES
+998422,998422,,SAC,Internet access services in wired and wireless mode,18,Notif 11/2017 S.No. 22,11/2017-CT(Rate) as amended,2025-09-22,IT_SERVICES
+9985,9985,,SAC,Support services other than tour operator and e-commerce housekeeping services (residual),18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998513,998513,,SAC,Contract staffing services,18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998514,998514,,SAC,Temporary staffing services,18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998519,998519,,SAC,Other employment and labour supply services n.e.c. (manpower supply),18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998525,998525,,SAC,Guard services,18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998531,998531,,SAC,Disinfecting and exterminating services (pest control),18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998533,998533,,SAC,General cleaning services (housekeeping),18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+998540,998540,,SAC,Packaging services of goods for others,18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,PACKAGING
+998596,998596,,SAC,"Events, exhibitions, conventions and trade shows organisation and assistance",18,Notif 11/2017 S.No. 23(iii),11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+9986,9986,,SAC,"Support services to exploration, mining or drilling of petroleum crude or natural gas or both",18,Notif 11/2017 S.No. 24(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+9986,9986,,SAC,"Support services to mining, electricity, gas and water distribution (other than petroleum/natural gas E&P)",18,Notif 11/2017 S.No. 24(iii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+9987,9987,,SAC,"Maintenance, repair and installation (except construction) services (residual)",18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998713,998713,,SAC,Maintenance and repair of computers and peripheral equipment,18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,IT_SERVICES
+998714,998714,,SAC,Maintenance and repair of transport machinery and equipment (other than aircraft/ship MRO),18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998717,998717,,SAC,Maintenance and repair of commercial and industrial machinery,18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998718,998718,,SAC,Maintenance and repair of elevators and escalators,18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998719,998719,,SAC,Maintenance and repair of other machinery and equipment,18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998732,998732,,SAC,"Installation services of industrial, manufacturing and service industry machinery and equipment",18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998735,998735,,SAC,"Installation services of professional medical machinery and equipment, precision and optical instruments",18,Notif 11/2017 S.No. 25(ii),11/2017-CT(Rate) as amended,2025-09-22,MEDICAL_DEVICES
+9987,9987,,SAC,"Maintenance, repair or overhaul (MRO) services for aircraft, aircraft engines and components",5,Notif 11/2017 S.No. 25(ia),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+9987,9987,,SAC,"Maintenance, repair or overhaul services for ships and other vessels, their engines and parts",5,Notif 11/2017 S.No. 25(ib),11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+9988,9988,,SAC,"Job work services other than specified concessional items (e.g. engineering, metal, plastic, electrical goods job work)",18,Notif 11/2017 S.No. 26(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+9988,9988,,SAC,"Treatment or process on goods belonging to another person, other than printing and tailoring items",18,Notif 11/2017 S.No. 26(vii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+9988,9988,,SAC,"Job work for food (Ch 1-22), Ch 23 products (except pet food), pharma (Ch 30), hides/leather (Ch 41), printing of Ch 48/49 goods at 5%/nil, textiles (Ch 50-63), 5%-rate bricks, Ch 71 (non-diamond), handicrafts, umbrellas",5,Notif 11/2017 S.No. 26(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998821,998821,,SAC,Textile manufacturing services (job work on textiles of Ch 50-63),5,Notif 11/2017 S.No. 26(ii)(g),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998860,998860,,SAC,Basic metal manufacturing services (job work),18,Notif 11/2017 S.No. 26(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998873,998873,,SAC,"Other fabricated metal product manufacturing and metal treatment services (job work: machining, plating, heat treatment)",18,Notif 11/2017 S.No. 26(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998875,998875,,SAC,Electrical equipment manufacturing services (job work),18,Notif 11/2017 S.No. 26(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998876,998876,,SAC,General-purpose machinery manufacturing services n.e.c. (job work),18,Notif 11/2017 S.No. 26(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,INDUSTRIAL_SERVICES
+998881,998881,,SAC,"Motor vehicle and trailer manufacturing services (job work, incl. auto components)",18,Notif 11/2017 S.No. 26(iv),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,AUTO_PARTS
+9989,9989,,SAC,"Other manufacturing services; publishing, printing and reproduction services; material recovery services",18,Notif 11/2017 S.No. 27,11/2017-CT(Rate) as amended,2025-09-22,INDUSTRIAL_SERVICES
+998931,998931,,SAC,Iron and steel casting services,18,Notif 11/2017 S.No. 27,11/2017-CT(Rate) as amended,2025-09-22,CASTINGS
+998933,998933,,SAC,"Metal forging, pressing, stamping, roll forming and powder metallurgy services",18,Notif 11/2017 S.No. 27,11/2017-CT(Rate) as amended,2025-09-22,CASTINGS
+9992,9992,,SAC,"Education services (taxable, e.g. commercial training; exemptions under Notif 12/2017 apply separately)",18,Notif 11/2017 S.No. 30,11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+999293,999293,,SAC,Commercial training and coaching services,18,Notif 11/2017 S.No. 30,11/2017-CT(Rate) as amended,2025-09-22,PROFESSIONAL_SERVICES
+9994,9994,,SAC,"Sewage and waste collection, treatment and disposal and other environmental protection services (residual)",18,Notif 11/2017 S.No. 32(ii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+9994,9994,,SAC,Treatment of effluents by a Common Effluent Treatment Plant,5,Notif 11/2017 S.No. 32(i),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FACILITIES
+9994,9994,,SAC,Treatment or disposal of biomedical waste by a common bio-medical waste treatment facility to a clinical establishment,5,Notif 11/2017 S.No. 32(ia),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,MEDICAL_DEVICES
+999432,999432,,SAC,Hazardous waste treatment and disposal services,18,Notif 11/2017 S.No. 32(ii),11/2017-CT(Rate) as amended,2025-09-22,FACILITIES
+9997,9997,,SAC,"Other services: washing, cleaning and dyeing services and other miscellaneous services n.e.c.",18,Notif 11/2017 S.No. 35(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FACILITIES
+999713,999713,,SAC,"Other textile cleaning services (industrial laundry, uniform washing)",18,Notif 11/2017 S.No. 35(ii),11/2017-CT(Rate) as amended by 15/2025-CT(Rate),2025-09-22,FACILITIES

@@ -2,7 +2,7 @@
 
 import { Lock } from 'lucide-react';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, DataTable, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, ApiError } from '@/lib/pic/api';
 import { dateTime, inr, label, qty } from '@/lib/pic/format';
@@ -27,6 +27,7 @@ export type SourcingEvent = {
   published_at: string | null; close_at: string; closed_at: string | null; unsealed_at: string | null; baseline_price_minor: number | null;
   baseline_method: string | null; should_cost: ShouldCost | null; constraints: { max_suppliers?: number; max_share?: string; min_share?: string } | null;
   tco_params: Record<string, string | number> | null; savings_target_pct: string | null;
+  auction?: Record<string, unknown> | null; auction_ends_at?: string | null;
   lines: EventLine[]; criteria: Criterion[]; invitees: Invitee[]; bids: BidMeta[]; scenarios: ScenarioRaw[]; awardDecisions: AwardDecision[];
 };
 export type MatrixRow = { supplier: string; supplierId: string; round: number; bidId: string; priceMinor: number; tcoMinor: number;
@@ -297,8 +298,13 @@ export function ScoreDialog({ event, matrix, onClose }: { event: SourcingEvent; 
 export function RoundDialog({ event, onClose }: { event: SourcingEvent; onClose: () => void }) {
   const [closeAt, setCloseAt] = useState(() => toLocalInput(new Date(Date.now() + 3 * 864e5)));
   const [note, setNote] = useState('');
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
   const when = new Date(closeAt);
-  const future = !Number.isNaN(when.getTime()) && when.getTime() > Date.now();
+  const future = !Number.isNaN(when.getTime()) && when.getTime() > now;
   const go = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/rounds`, { close_at: when.toISOString(), note }),
     { success: `Round ${event.round + 1} opened – bids sealed again`, onSuccess: onClose });
   return (

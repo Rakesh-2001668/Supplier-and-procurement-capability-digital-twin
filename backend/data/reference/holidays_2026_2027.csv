@@ -1,0 +1,227 @@
+# Public holidays per Indian state (GST state code) for 2026 and 2027, from the official government lists.
+# state_code IN = Government of India (DoPT) compulsory holidays for Central Government offices in Delhi/New Delhi.
+# Sources (see source_ref per row): IN DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 (2026; Id-ul-Zuha moved by F.No.12/3/2023-JCA
+#   22-05-2026) and 16-07-2026 (2027); 33 Tamil Nadu G.O.(Ms.) No.708 Public (Misc.) 11-11-2025 (2026) and G.O.(Ms.) No.613
+#   06-10-2026 (2027), both under s.25 Negotiable Instruments Act 1881; 29 Karnataka 2026 from the RBI Holiday Matrix
+#   (Bengaluru RO, NI Act holidays; RBI omits Sunday holidays; the DPAR notification could not be reached); 27 Maharashtra GAD
+#   PHD-1125/C.R.199/Japuk(29) 05-12-2025; 36 Telangana G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (state portal calendar);
+#   24 Gujarat GAD GS/22/2025/JSR/2025/509/GH 27-11-2025 (+ Bakri Eid change 22-05-2026); 07 Delhi GNCTD F.53/812/GAD/CN/2025
+#   04-12-2025 (+ amendments 13-04-2026, 26-05-2026); 06 Haryana HRD No.28/67/2008-1HR-I 16-12-2025 Sch-III (+ 25-05-2026).
+# 2027 lists for 29, 27, 36, 24, 07 and 06 were not published as of 2026-10-28: they are NOT in this file (needs supply).
+# scope: PUBLIC (general / NI Act public holiday: loaded into plant factory calendars), BANKS_ONLY (annual closing of bank
+#   accounts), STATE_OFFICES_ONLY (Gujarat Part-I only days), LOCAL (Maharashtra municipal election day). Only PUBLIC rows
+#   are loaded into plant calendars. Two holidays on one date share a row (names joined with ' / ').
+# As of: 2026-10-28.
+state_code,state,year,date,name,scope,source_ref
+IN,Government of India (Delhi/New Delhi offices),2026,2026-01-26,Republic Day,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-03-04,Holi,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-03-21,Id-ul-Fitr,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-03-26,Ram Navami,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-03-31,Mahavir Jayanti,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-04-03,Good Friday,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-05-01,Budha Purnima,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-05-28,Id-ul-Zuha (Bakrid) (shifted from 27-05-2026),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I; date changed by DoPT O.M. F.No.12/3/2023-JCA 22-05-2026
+IN,Government of India (Delhi/New Delhi offices),2026,2026-06-26,Muharram,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-08-15,Independence Day,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-08-26,Milad-un-Nabi or Id-e-Milad (Birthday of Prophet Mohammad),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-09-04,Janmashtami (Vaishnava),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-10-02,Mahatma Gandhi's Birthday,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-10-20,Dussehra,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-11-08,Diwali (Deepavali),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-11-24,Guru Nanak's Birthday,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2026,2026-12-25,Christmas Day,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 03-07-2025 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-01-26,Republic Day,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-03-10,Id-ul-Fitr,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-03-23,Holi,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-03-26,Good Friday,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-04-15,Ram Navami,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-04-19,Mahavir Jayanti,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-05-17,Id-ul-Zuha (Bakrid),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-05-20,Budha Purnima,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-06-16,Muharram,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-08-15,Independence Day / Milad-un-Nabi or Id-e-Milad (Prophet Mohammad's Birthday),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-08-25,Janmashtami (Vaishnav),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-10-02,Mahatma Gandhi's Birthday,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-10-09,Dussehra (Vijaya Dashmi),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-10-29,Diwali (Deepavali),PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-11-14,Guru Nanak's Birthday,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+IN,Government of India (Delhi/New Delhi offices),2027,2027-12-25,Christmas Day,PUBLIC,DoPT O.M. F.No.12/2/2023-JCA 16-07-2026 Annex-I
+33,Tamil Nadu,2026,2026-01-01,New Year's Day,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-01-15,Pongal,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-01-16,Thiruvalluvar Day,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-01-17,Uzhavar Thirunal,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-01-26,Republic Day,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-02-01,Thai Poosam,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-03-19,Telugu New Year's Day,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-03-21,Ramzan (Idu'l Fitr),PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-03-31,Mahaveer Jayanthi,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-04-01,Annual closing of accounts (commercial & co-operative banks only),BANKS_ONLY,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-04-03,Good Friday,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-04-14,Tamil New Year's Day / Dr. B.R. Ambedkar's Birthday,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-04-23,General Elections to Tamil Nadu Legislative Assembly 2026 (poll day),PUBLIC,RBI Holiday Matrix Chennai RO 2026 (NI Act holiday); state G.O. not read
+33,Tamil Nadu,2026,2026-05-01,May Day,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-05-28,Bakrid (Idul Azha),PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-06-26,Muharram (Yaom-E-Shahadath),PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-08-15,Independence Day,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-08-26,Milad-un-Nabi (Prophet's Birthday),PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-09-04,Krishna Jayanthi,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-09-14,Vinayakar Chathurthi,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-10-02,Gandhi Jayanthi,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-10-19,Ayutha Pooja,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-10-20,Vijaya Dasami,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-11-08,Deepavali,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2026,2026-12-25,Christmas,PUBLIC,G.O.(Ms.) No.708 Public (Misc.) 11-11-2025; TN Gaz. Extra. No.721 11-11-2025
+33,Tamil Nadu,2027,2027-01-01,New Year's Day,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-01-15,Pongal,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-01-16,Thiruvalluvar Day,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-01-17,Uzhavar Thirunal,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-01-22,Thai Poosam,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-01-26,Republic Day,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-03-10,Ramzan (Idu'l Fitr),PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-03-26,Good Friday,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-04-01,Annual closing of accounts (commercial & co-operative banks only),BANKS_ONLY,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-04-07,Telugu New Year's Day,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-04-14,Tamil New Year's Day / Dr. B.R. Ambedkar's Birthday,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-04-19,Mahaveer Jayanthi,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-05-01,May Day,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-05-17,Bakrid (Idul Zuha),PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-06-15,Muharram (Yaom-E-Shahadath),PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-08-15,Independence Day / Milad-un-Nabi (Prophet's Birthday),PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-08-25,Krishna Jayanthi,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-09-04,Vinayakar Chathurthi,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-10-02,Gandhi Jayanthi,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-10-08,Ayutha Pooja,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-10-09,Vijaya Dasami,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-10-28,Deepavali,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+33,Tamil Nadu,2027,2027-12-25,Christmas,PUBLIC,G.O.(Ms.) No.613 Public (Misc.) 06-10-2026
+29,Karnataka,2026,2026-01-15,Uttarayana Punyakala / Makara Sankranti,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-01-26,Republic Day,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-03-19,Ugadi Festival,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-03-21,Ramzan-Id (Id-Ul-Fitr),PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-03-30,Mahavir Jayanti,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-04-01,To enable Banks to close their yearly accounts (banks only),BANKS_ONLY,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-04-03,Good Friday,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-04-14,Dr. Babasaheb Ambedkar Jayanti,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-04-20,Basava Jayanti / Akshaya Tritiya,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-05-01,May Day (Labour Day),PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-05-28,Bakri ID (Id-Uz-Zuha),PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-06-26,Muharram,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-08-15,Independence Day,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-08-26,Id-E-Milad (Milad-un-Nabi),PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-09-14,Varasiddhi Vinayaka Vrata (Ganesh Chaturthi),PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-10-02,Mahatma Gandhi Jayanti,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-10-10,Mahalaya Amavasye,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-10-20,Maha Navami / Ayudhapooja,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-10-21,Vijaya Dasami,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-10-26,Maharishi Valmiki's Birthday,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-11-10,Diwali (Bali Pratipada),PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-11-27,Kanakadasa Jayanthi,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+29,Karnataka,2026,2026-12-25,Christmas,PUBLIC,RBI Holiday Matrix Bengaluru RO 2026 (NI Act; weekday holidays only); DPAR notif. not reachable
+27,Maharashtra,2026,2026-01-15,Election to Municipal Corporations in Maharashtra (NI Act holiday; municipal corporation areas only),LOCAL,RBI Holiday Matrix Mumbai RO 2026 (separate election-day declaration; not in PHD-1125)
+27,Maharashtra,2026,2026-01-26,Republic Day,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-02-15,Mahashivratri,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-02-19,Chhatrapati Shivaji Maharaj Jayanti,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-03-03,Holi (Second Day),PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-03-19,Gudhi Padwa,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-03-21,Ramzan-Id (Id-Ul-Fitra) (Shawal-1),PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-03-26,Ram Navami,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-03-31,Mahavir Janmakalyanak,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-04-01,To enable Banks to close their yearly accounts (banks only),BANKS_ONLY,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-04-03,Good Friday,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-04-14,Dr. Babasaheb Ambedkar Jayanti,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-05-01,Maharashtra Din / Buddha Pournima,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-05-28,Bakri ID (Id-Uz-Zuha),PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-06-26,Moharum,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-08-15,Independence Day / Parsi New Year (Shahenshahi),PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-08-26,Id-E-Milad,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-09-14,Ganesh Chaturthi,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-10-02,Mahatma Gandhi Jayanti,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-10-20,Dasara,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-11-08,Diwali Amavasya (Laxmi Pujan),PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-11-10,Diwali (Bali Pratipada),PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-11-24,Guru Nanak Jayanti,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+27,Maharashtra,2026,2026-12-25,Christmas,PUBLIC,GAD Notif. No.PHD-1125/C.R.199/Japuk(29) 05-12-2025; Mah. Govt Gaz. Extra. Pt I-M No.184 08-12-2025
+36,Telangana,2026,2026-01-14,Bhogi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-01-15,Sankranti / Pongal,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-01-26,Republic Day,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-02-15,Mahashivarathri,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-03-03,Holi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-03-19,Ugadi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-03-21,Ramzan (Eid-ul-Fitr),PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-03-22,Following day of Ramzan (Eid-ul-Fitr),PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-03-27,Sri Rama Navami,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-04-03,Good Friday,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-04-05,Babu Jagjivan Ram's Birthday,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-04-14,Dr. B.R. Ambedkar's Birthday,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-05-27,Eidul Azha (Bakrid),PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-06-26,Moharram,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-08-10,Bonalu,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-08-15,Independence Day,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-08-26,Eid Milad-un-Nabi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-09-04,Sri Krishnashtami,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-09-14,Vinayaka Chavithi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-10-02,Mahatma Gandhi Jayanthi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-10-18,Saddula Bathukamma,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-10-20,Vijaya Dasami,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-10-21,Following day of Vijaya Dasami,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-11-08,Deepavali,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-11-24,Karthika Pournami / Guru Nanak Jayanthi,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-12-25,Christmas,PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+36,Telangana,2026,2026-12-26,Boxing Day (following day of Christmas),PUBLIC,G.O.Rt.No.1715 GA(Spl.E) 06-12-2025 (Annex-I general holidays; list per telangana.gov.in Calendar-2026)
+24,Gujarat,2026,2026-01-14,Makar Sankranti,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-01-26,Republic Day,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-03-04,Holi 2nd Day - Dhuleti,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-03-19,Chetichand (state govt offices only; not in NI Act bank list),STATE_OFFICES_ONLY,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I
+24,Gujarat,2026,2026-03-21,Ramjan-Eid (Eid-Ul-Fitra),PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-03-26,Shree Ram Navmi,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-03-31,Mahavir Janma Kalyanak,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-04-01,Annual closing of accounts (banks / Pay & Accounts / Treasury offices only),BANKS_ONLY,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-III Note 2
+24,Gujarat,2026,2026-04-03,Good Friday,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-04-14,Dr. Baba Saheb Ambedkar's Birthday,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-05-28,Eid-Ul-Adha (Bakri-Eid) (shifted from 27-05-2026),PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III; date changed by GAD Notfn same no. 22-05-2026
+24,Gujarat,2026,2026-06-26,Muharram (Ashoora) (state govt offices only; not in NI Act bank list),STATE_OFFICES_ONLY,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I
+24,Gujarat,2026,2026-08-15,Independence Day / Parsi New Year Day - Pateti (Pateti: govt offices list only),PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-08-26,Eid-e-Meeladunnabi (Prophet Mohammad's Birthday) (state govt offices only; not in NI Act bank list),STATE_OFFICES_ONLY,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I
+24,Gujarat,2026,2026-08-28,Raksha Bandhan,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-09-04,Janmashtami (Shravan Vad-8),PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-09-15,Samvatsari (Chaturthi Paksha),PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-10-02,Mahatma Gandhi's Birthday,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-10-20,Dussehra (Vijaya Dashmi),PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-10-31,Sardar Vallabhbhai Patel's Birthday,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-11-10,Vikram Samvant New Year Day,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+24,Gujarat,2026,2026-11-11,Bhai Bij (state govt offices only; not in NI Act bank list),STATE_OFFICES_ONLY,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I
+24,Gujarat,2026,2026-11-24,Guru Nanak's Birthday (state govt offices only; not in NI Act bank list),STATE_OFFICES_ONLY,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I
+24,Gujarat,2026,2026-12-25,Christmas,PUBLIC,Gujarat GAD Notfn No.GS/22/2025/JSR/2025/509/GH 27-11-2025 Part-I & Part-III
+07,Delhi,2026,2026-01-26,Republic Day,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-03-04,Holi,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-03-21,Id-ul-Fitr,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-03-31,Mahavir Jayanti,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-04-01,Annual closing of bank accounts (banks),BANKS_ONLY,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-04-03,Good Friday,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-04-14,Birth anniversary of Dr. B. R. Ambedkar,PUBLIC,GNCTD GAD Notif. F.53/841/GAD/CN/2026/2278-2321 13-04-2026 (NI Act s.25)
+07,Delhi,2026,2026-05-01,Buddha Purnima,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-05-28,Id-ul-Zuha (Bakrid) (shifted from 27-05-2026),PUBLIC,GNCTD GAD Notif. F.53/849/GAD/CN/2026/3219-3262 26-05-2026 (NI Act s.25) modifying F.53/812 04-12-2025
+07,Delhi,2026,2026-06-26,Muharram,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-08-15,Independence Day,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-08-26,Milad-un-Nabi or Id-e-Milad (Birthday of Prophet Mohammad),PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-10-02,Mahatma Gandhi's Birthday,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-10-20,Dussehra,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-11-08,Diwali (Deepavali),PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-11-24,Guru Nanak's Birthday,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+07,Delhi,2026,2026-12-25,Christmas Day,PUBLIC,GNCTD GAD Notif. F.53/812/GAD/CN/2025/4503-4539 04-12-2025 (NI Act s.25); Delhi Gaz. Extra. Pt IV No.378
+06,Haryana,2026,2026-01-26,Republic Day,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-03-04,Holi,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-03-21,Id-ul-Fitr,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-04-01,Annual closing of bank accounts,BANKS_ONLY,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-04-14,Dr. B.R. Ambedkar Jayanti,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-05-01,Buddha Purnima,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-05-28,Id-ul-Zuha (Bakrid) (shifted from 27-05-2026),PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 25-05-2026 (NI Act s.25) modifying notif. 16-12-2025
+06,Haryana,2026,2026-06-17,Maharana Pratap Jayanti,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-08-15,Independence Day,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-09-04,Janmashtami,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-10-02,Mahatma Gandhi Jayanti,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-10-20,Dussehra,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-10-26,Maharishi Valmiki Jayanti,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-11-09,Vishvakarma Day,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-11-24,Guru Nanak Dev Jayanti,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)
+06,Haryana,2026,2026-12-25,Christmas Day,PUBLIC,Haryana HRD Notif. No.28/67/2008-1HR-I 16-12-2025 Sch-III (NI Act s.25)

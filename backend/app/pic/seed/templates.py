@@ -58,7 +58,9 @@ TEMPLATES = {
         "controls": ["Carrier compliance (insurance, permits)", "Detention / demurrage rules"],
         "kpis": ["Cost per tonne-km", "On-time pickup / delivery", "Audit recoveries"],
         "demoCase": "Lane CHE→PNQ 32 ft MXL, rate 54/km + fuel index, POD-based confirmation",
-        "ruleOverrides": {"FREIGHT-AUDIT": {"rateTolerancePct": "0", "fuelIndex": "DIESEL_IN", "accessorialsNeedPod": True}},
+        # Carrier compliance: a carrier is qualified for LOGISTICS only with valid goods-in-transit insurance and a national permit.
+        "ruleOverrides": {"FREIGHT-AUDIT": {"rateTolerancePct": "0", "fuelIndex": "DIESEL_IN", "accessorialsNeedPod": True},
+                          "SUPPLIER-QUAL": {"mandatoryCertificates": {"LOGISTICS": ["GIT_INSURANCE", "NATIONAL_PERMIT"]}}},
     },
     "HEALTHCARE": {
         "name": "Healthcare & Life Sciences",
@@ -84,7 +86,8 @@ TEMPLATES = {
         "controls": ["Guided-buying policy", "P-card limits", "Budget"],
         "kpis": ["Catalogue adoption %", "PR cycle time", "Maverick %"],
         "demoCase": "Laptop catalogue order via punch-out, 78,500, single approval",
-        "ruleOverrides": {"PURCHASE-TYPE-MATRIX": {"EXPENSE": {"gr": False, "ir": True, "ses": False, "receiptlessBelowMinor": 1 * L}}},
+        # Desktop receipt (gr) above the threshold, receipt-less (2-way) below it: "2-way under threshold, 3-way above".
+        "ruleOverrides": {"PURCHASE-TYPE-MATRIX": {"EXPENSE": {"gr": True, "ir": True, "ses": False, "receiptlessBelowMinor": 1 * L}}},
     },
 }
 

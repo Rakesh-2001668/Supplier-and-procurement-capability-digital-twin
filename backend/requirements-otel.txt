@@ -1,0 +1,5 @@
+# Optional: OpenTelemetry trace export (PIC_OTEL_ENABLED=true; configure OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME).
+# Installed into the image with `docker build --build-arg WITH_OTEL=true`.
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0

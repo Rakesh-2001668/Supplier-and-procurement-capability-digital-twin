@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, ApiError } from '@/lib/pic/api';
 import { inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
@@ -65,6 +65,11 @@ export default function NewSourcingEvent() {
   const [criteria, setCriteria] = useState<CriterionRow[]>(DEFAULT_CRITERIA);
   const [invitees, setInvitees] = useState<Record<string, { selected: boolean; waiver: string }>>({});
   const [closeAt, setCloseAt] = useState(() => toLocalInput(new Date(Date.now() + 7 * 864e5)));
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
   const [baselineMethod, setBaselineMethod] = useState('LAST_PRICE');
   const [baselinePrice, setBaselinePrice] = useState('');
   const [useShouldCost, setUseShouldCost] = useState(false);
@@ -99,7 +104,7 @@ export default function NewSourcingEvent() {
   chosen.forEach((s) => {
     if (s.categories?.[category] === 'CONDITIONAL' && !invitees[s.code]?.waiver.trim()) problems.push(`${s.code} is Conditional – a waiver reason is required.`);
   });
-  if (Number.isNaN(closeDate.getTime()) || closeDate.getTime() <= Date.now()) problems.push('Close date-time must be in the future.');
+  if (Number.isNaN(closeDate.getTime()) || closeDate.getTime() <= now) problems.push('Close date-time must be in the future.');
   if (baselinePrice && !(Number(baselinePrice) > 0)) problems.push('Baseline price must be a positive amount.');
   if (useShouldCost) SHOULD_COST_FIELDS.filter((f) => f.required).forEach((f) => {
     if (!(num(shouldCost[f.key] ?? '') >= 0)) problems.push(`Should-cost: ${f.label} is required.`);
@@ -171,7 +176,7 @@ export default function NewSourcingEvent() {
               <datalist id="src-categories">{categoryOptions.map((c) => <option key={c} value={c} />)}</datalist>
             </>
           )}</Field>
-          <Field label="Close date-time" hint="Bids stay sealed until this moment.">{(id) => <Input id={id} type="datetime-local" value={closeAt} onChange={(e) => setCloseAt(e.target.value)} required />}</Field>
+          <Field label="Close date-time" hint={type === 'REVERSE_AUCTION' ? 'The live auction ends at this moment; late bids extend it (soft close). One line per auction.' : 'Bids stay sealed until this moment.'}>{(id) => <Input id={id} type="datetime-local" value={closeAt} onChange={(e) => setCloseAt(e.target.value)} required />}</Field>
           <Field label="Savings target (%)" hint="Optional">{(id) => <Input id={id} type="number" min="0" step="0.1" value={savingsTarget} onChange={(e) => setSavingsTarget(e.target.value)} />}</Field>
         </div>
       </Card>

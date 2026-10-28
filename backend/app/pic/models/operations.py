@@ -197,3 +197,14 @@ class MfaFactor(TenantScoped, Base):
     secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_used_step: Mapped[Optional[int]] = mapped_column(BigInteger)  # replay protection
+
+
+# ---------------------------------------------------------------- dataset packs (seed/datasets)
+class DatasetLoad(TenantScoped, Base):
+    """One row per dataset pack applied to a tenant: makes every pack idempotent and records what it created."""
+    __tablename__ = "dataset_load"
+    __table_args__ = (UniqueConstraint("tenant_id", "key"),)
+    key: Mapped[str] = mapped_column(String(60), nullable=False)
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    loaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    summary: Mapped[dict] = mapped_column(JSONB, default=dict)

@@ -1,12 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { FormEvent, Suspense, useState } from 'react';
 import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { inr, label, qty as fmtQty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { AccountAssignment, NEEDS_ACCOUNT, PolicyProblem, PURCHASE_TYPES, Reference, Requisition, SubmitPanel, useReference } from '../_components';
+import { PunchOut } from './punchout';
 
 type ContractHit = { channel: 'CONTRACT'; contract: string; line: number; description: string; unitPriceMinor: number | null; score: number };
 type CatalogueHit = { channel: 'CATALOGUE'; id: string; supplierPartNo: string | null; description: string; unitPriceMinor: number; uom: string; score: number };
@@ -38,7 +40,13 @@ let seq = 0;
 const newKey = () => `l${++seq}`;
 const minorToRupees = (m: number | null | undefined) => (m == null ? '' : String(m / 100));
 
-export default function NewRequisition() {
+export default function NewRequisitionPage() {
+  // useSearchParams (punch-out return) needs a Suspense boundary for prerendering.
+  return <Suspense fallback={<Loading />}><NewRequisition /></Suspense>;
+}
+
+function NewRequisition() {
+  const params = useSearchParams();
   const ref = useReference();
   const materialsMaster = useApi<{ items: MaterialRow[] }>('/materials?limit=200');
   const [plant, setPlant] = useState('');
@@ -162,6 +170,9 @@ export default function NewRequisition() {
           <Field label="Purpose text">{(id) => <Input id={id} value={purposeText} onChange={(e) => setPurposeText(e.target.value)} />}</Field>
         </div>
       </Card>
+
+      <PunchOut plant={effectivePlant} purposeCode={purposeCode.trim()} purposeText={purposeText.trim()} draftLines={lines.length}
+        cookie={params.get('punchout')} error={params.get('punchoutError')} onConverted={(r) => setCreated(r)} />
 
       <GuidedSearch plant={effectivePlant} reference={reference}
         onMaterial={(n, source) => addMaterial(n, source)} onCatalogue={addCatalogue}

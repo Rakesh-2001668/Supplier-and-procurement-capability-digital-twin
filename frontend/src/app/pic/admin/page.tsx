@@ -6,6 +6,8 @@ import { api, ApiError } from '@/lib/pic/api';
 import { date, dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { useSessionUser } from '../invoices/_components';
+import { ConnectorsTab } from './_connectors';
+import { SimulationTab } from './_simulation';
 
 // ---------------------------------------------------------------- types
 type Rule = { id: string; key: string; version: string; company_code: string | null; plant: string | null; category: string | null;
@@ -411,6 +413,7 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
   const { data, isLoading, error } = useApi<AppUserRow[]>(isAdmin ? '/admin/users' : null);
   const [editing, setEditing] = useState<AppUserRow | null>(null);
   const [toggling, setToggling] = useState<AppUserRow | null>(null);
+  const [resetting, setResetting] = useState<AppUserRow | null>(null);
   if (!isAdmin) return <Card title="Users & roles (ADM-04)"><p className="text-sm text-slate-600">User and role administration needs the tenant administrator role.</p></Card>;
   return (
     <Card title="Users & roles (ADM-04)">
@@ -427,6 +430,7 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
           { key: 'actions', header: '', render: (u) => (
             <div className="flex justify-end gap-2">
               {!u.supplierUser && <Button variant="ghost" onClick={() => setEditing(u)}>Roles</Button>}
+              {u.mfaEnrolled && <Button variant="ghost" onClick={() => setResetting(u)}>Reset MFA</Button>}
               <Button variant={u.active ? 'danger' : 'secondary'} onClick={() => setToggling(u)}>{u.active ? 'Deactivate' : 'Activate'}</Button>
             </div>
           ) },
@@ -434,6 +438,7 @@ function UsersTab({ isAdmin }: { isAdmin: boolean }) {
       )}
       {editing && <RolesDialog user={editing} onClose={() => setEditing(null)} />}
       {toggling && <ActiveDialog user={toggling} onClose={() => setToggling(null)} />}
+      {resetting && <ResetMfaDialog user={resetting} onClose={() => setResetting(null)} />}
     </Card>
   );
 }
@@ -494,6 +499,27 @@ function ActiveDialog({ user, onClose }: { user: AppUserRow; onClose: () => void
   );
 }
 
+function ResetMfaDialog({ user, onClose }: { user: AppUserRow; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const cmd = useCommand(() => api.post(`/admin/users/${user.id}/mfa/reset`, { reason: reason.trim() }), {
+    success: `${user.email}: authenticator removed`, onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`Reset authenticator · ${user.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-700">Removes the user&apos;s authenticator app, for example after a lost or replaced phone. If MFA is mandatory for
+          their role they are asked to enrol a new one at their next sign-in. Confirm the user&apos;s identity first; you cannot reset your own.</p>
+        <Field label="Reason (required)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Lost phone, identity checked, ticket IT-4411" />}</Field>
+        <ProblemBox error={cmd.error} />
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="danger" disabled={reason.trim().length < 3} busy={cmd.isPending} onClick={() => cmd.mutate()}>Reset authenticator</Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 // ---------------------------------------------------------------- industry templates
 type IndustryTemplate = { code: string; name: string; purchaseTypes: string[]; demandSources: string[]; eventTemplates: string[]; contractTemplates: string[];
   receipt: string; match: string; controls: string[]; kpis: string[]; demoCase: string; ruleOverrides: string[]; applied: boolean };
@@ -546,9 +572,11 @@ export default function Admin() {
       <Tabs tabs={[
         { id: 'org', label: 'Organisation (ADM-01)', content: <OrganisationTab isAdmin={isAdmin} /> },
         { id: 'rules', label: 'Rules & thresholds', content: <RulesTab /> },
+        { id: 'simulate', label: 'Approval simulation (ADM-03)', content: <SimulationTab /> },
         { id: 'users', label: 'Users & roles (ADM-04)', content: <UsersTab isAdmin={isAdmin} /> },
         { id: 'sod', label: 'Roles & SoD', content: <SodTab /> },
         { id: 'integration', label: 'Integration monitor', content: <IntegrationTab /> },
+        { id: 'connectors', label: 'ERP connectors & imports', content: <ConnectorsTab /> },
         { id: 'audit', label: 'Audit explorer', content: <AuditTab /> },
         { id: 'ops', label: 'Operations', content: <OpsTab /> },
         { id: 'templates', label: 'Industry templates', content: <TemplatesTab /> },

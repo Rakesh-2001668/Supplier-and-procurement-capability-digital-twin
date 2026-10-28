@@ -1,0 +1,23 @@
+# Forecast holdout (D9): the last 6 months of ERP consumption actuals per material and plant (ERP stock feed loaded
+# by the signature case) with the ERP plan for the same month. The evaluator re-runs forecasting.generate at each holdout month
+# (clock pinned, actuals from that month on hidden by the service's own cut-off) and scores horizons 1-3 with MAPE.
+# Exported by python -m app.pic.tools.ai_eval --build-sets on 2026-10-28.
+material,plant,period,actual_qty,erp_plan_qty
+DC-330,P100,2026-09,87120,85813
+DC-330,P100,2026-10,87120,88862
+DC-330,P100,2026-11,85360,85360
+DC-330,P100,2026-12,81840,81840
+DC-330,P100,2027-01,88880,88880
+DC-330,P100,2027-02,91520,91520
+DC-331,P100,2026-09,20790,20478
+DC-331,P100,2026-10,20790,21205
+DC-331,P100,2026-11,20370,24851
+DC-331,P100,2026-12,19530,23826
+DC-331,P100,2027-01,21210,25876
+DC-331,P100,2027-02,21840,26644
+FK-M8-50,P100,2026-09,43560,42906
+FK-M8-50,P100,2026-10,43560,44431
+FK-M8-50,P100,2026-11,42680,43960
+FK-M8-50,P100,2026-12,40920,42147
+FK-M8-50,P100,2027-01,44440,45773
+FK-M8-50,P100,2027-02,45760,47132

@@ -7,6 +7,9 @@ import { Button, DataTable, Dialog, Facts, Input, StatusChip, Textarea } from '@
 import { api, readSessionUser } from '@/lib/pic/api';
 import { date, inr, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import { emptyEway, EwayFields, ewayPayload, ewayProblem } from '../../receiving/_components';
+import { ScheduleConfirmDialog, ScheduleTab, TransmissionsTab } from './_ops';
+import { RetentionTab } from './_retention';
 
 type PoLine = { id: string; line_no: number; description: string; qty: string; uom: string; unit_price_minor: number; net_minor: number;
   need_date: string; price_source: string; purchase_type: string; shipped_qty: string; received_qty: string; accepted_qty: string;
@@ -15,15 +18,17 @@ type Po = {
   id: string; number: string; status: string; version: number; row_version?: number; supplier: { code: string; name: string }; total_minor: number;
   payment_terms: string; incoterms: string | null; tolerance: { over_pct?: string; under_pct?: string; price_pct?: string };
   purpose_code: string; plant: string; released_by: string | null; erp_doc_no: string | null; rule_set_version: string;
-  lineageChain: string[]; lines: PoLine[];
+  retention_pct?: string | null; lineageChain: string[]; lines: PoLine[];
   validation: { riskScore: number | null; touchless: boolean | null; factors: { code: string; points: number; evidence: string }[]; reasons: string[] };
 };
 
 export default function PurchaseOrderPage() {
   const { ref } = useParams<{ ref: string }>();
   const { data: po, isLoading, error } = useApi<Po>(`/purchase-orders/${ref}`);
-  const supplier = readSessionUser()?.roles.includes('SUPPLIER_USER');
-  const [dialog, setDialog] = useState<'change' | 'asn' | null>(null);
+  const roles = readSessionUser()?.roles ?? [];
+  const supplier = roles.includes('SUPPLIER_USER');
+  const buyer = roles.includes('BUYER');
+  const [dialog, setDialog] = useState<'change' | 'asn' | 'confirm' | null>(null);
   const confirm = useCommand(() => api.post(`/purchase-orders/${ref}/confirmations`, { status: 'CONFIRMED' }), { success: 'Order confirmed' });
   const services = po?.lines.every((l) => l.ses_required);
 
@@ -36,6 +41,7 @@ export default function PurchaseOrderPage() {
         actions={po && (
           <>
             {supplier && po.status === 'TRANSMITTED' && <Button variant="primary" busy={confirm.isPending} onClick={() => confirm.mutate()}>Confirm order</Button>}
+            {supplier && po.status === 'TRANSMITTED' && <Button onClick={() => setDialog('confirm')}>Confirm with dates</Button>}
             {supplier && ['CONFIRMED', 'PARTIALLY_RECEIVED'].includes(po.status) && !services && <Button variant="primary" onClick={() => setDialog('asn')}>Send ASN</Button>}
             {!supplier && ['RELEASED', 'TRANSMITTED', 'CONFIRMED'].includes(po.status) && <Button onClick={() => setDialog('change')}>Change order</Button>}
           </>
@@ -46,6 +52,7 @@ export default function PurchaseOrderPage() {
               ['Net value', inr(po.total_minor)], ['Payment terms', po.payment_terms], ['Incoterms', po.incoterms ?? '–'],
               ['Tolerance', `+${po.tolerance.over_pct ?? 0}% / −${po.tolerance.under_pct ?? 0}%`], ['Purpose', po.purpose_code], ['Plant', po.plant],
               ['Released by', po.released_by ?? '–'], ['ERP document', po.erp_doc_no ?? 'not posted yet'],
+              ['Retention', Number(po.retention_pct ?? 0) > 0 ? `${Number(po.retention_pct)}% withheld per invoice` : 'none'],
             ]} />
             <div className="rounded-lg bg-slate-50 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI validation (explainable)</p>
@@ -61,6 +68,12 @@ export default function PurchaseOrderPage() {
             </div>
           </div>
         )}
+        extraTabs={po ? [
+          { id: 'schedule', label: 'Schedule', content: <ScheduleTab po={po} canEdit={buyer} /> },
+          { id: 'transmissions', label: 'Transmissions', content: <TransmissionsTab po={po} canResend={buyer} /> },
+          ...(Number(po.retention_pct ?? 0) > 0 && !supplier ? [{ id: 'retention', label: 'Retention',
+            content: <RetentionTab poNumber={po.number} canRelease={roles.includes('AP_CLERK') || roles.includes('FINANCE_CONTROLLER')} /> }] : []),
+        ] : []}
         lines={po && (
           <DataTable<PoLine> rows={po.lines} columns={[
             { key: 'line_no', header: 'Line' },
@@ -78,6 +91,7 @@ export default function PurchaseOrderPage() {
       />
       {po && dialog === 'change' && <ChangeOrderDialog po={po} onClose={() => setDialog(null)} />}
       {po && dialog === 'asn' && <AsnDialog po={po} onClose={() => setDialog(null)} />}
+      {po && dialog === 'confirm' && <ScheduleConfirmDialog po={po} onClose={() => setDialog(null)} />}
     </>
   );
 }
@@ -113,10 +127,10 @@ function AsnDialog({ po, onClose }: { po: Po; onClose: () => void }) {
   const [shipQty, setShipQty] = useState(String(open));
   const [batch, setBatch] = useState('');
   const [expected, setExpected] = useState(today);
-  const [eway, setEway] = useState('');
+  const [eway, setEway] = useState(emptyEway);
   const [coc, setCoc] = useState('');
   const send = useCommand(() => api.post('/asns', {
-    po: po.number, ship_date: today, expected_date: expected, eway_bill_no: eway || undefined, documents: coc ? [coc] : [],
+    po: po.number, ship_date: today, expected_date: expected, ...ewayPayload(eway), documents: coc ? [coc] : [],
     lines: [{ line: line.line_no, qty: shipQty, batches: batch ? [{ batch, qty: shipQty }] : [] }],
   }), { success: 'ASN sent', onSuccess: onClose });
   return (
@@ -125,12 +139,12 @@ function AsnDialog({ po, onClose }: { po: Po; onClose: () => void }) {
         <label className="flex flex-col gap-1 text-xs font-medium">Quantity (open {open})<Input value={shipQty} onChange={(e) => setShipQty(e.target.value)} /></label>
         <label className="flex flex-col gap-1 text-xs font-medium">Batch<Input value={batch} onChange={(e) => setBatch(e.target.value)} /></label>
         <label className="flex flex-col gap-1 text-xs font-medium">Expected arrival<Input type="date" value={expected} onChange={(e) => setExpected(e.target.value)} /></label>
-        <label className="flex flex-col gap-1 text-xs font-medium">E-way bill no.<Input value={eway} onChange={(e) => setEway(e.target.value)} /></label>
         <label className="flex flex-col gap-1 text-xs font-medium md:col-span-2">Certificate of conformity reference<Input value={coc} onChange={(e) => setCoc(e.target.value)} /></label>
       </div>
+      <div className="mt-3"><EwayFields value={eway} onChange={setEway} /></div>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" busy={send.isPending} onClick={() => send.mutate()}>Send ASN</Button>
+        <Button variant="primary" disabled={!!ewayProblem(eway)} busy={send.isPending} onClick={() => send.mutate()}>Send ASN</Button>
       </div>
     </Dialog>
   );

@@ -1,20 +1,25 @@
 """F4 Contract lifecycle: author → execute → consume → renew (M07)."""
 import hashlib
+import hmac
 import json
+import os
 import uuid
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.pic.db import current_tenant
+from app.pic.db import current_tenant, system_tx, tenant_tx
 from app.pic.models import (
-    Clause, Contract, ContractLine, Material, Obligation, PoLine, PriceValidity, PurchaseOrder, QuotaArrangement, QuotaLine,
-    Signature, SourcingEvent, Supplier, Task,
+    AppUser, Clause, Contract, ContractLine, Material, Obligation, PoLine, PriceValidity, PurchaseOrder, QuotaArrangement, QuotaLine,
+    Signature, SourcingEvent, Supplier, Task, Tenant,
 )
 from app.pic.platform import agents, audit, clock, outbox, rules, workflow
+from app.pic.platform.auth import Principal, scopes_for
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, fmt_inr, line_amount
@@ -33,6 +38,8 @@ SM = StateMachine("CONTRACT", {
     ("ACTIVE", "terminate"): "TERMINATED",
     ("EXPIRING", "terminate"): "TERMINATED",
     ("EXPIRING", "renew"): "RENEWED",
+    # An approved EXTENSION amendment (renewal of the same contract) brings an expiring contract back to active.
+    ("EXPIRING", "extend"): "ACTIVE",
 })
 
 
@@ -95,7 +102,9 @@ def create_draft(session: Session, *, type: str, title: str, supplier_id: uuid.U
 def _from_award(session: Session, event) -> None:
     data = event.payload
     sourcing_event = session.get(SourcingEvent, event.object_id)
-    material = session.get(Material, uuid.UUID(data["materialId"]))
+    # a free-text requisition line has no material: the award becomes a value contract (no index, no material)
+    material = session.get(Material, uuid.UUID(data["materialId"])) if data.get("materialId") else None
+    description = material.description if material else (data.get("description") or sourcing_event.number)
     contract_rule = rules.resolve(session, "CLM-PLAYBOOK")
     defaults = contract_rule.body["awardDefaults"]
     start = clock.today().replace(day=1) + timedelta(days=32)
@@ -104,12 +113,12 @@ def _from_award(session: Session, event) -> None:
     for allocation in data["allocations"]:
         supplier = session.get(Supplier, uuid.UUID(allocation["supplierId"]))
         contract = create_draft(
-            session, type="SCHEDULING_AGREEMENT", title=f"{material.description} – {supplier.legal_name}",
+            session, type="SCHEDULING_AGREEMENT" if material else "VALUE_CONTRACT", title=f"{description} – {supplier.legal_name}",
             supplier_id=supplier.id, company_code="1000", valid_from=valid_from, valid_to=valid_to,
             payment_terms=supplier.payment_terms, incoterms=supplier.incoterms,
-            lines=[{"material_id": material.id, "description": material.description, "plant": data["plant"], "uom": data["uom"],
+            lines=[{"material_id": material.id if material else None, "description": description, "plant": data["plant"], "uom": data["uom"],
                     "target_qty": allocation["annualQty"], "unit_price_minor": allocation["priceMinor"]}],
-            owner_id=uuid.UUID(data["ownerId"]), tolerances=defaults["tolerances"], index_ref=defaults["index"],
+            owner_id=uuid.UUID(data["ownerId"]), tolerances=defaults["tolerances"], index_ref=defaults["index"] if material else None,
             source_event_id=sourcing_event.id, trigger=f"award {sourcing_event.number}",
         )
         link(session, "SOURCING_EVENT", sourcing_event.id, sourcing_event.number, "CONTRACT", contract.id, contract.number, "awarded_to")
@@ -191,7 +200,7 @@ def _document_hash(session: Session, contract: Contract) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
-def sign(session: Session, contract: Contract, party: str, signer_name: str) -> dict:
+def sign(session: Session, contract: Contract, party: str, signer_name: str, envelope_ref: Optional[str] = None) -> dict:
     p = principal(session)
     party = party.upper()
     if contract.status != "OUT_FOR_SIGNATURE":
@@ -204,10 +213,11 @@ def sign(session: Session, contract: Contract, party: str, signer_name: str) -> 
         raise Problem(403, "FORBIDDEN", "Missing scope contract:sign")
     doc_hash = _document_hash(session, contract)
     session.add(Signature(tenant_id=contract.tenant_id, contract_id=contract.id, party=party, signer_name=signer_name,
-                          signer_user_id=p.user_id, signed_at=clock.now(), envelope_ref=f"ESIGN-{contract.number}-{party[:1]}",
+                          signer_user_id=p.user_id, signed_at=clock.now(), envelope_ref=(envelope_ref or f"ESIGN-{contract.number}-{party[:1]}")[:60],
                           document_hash=doc_hash, created_by=p.user_id))
     session.flush()
-    audit.record(session, "CONTRACT", contract.id, "SIGNED", object_ref=contract.number, after={"party": party, "hash": doc_hash})
+    audit.record(session, "CONTRACT", contract.id, "SIGNED", object_ref=contract.number,
+                 after={"party": party, "hash": doc_hash, "envelope": envelope_ref})
     parties = {s.party for s in session.execute(select(Signature).where(Signature.contract_id == contract.id)).scalars()}
     if parties >= {"BUYER", "SUPPLIER"}:
         workflow.step(session, _instance(session, contract), "F4-07", outcome="signed by buyer and supplier")
@@ -265,6 +275,8 @@ def _add_quota(session: Session, contract: Contract, line: ContractLine) -> None
 @outbox.consumer("purchase_order.released", "contract-consumption")
 def _consume(session: Session, event) -> None:
     po = session.get(PurchaseOrder, event.object_id)
+    if po.status == "CANCELLED":
+        return  # cancelled before the release event was relayed: nothing was consumed (order.cancel)
     rule = None
     for line in session.execute(select(PoLine).where(PoLine.po_id == po.id, PoLine.contract_line_id.is_not(None))).scalars():
         contract_line = session.get(ContractLine, line.contract_line_id)
@@ -314,8 +326,13 @@ def index_reset(session: Session, contract: Contract, index_value: Decimal, effe
     adjust_pct = Decimal(0) if abs(change_pct) <= band else (change_pct - band if change_pct > 0 else change_pct + band)
     results = []
     for line in _lines(session, contract):
-        original = session.execute(select(PriceValidity).where(PriceValidity.contract_line_id == line.id)
-                                   .order_by(PriceValidity.valid_from)).scalars().first()
+        # indexing applies to the latest negotiated price (initial, award or amendment), never compounds earlier resets
+        original = session.execute(select(PriceValidity).where(
+            PriceValidity.contract_line_id == line.id, PriceValidity.valid_from <= effective_from,
+            PriceValidity.reason.not_like("INDEX_RESET%")).order_by(PriceValidity.valid_from.desc(), PriceValidity.created_at.desc())).scalars().first()
+        if original is None:
+            original = session.execute(select(PriceValidity).where(PriceValidity.contract_line_id == line.id)
+                                       .order_by(PriceValidity.valid_from)).scalars().first()
         new_price = int((Decimal(original.unit_price_minor) * (1 + adjust_pct / 100)).quantize(Decimal("1"), ROUND_HALF_UP))
         session.add(PriceValidity(tenant_id=contract.tenant_id, contract_line_id=line.id, valid_from=effective_from,
                                   valid_to=contract.valid_to, unit_price_minor=new_price, index_value=D(index_value),
@@ -353,16 +370,33 @@ def _renewal_due(session: Session, timer) -> None:
 
 @workflow.on_task("CONTRACT_RENEWAL")
 def _renewal_decided(session: Session, task: Task, outcome: str) -> None:
+    from app.pic.services import amendments
+
+    contract = session.get(Contract, task.object_id)
+    draft = amendments.renewal_draft(session, contract, task) if outcome == "APPROVED" and contract is not None else None
     audit.record(session, "CONTRACT", task.object_id, "RENEWAL_DECISION", object_ref=task.object_ref, reason=task.comment,
-                 after={"outcome": outcome})
+                 after={"outcome": outcome, "extensionDraft": draft.number if draft else None,
+                        "next": "extension amendment ready for approval" if draft else "contract proceeds to expiry"})
+    instance = _instance(session, contract) if contract is not None else None
+    if instance is not None and instance.status == "RUNNING":
+        workflow.step(session, instance, "F4-09", outcome=(f"renewal approved: extension {draft.number} drafted to "
+                                                          f"{draft.changes['validTo']}") if draft else
+                      f"renewal {outcome.lower()}: expires on {contract.valid_to.isoformat()}")
+        workflow.wait(session, instance, "F4-09", outcome="tracking consumption & obligations")
 
 
 @workflow.on_timer("CONTRACT_EXPIRY")
 def _expired(session: Session, timer) -> None:
+    from app.pic.services import amendments
+
     contract = session.get(Contract, timer.object_id)
     if contract and contract.status in ("ACTIVE", "EXPIRING"):
         SM.apply(session, contract, "expire")
-        workflow.end(session, _instance(session, contract), "F4-10", outcome="expired")
+        amendments.close_pending(session, contract, f"contract expired on {contract.valid_to.isoformat()}")
+        instance = _instance(session, contract)
+        if instance is not None and instance.status == "RUNNING":
+            workflow.step(session, instance, "F4-09", outcome="consumption tracking ended at expiry")
+            workflow.end(session, instance, "F4-10", outcome=f"expired on {contract.valid_to.isoformat()}")
 
 
 # ---------------------------------------------------------------- CLM-04 obligation tracker and CLM-03 renewals calendar
@@ -407,3 +441,191 @@ def templates(session: Session) -> dict:
     playbook = rules.resolve(session, "CLM-PLAYBOOK")
     return {"ruleSet": playbook.ref, "types": sorted(playbook.body["templates"]),
             "templates": playbook.body["templates"], "obligations": playbook.body["obligations"], "fallbacks": playbook.body["fallbacks"]}
+
+
+# ---------------------------------------------------------------- F4-07 e-signature provider adapter
+ESIGN_PROVIDERS = ("DOCUSIGN", "ADOBE_SIGN", "LEEGALITY", "EMUDHRA")
+ESIGN_SIGNATURE_HEADER = "X-Esign-Signature"
+ESIGN_ENV = ("PIC_ESIGN_PROVIDER", "PIC_ESIGN_URL", "PIC_ESIGN_API_KEY", "PIC_ESIGN_WEBHOOK_SECRET")
+
+
+@dataclass
+class EsignConfig:
+    provider: str
+    url: str
+    api_key: str
+    webhook_secret: str
+
+
+def esign_config() -> Optional[EsignConfig]:
+    """Read from the process environment at call time. Without a complete configuration the internal signature path (sign()) is
+    the only one."""
+    values = {k: os.environ.get(k, "").strip() for k in ESIGN_ENV}
+    provider = values["PIC_ESIGN_PROVIDER"].upper()
+    if not all(values.values()) or provider not in ESIGN_PROVIDERS:
+        return None
+    return EsignConfig(provider, values["PIC_ESIGN_URL"].rstrip("/"), values["PIC_ESIGN_API_KEY"], values["PIC_ESIGN_WEBHOOK_SECRET"])
+
+
+def require_esign() -> EsignConfig:
+    config = esign_config()
+    if config is None:
+        provider = os.environ.get("PIC_ESIGN_PROVIDER", "").strip().upper()
+        if provider and provider not in ESIGN_PROVIDERS:
+            detail = f"PIC_ESIGN_PROVIDER {provider} is not supported ({', '.join(ESIGN_PROVIDERS)})"
+        else:
+            missing = [k for k in ESIGN_ENV if not os.environ.get(k, "").strip()]
+            detail = f"No e-signature provider is configured (missing {', '.join(missing)}); sign in the platform instead"
+        raise Problem(404, "ESIGN_NOT_CONFIGURED", detail)
+    return config
+
+
+class EsignProvider:
+    """HTTP adapter to the provider's envelope API. The envelope carries the SHA-256 of the contract document (the same hash every
+    internal signature is bound to), the signers in routing order and our reference, which the provider echoes in its webhooks."""
+
+    def __init__(self, config: EsignConfig):
+        self.config = config
+
+    def create_envelope(self, *, reference: str, document_name: str, document_hash: str, signers: list[dict]) -> dict:
+        body = {"provider": self.config.provider, "reference": reference, "documentName": document_name,
+                "documentHash": {"algorithm": "SHA-256", "value": document_hash},
+                "signers": [{"party": s["party"], "name": s["name"], "email": s["email"], "routingOrder": i}
+                            for i, s in enumerate(signers, start=1)],
+                "webhook": {"events": ["SIGNER_COMPLETED", "ENVELOPE_COMPLETED", "ENVELOPE_DECLINED", "ENVELOPE_VOIDED"],
+                            "signatureHeader": ESIGN_SIGNATURE_HEADER, "algorithm": "HMAC-SHA256"}}
+        try:
+            response = httpx.post(f"{self.config.url}/envelopes", json=body, timeout=15.0,
+                                  headers={"Authorization": f"Bearer {self.config.api_key}", "Accept": "application/json"})
+        except httpx.HTTPError as exc:
+            raise Problem(502, "ESIGN_PROVIDER_UNAVAILABLE", f"{self.config.provider} could not be reached: {exc.__class__.__name__}")
+        if response.status_code >= 300:
+            raise Problem(502, "ESIGN_PROVIDER_ERROR", f"{self.config.provider} rejected the envelope (HTTP {response.status_code})",
+                          providerStatus=response.status_code)
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        envelope_id = next((str(data[k]) for k in ("envelopeId", "envelope_id", "id", "documentId") if data.get(k)), None)
+        if not envelope_id:
+            raise Problem(502, "ESIGN_PROVIDER_ERROR", f"{self.config.provider} returned no envelope id")
+        return {"envelopeId": envelope_id[:60], "status": str(data.get("status") or "SENT").upper(), "signingUrls": data.get("signingUrls") or {}}
+
+
+def _envelope_reference(tenant_code: str, contract: Contract) -> str:
+    return f"PIC:{tenant_code}:{contract.number}"
+
+
+def _signer_user(session: Session, party: str, contract: Contract, email: Optional[str]) -> AppUser:
+    if party == "BUYER":
+        user = session.execute(select(AppUser).where(AppUser.email == email)).scalar_one_or_none() if email else None
+        if user is None or not user.active or "contract:sign" not in scopes_for(list(user.roles)):
+            raise rule_violation("The buyer signer must be an active user allowed to sign contracts (contract:sign)", "CLM-ESIGN")
+        return user
+    query = select(AppUser).where(AppUser.supplier_id == contract.supplier_id, AppUser.active.is_(True))
+    if email:
+        query = query.where(AppUser.email == email)
+    user = session.execute(query.order_by(AppUser.email)).scalars().first()
+    if user is None or "SUPPLIER_USER" not in user.roles:
+        raise rule_violation("No active portal user of the contract's supplier" + (f" with e-mail {email}" if email else ""), "CLM-ESIGN")
+    return user
+
+
+def create_envelope(session: Session, contract: Contract, buyer_email: Optional[str] = None, supplier_email: Optional[str] = None) -> dict:
+    config = require_esign()
+    p = principal(session)
+    if contract.status != "OUT_FOR_SIGNATURE":
+        raise illegal_transition("Contract", contract.number, contract.status, "send for e-signature")
+    instance = _instance(session, contract)
+    current = (instance.variables or {}).get("esign") if instance else None
+    if current and current.get("status") == "SENT":
+        raise Problem(409, "ENVELOPE_PENDING", f"Envelope {current['envelopeId']} is still out for signature", envelope=current["envelopeId"])
+    signed = {s.party for s in session.execute(select(Signature).where(Signature.contract_id == contract.id)).scalars()}
+    signers = []
+    for party, email in (("BUYER", buyer_email or p.email), ("SUPPLIER", supplier_email)):
+        if party in signed:
+            continue
+        user = _signer_user(session, party, contract, email)
+        signers.append({"party": party, "userId": str(user.id), "name": user.full_name, "email": user.email, "status": "SENT"})
+    if not signers:
+        raise Problem(409, "ALREADY_SIGNED", f"{contract.number} is signed by both parties")
+    document_hash = _document_hash(session, contract)
+    reference = _envelope_reference(p.tenant_code, contract)
+    result = EsignProvider(config).create_envelope(reference=reference, document_name=f"{contract.number} {contract.title}",
+                                                   document_hash=document_hash, signers=signers)
+    envelope = {"provider": config.provider, "envelopeId": result["envelopeId"], "reference": reference, "status": "SENT",
+                "documentHash": document_hash, "signers": signers, "sentAt": clock.now().isoformat(), "sentBy": p.email}
+    if instance is not None:
+        instance.variables = {**(instance.variables or {}), "esign": envelope}
+    audit.record(session, "CONTRACT", contract.id, "ESIGN_ENVELOPE_SENT", object_ref=contract.number,
+                 after={"provider": config.provider, "envelope": result["envelopeId"], "hash": document_hash,
+                        "signers": [{"party": s["party"], "email": s["email"]} for s in signers]})
+    return {**envelope, "signingUrls": result["signingUrls"]}
+
+
+def verify_webhook(config: EsignConfig, body: bytes, signature: Optional[str]) -> None:
+    expected = hmac.new(config.webhook_secret.encode(), body, hashlib.sha256).hexdigest()
+    given = (signature or "").strip()
+    if given.lower().startswith("sha256="):
+        given = given.split("=", 1)[1]
+    if not given or not hmac.compare_digest(expected, given.lower()):
+        raise Problem(401, "ESIGN_SIGNATURE_INVALID", "Webhook signature does not match", rule_ref="CLM-ESIGN")
+
+
+def handle_webhook(body: bytes, signature: Optional[str]) -> dict:
+    """Provider callback, verified by HMAC-SHA256 over the raw body; the tenant comes from our envelope reference.
+    A completed signer is recorded through sign(), acting as that signer, so activation works unchanged."""
+    config = require_esign()
+    verify_webhook(config, body, signature)
+    try:
+        event = json.loads(body)
+    except ValueError:
+        raise Problem(422, "INVALID_PAYLOAD", "Webhook body is not JSON")
+    parts = str(event.get("reference") or "").split(":")
+    if len(parts) != 3 or parts[0] != "PIC":
+        raise Problem(422, "INVALID_REFERENCE", "Unknown envelope reference")
+    with system_tx() as s:
+        tenant_id = s.execute(select(Tenant.id).where(Tenant.code == parts[1])).scalar_one_or_none()
+    if tenant_id is None:
+        raise Problem(404, "ENVELOPE_UNKNOWN", "No such envelope for this reference")
+    kind = str(event.get("event") or "").upper().replace(".", "_")
+    gateway = Principal(user_id=uuid.UUID(int=0), tenant_id=tenant_id, tenant_code=parts[1], email=f"{config.provider.lower()}@esign.pic",
+                        name=f"{config.provider} e-signature", roles=[], scopes=set(), agent_code="ESIGN_GATEWAY")
+    with tenant_tx(tenant_id, gateway.user_id, gateway) as session:
+        contract = session.execute(select(Contract).where(Contract.number == parts[2]).with_for_update()).scalar_one_or_none()
+        instance = _instance(session, contract) if contract else None
+        envelope = json.loads(json.dumps((instance.variables or {}).get("esign") or {})) if instance else {}
+        if contract is None or not envelope or envelope.get("envelopeId") != str(event.get("envelopeId")):
+            raise Problem(404, "ENVELOPE_UNKNOWN", "No such envelope for this reference")
+        result = {"contract": contract.number, "envelope": envelope["envelopeId"], "event": kind}
+        if kind in ("SIGNER_COMPLETED", "RECIPIENT_COMPLETED"):
+            party = str(event.get("party") or "").upper()
+            signer = next((x for x in envelope["signers"] if x["party"] == party), None)
+            if signer is None:
+                raise Problem(422, "INVALID_PAYLOAD", f"{party or 'party'} is not a signer of this envelope")
+            if event.get("documentHash") and event["documentHash"] != envelope["documentHash"]:
+                raise Problem(409, "DOCUMENT_CHANGED", "The provider signed a different document than the one sent", rule_ref="CLM-ESIGN")
+            if session.execute(select(Signature).where(Signature.contract_id == contract.id, Signature.party == party)).first():
+                return {**result, "duplicate": True}
+            user = session.get(AppUser, uuid.UUID(signer["userId"]))
+            actor = Principal(user_id=user.id, tenant_id=tenant_id, tenant_code=parts[1], email=user.email, name=user.full_name,
+                              roles=list(user.roles), scopes=scopes_for(list(user.roles)), attributes=user.attributes or {},
+                              supplier_id=user.supplier_id)
+            session.info["principal"], session.info["user_id"] = actor, user.id
+            signed = sign(session, contract, party, str(event.get("signerName") or signer["name"])[:200], envelope_ref=envelope["envelopeId"])
+            signer["status"] = "SIGNED"
+            signer["signedAt"] = str(event.get("signedAt") or clock.now().isoformat())
+            if all(x["status"] == "SIGNED" for x in envelope["signers"]):
+                envelope["status"] = "COMPLETED"
+            result["signedBy"] = signed["signedBy"]
+        elif kind in ("ENVELOPE_DECLINED", "ENVELOPE_VOIDED"):
+            envelope["status"] = kind.split("_", 1)[1]
+            audit.record(session, "CONTRACT", contract.id, f"ESIGN_{envelope['status']}", object_ref=contract.number,
+                         reason=str(event.get("reason") or "")[:500] or None, after={"envelope": envelope["envelopeId"]})
+        elif kind == "ENVELOPE_COMPLETED":
+            if all(x["status"] == "SIGNED" for x in envelope["signers"]):
+                envelope["status"] = "COMPLETED"
+        else:
+            return {**result, "ignored": True}
+        instance.variables = {**(instance.variables or {}), "esign": envelope}
+        return {**result, "status": envelope["status"]}

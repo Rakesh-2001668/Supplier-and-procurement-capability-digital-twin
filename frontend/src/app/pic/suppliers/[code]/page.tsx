@@ -1,12 +1,14 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { AuditTrail, ProcessPath, TaskPanel } from '@/components/pic/object';
 import { Button, Card, DataTable, Dialog, Empty, Facts, Field, Input, Kpi, Loading, ProblemBox, Select, StatusChip, Tabs, Textarea } from '@/components/pic/ui';
-import { api, readSessionUser } from '@/lib/pic/api';
+import { api } from '@/lib/pic/api';
 import { date, dateTime, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
+import { useSupplierManager } from '../roles';
+import { Address, MasterDataCard, PunchoutCard, PunchoutConfig } from './master-data';
 
 type CategoryStatus = { id: string; category: string; status: string; waiver_reason: string | null; qualified_on: string | null; updated_at: string | null };
 type Twin = { id: string; category: string; capability: Record<string, string> | null; evidence_level: string | null; free_capacity_per_month: string | null;
@@ -20,6 +22,7 @@ type Qualification = { id: string; category: string; status: string; questionnai
 type Supplier360 = {
   id: string; code: string; legal_name: string; status: string; gstin_masked: string; state_code: string; country: string; segment: string | null;
   risk_tier: string | null; payment_terms: string; incoterms: string | null; twin_ref: string | null; contact_email: string;
+  address: Address | null; punchout: PunchoutConfig | null;
   screening: { outcome?: string; duplicates?: unknown[]; sanctionsHits?: unknown[]; screenedAt?: string } | null;
   categories: CategoryStatus[]; twin: Twin[]; scorecards: Scorecard[]; certificates: Certificate[]; bankAccounts: BankAccount[]; qualifications: Qualification[];
 };
@@ -32,11 +35,7 @@ export default function Supplier360Page() {
   const { code } = useParams<{ code: string }>();
   const path = `/suppliers/${encodeURIComponent(code)}`;
   const { data: s, isLoading, error } = useApi<Supplier360>(path);
-  const [manager, setManager] = useState(false);
-  useEffect(() => {
-    const roles = readSessionUser()?.roles;
-    setManager(!roles || roles.includes('SUPPLIER_MANAGER'));
-  }, []);
+  const manager = useSupplierManager();
   const [dialog, setDialog] = useState<{ kind: 'qualify' | 'block' | 'assess' | 'decide' | 'callback'; id?: string } | null>(null);
   const changes = useList<BankChange>('/bank-changes?status=PENDING_CALLBACK');
   const pending = changes.items.filter((c) => c.supplier_code === code);
@@ -111,6 +110,10 @@ export default function Supplier360Page() {
           </ul>
         )}
       </Card>
+
+      <MasterDataCard supplier={s} manager={manager} />
+
+      <PunchoutCard supplier={s} manager={manager} />
 
       <Card title="Digital twin snapshot">
         {!s.twin.length ? <Empty title="No twin evidence yet" hint="Capacity, trust and delivery-risk evidence appears after qualification and first deliveries." /> : (
@@ -201,8 +204,8 @@ export default function Supplier360Page() {
               ]} />
             ),
           },
-          { id: 'process', label: 'Onboarding process', content: <ProcessPath type="SUPPLIER" ref={s.code} /> },
-          { id: 'audit', label: 'Audit', content: <AuditTrail type="SUPPLIER" ref={s.code} /> },
+          { id: 'process', label: 'Onboarding process', content: <SupplierProcess supplierCode={s.code} /> },
+          { id: 'audit', label: 'Audit', content: <SupplierAudit supplierCode={s.code} /> },
         ]} />
       </Card>
 
@@ -213,6 +216,16 @@ export default function Supplier360Page() {
       {dialog?.kind === 'decide' && <DecideDialog q={s.qualifications.find((q) => q.id === dialog.id)} onClose={() => setDialog(null)} />}
     </div>
   );
+}
+
+// ProcessPath and AuditTrail take the document reference in a prop named "ref"; keeping it in a leaf component stops the
+// React compiler lint from treating the whole supplier object as a ref.
+function SupplierProcess({ supplierCode }: { supplierCode: string }) {
+  return <ProcessPath type="SUPPLIER" ref={supplierCode} />;
+}
+
+function SupplierAudit({ supplierCode }: { supplierCode: string }) {
+  return <AuditTrail type="SUPPLIER" ref={supplierCode} />;
 }
 
 function Actions({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {

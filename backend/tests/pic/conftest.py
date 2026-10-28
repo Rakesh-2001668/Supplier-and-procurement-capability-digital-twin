@@ -60,3 +60,9 @@ def login(client):
         return tokens[key]
 
     return _login
+
+
+def pytest_collection_modifyitems(config, items):
+    """Dataset-pack tests (test_datasets_*.py) add data on top of the signature case: run them after every other test so
+    the signature-case assertions always see the base seed."""
+    items.sort(key=lambda item: item.module.__name__.rsplit(".", 1)[-1].startswith("test_datasets_"))

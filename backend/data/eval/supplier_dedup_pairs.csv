@@ -1,0 +1,55 @@
+# Supplier duplicate pairs for the dedup evaluation (D9, TD section 17). label DUPLICATE = the same legal entity (same PAN), DISTINCT =
+# different legal entities. All names, GSTINs and PANs are fictional (valid format and GSTIN check character); a_code/b_code
+# without a name refer to suppliers of the AXN demo tenant (ERP initial load V-21xxxx, onboarded TF001/KD002/SLA003).
+# Evaluated against the platform's own dedup: F8-03 registration screening (supplier.screen: same GSTIN or name ratio > 0.9)
+# and SPD-03 duplicate clusters (spend.suppliers_view: same PAN or normalised-name ratio >= 0.86), in a transaction that rolls back.
+# Version 1, 2026-10-28.
+pair_id,label,kind,a_code,a_name,a_gstin,a_pan,b_code,b_name,b_gstin,b_pan,note
+DP-001,DUPLICATE,LEGAL_SUFFIX,EV-A01,Vaigai Precision Castings Pvt Ltd,33AAHCV4417K1Z7,AAHCV4417K,EV-B01,VAIGAI PRECISION CASTINGS PRIVATE LIMITED,33AAHCV4417K1Z7,AAHCV4417K,upper case and 'Private Limited' spelled out
+DP-002,DUPLICATE,ABBREVIATION,EV-A02,Kaveri Auto Components Pvt Ltd,33AAJCK2290M1Z9,AAJCK2290M,EV-B02,Kaveri Auto Comp. Pvt. Ltd.,33AAJCK2290M1Z9,AAJCK2290M,abbreviated word and dotted suffix
+DP-003,DUPLICATE,PREFIX,EV-A03,Thamirabarani Fasteners Pvt Ltd,33AAKCT5521Q1ZV,AAKCT5521Q,EV-B03,M/s Thamirabarani Fasteners Pvt Ltd,33AAKCT5521Q1ZV,AAKCT5521Q,'M/s' prefix from an invoice header
+DP-004,DUPLICATE,PUNCTUATION,EV-A04,K.P.R. Polymers Pvt Ltd,33AALCK8812D1ZM,AALCK8812D,EV-B04,KPR Polymers Pvt Ltd,33AALCK8812D1ZM,AALCK8812D,initials with and without dots
+DP-005,DUPLICATE,LEGAL_SUFFIX,EV-A05,Bhavani Steel Tubes Limited,33AAMCB3304H1Z1,AAMCB3304H,EV-B05,Bhavani Steel Tubes Ltd,33AAMCB3304H1Z1,AAMCB3304H,Limited vs Ltd
+DP-006,DUPLICATE,AMPERSAND,EV-A06,Arul & Sons Tooling Works,33AANFA6620P1Z5,AANFA6620P,EV-B06,Arul and Sons Tooling Works,33AANFA6620P1Z5,AANFA6620P,'&' vs 'and' (partnership firm)
+DP-007,DUPLICATE,LEGAL_SUFFIX,EV-A07,Coromandel Freight Movers LLP,33AAPFC1187B1ZQ,AAPFC1187B,EV-B07,Coromandel Freight Movers L.L.P.,33AAPFC1187B1ZQ,AAPFC1187B,LLP with dots
+DP-008,DUPLICATE,WORD_ORDER,EV-A08,Hosur Precision Gears Pvt Ltd,33AAQCH7745L1ZX,AAQCH7745L,EV-B08,Precision Gears Hosur Pvt Ltd,33AAQCH7745L1ZX,AAQCH7745L,town moved to the end
+DP-009,DUPLICATE,TRADE_NAME,EV-A09,Sri Murugan Engineering Works Pvt Ltd,33AARCS2268F1Z6,AARCS2268F,EV-B09,SME Works Hosur,33AARCS2268F1Z6,AARCS2268F,trade name on the GST certificate; same GSTIN
+DP-010,DUPLICATE,TYPO,EV-A10,Pollachi Rubber Mouldings Pvt Ltd,33AASCP9031R1ZK,AASCP9031R,EV-B10,Polachi Rubber Moulding Pvt Ltd,33AASCP9031R1ZK,AASCP9031R,spelling slip and singular
+DP-011,DUPLICATE,OTHER_STATE_GSTIN,EV-A11,Palani Hydraulics Pvt Ltd,33AATCP4456N1ZO,AATCP4456N,EV-B11,Palani Hydraulics Pvt Ltd,29AATCP4456N1ZD,AATCP4456N,"same company, Karnataka GST registration (same PAN)"
+DP-012,DUPLICATE,OTHER_STATE_GSTIN,EV-A12,Cauvery Industrial Gases Pvt Ltd,33AAUCC6672G1Z9,AAUCC6672G,EV-B12,Cauvery Industrial Gases Pvt Ltd - Bengaluru,29AAUCC6672G1ZY,AAUCC6672G,branch suffix and other-state GSTIN
+DP-013,DUPLICATE,SECOND_REGISTRATION,EV-A13,Tirupur Packaging Solutions Pvt Ltd,33AAVCT3318J1ZZ,AAVCT3318J,EV-B13,Tirupur Packaging Solutions Pvt Ltd (Unit II),33AAVCT3318J2ZY,AAVCT3318J,second registration in the same state
+DP-014,DUPLICATE,SPACING,EV-A14,Sakthi Auto Fab Pvt Ltd,33AAWCS5573C1Z1,AAWCS5573C,EV-B14,Sakthi AutoFab Pvt Ltd,33AAWCS5573C1Z1,AAWCS5573C,joined words
+DP-015,DUPLICATE,LEGAL_SUFFIX,EV-A15,Nandi Wire Products Private Limited,29AAXCN1196E1ZV,AAXCN1196E,EV-B15,Nandi Wire Products Pvt. Ltd.,29AAXCN1196E1ZV,AAXCN1196E,"Karnataka supplier, suffix variants"
+DP-016,DUPLICATE,TYPO,EV-A16,Krishnagiri Cast Alloys Pvt Ltd,33AAYCK8823S1ZB,AAYCK8823S,EV-B16,Krishnagiri Cast Alloy Pvt Ltd,33AAYCK8823S1ZB,AAYCK8823S,plural dropped
+DP-017,DUPLICATE,TRADE_NAME,EV-A17,Annamalai Logistics Pvt Ltd,33AAZCA2745T1ZP,AAZCA2745T,EV-B17,Annamalai Roadways,33AAZCA2745T1ZP,AAZCA2745T,brand name used on LRs; same GSTIN
+DP-018,DUPLICATE,PREFIX,EV-A18,Velan Electro Controls Pvt Ltd,33ABACV7760U1ZG,ABACV7760U,EV-B18,The Velan Electro Controls Pvt Ltd,33ABACV7760U1ZG,ABACV7760U,leading 'The'
+DP-019,DUPLICATE,ERP_VENDOR_NAME_ONLY,V-210041,,,,EV-B19,Nilgiri Forging Pvt Ltd,33ABBCN4471V1ZR,ABBCN4471V,ERP vendor without tax IDs; new request with a singular name
+DP-020,DUPLICATE,ERP_VENDOR_NAME_ONLY,V-210071,,,,EV-B20,Palar Fasteners Private Limited,33ABCCP5512W1ZU,ABCCP5512W,ERP vendor without tax IDs; suffix spelled out
+DP-021,DUPLICATE,ERP_VENDOR_NAME_ONLY,V-210111,,,,V-210112,,,,the two Kanchi vendor masters from the ERP initial load
+DP-022,DUPLICATE,ERP_VENDOR_NAME_ONLY,V-210131,,,,EV-B22,Mylapore Facility Services Pvt Ltd,33ABDCM6634X1ZL,ABDCM6634X,suffix added on re-registration
+DP-023,DUPLICATE,ONBOARDED_SUPPLIER,KD002,,,,EV-B23,Kovai Diecast Private Limited,,,self-registration attempt without tax IDs (name only)
+DP-024,DUPLICATE,ONBOARDED_SUPPLIER,TF001,,,,EV-B24,Trichy Forge Pvt. Ltd.,,,duplicate request raised by a plant buyer (name only)
+DP-025,DISTINCT,SIMILAR_NAME,V-210071,,,,EV-D01,Palar Forgings Pvt Ltd,33ABECP2209Y1ZS,ABECP2209Y,"same town word, different product and company"
+DP-026,DISTINCT,SIMILAR_NAME,V-210071,,,,V-210072,,,,two fastener makers from the ERP load
+DP-027,DISTINCT,SIMILAR_NAME,EV-D03A,Sri Balaji Industries,33ABFFS3301Z1ZL,ABFFS3301Z,EV-D03B,Sri Balaji Enterprises,33ABGFS4402A1ZV,ABGFS4402A,"common trade name, unrelated firms"
+DP-028,DISTINCT,SIMILAR_NAME,V-210051,,,,EV-D04,Hosur Precision Moulding Pvt Ltd,33ABHCH5503B1Z5,ABHCH5503B,machining vs moulding
+DP-029,DISTINCT,SIMILAR_NAME,V-210042,,,,EV-D05,Kaveri Forge and Foundry Pvt Ltd,33ABJCK6604C1ZU,ABJCK6604C,different company sharing the river name
+DP-030,DISTINCT,SIMILAR_NAME,V-210061,,,,EV-D06,Ennore Aluminium Extrusions Pvt Ltd,33ABKCE7705D1ZT,ABKCE7705D,ingots vs extrusions
+DP-031,DISTINCT,GROUP_COMPANY,EV-A01,Vaigai Precision Castings Pvt Ltd,33AAHCV4417K1Z7,AAHCV4417K,EV-D07,Vaigai Precision Castings (Coimbatore) Pvt Ltd,33ABLCV8806E1Z5,ABLCV8806E,"group company, separate PAN"
+DP-032,DISTINCT,SIMILAR_NAME,V-210101,,,,EV-D08,Southern Road Carriers Pvt Ltd,33ABMCS9907F1Z1,ABMCS9907F,different transporter
+DP-033,DISTINCT,ONE_LETTER,V-210081,,,,EV-D09,Guindy Electricals Pvt Ltd,33ABNCG1108G1ZX,ABNCG1108G,electronics vs electricals
+DP-034,DISTINCT,SIMILAR_NAME,V-210121,,,,EV-D10,Adyar Infra Services Pvt Ltd,33ABPCA2209H1ZV,ABPCA2209H,IT vs infrastructure services
+DP-035,DISTINCT,SIMILAR_NAME,V-210131,,,,EV-D11,Mylapore Food Services,33ABQFM3310J1ZB,ABQFM3310J,"canteen operator, unrelated"
+DP-036,DISTINCT,SIMILAR_NAME,EV-D12A,Sri Ganesh Traders,33ABRFS4411K1ZY,ABRFS4411K,EV-D12B,Sri Ganesh Transport,33ABSFS5512L1ZR,ABSFS5512L,"common name, different business"
+DP-037,DISTINCT,GROUP_COMPANY,EV-A05,Bhavani Steel Tubes Limited,33AAMCB3304H1Z1,AAMCB3304H,EV-D13,Bhavani Steel Tubes Exports Ltd,33ABTCB6613M1Z7,ABTCB6613M,"export arm, separate company"
+DP-038,DISTINCT,ONE_LETTER,EV-A04,K.P.R. Polymers Pvt Ltd,33AALCK8812D1ZM,AALCK8812D,EV-D14,K.P.R. Polymer Pvt Ltd,27ABUCK7714N1ZK,ABUCK7714N,"near-identical name in Maharashtra, separate company"
+DP-039,DISTINCT,SIMILAR_NAME,EV-A08,Hosur Precision Gears Pvt Ltd,33AAQCH7745L1ZX,AAQCH7745L,EV-D15,Hosur Precision Gauges Pvt Ltd,33ABVCH8815P1ZL,ABVCH8815P,gears vs gauges
+DP-040,DISTINCT,SIMILAR_NAME,EV-A12,Cauvery Industrial Gases Pvt Ltd,33AAUCC6672G1Z9,AAUCC6672G,EV-D16,Cauvery Industrial Glass Pvt Ltd,33ABWCC9916Q1ZJ,ABWCC9916Q,gases vs glass
+DP-041,DISTINCT,SIMILAR_NAME,V-210092,,,,EV-D17,Poonamallee Rubber Industries,33ABXFP1017R1ZL,ABXFP1017R,different rubber firm
+DP-042,DISTINCT,SIMILAR_NAME,V-210151,,,,EV-D18,Chengalpet Machine Works Pvt Ltd,33ABYCC2118S1ZX,ABYCC2118S,machine tools vs machine works
+DP-043,DISTINCT,SIMILAR_NAME,EV-A17,Annamalai Logistics Pvt Ltd,33AAZCA2745T1ZP,AAZCA2745T,EV-D19,Annamalai Logistics Solutions LLP,33ABZFA3219T1ZM,ABZFA3219T,"different LLP, similar name"
+DP-044,DISTINCT,SIMILAR_NAME,EV-A14,Sakthi Auto Fab Pvt Ltd,33AAWCS5573C1Z1,AAWCS5573C,EV-D20,Sakthi Auto Parts Pvt Ltd,33ACACS4320U1ZZ,ACACS4320U,different company
+DP-045,DISTINCT,SIMILAR_NAME,KD002,,,,EV-D21,Kovai Die Tech Pvt Ltd,33ACBCK5421V1Z0,ACBCK5421V,"die maker, not the die caster"
+DP-046,DISTINCT,SIMILAR_NAME,SLA003,,,,EV-D22,Salem Light Metals Pvt Ltd,33ACCCS6522W1ZL,ACCCS6522W,different company
+DP-047,DISTINCT,UNRELATED,EV-A02,Kaveri Auto Components Pvt Ltd,33AAJCK2290M1Z9,AAJCK2290M,EV-D23,Madurai Textile Mills Pvt Ltd,33ACDCM7623X1ZK,ACDCM7623X,unrelated control pair
+DP-048,DISTINCT,UNRELATED,V-210141,,,,EV-D24,Thanjavur Agro Foods Pvt Ltd,33ACECT8724Y1Z6,ACECT8724Y,unrelated control pair

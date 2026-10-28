@@ -51,6 +51,7 @@ INTERNAL_USERS = [
     ("finance.controller2", "Deepa Ramesh", ["FINANCE_CONTROLLER"], {}),
     ("legal", "Harini Srinivasan", ["LEGAL"], {}),
     ("contract.manager", "Ganesh Murthy", ["CONTRACT_MANAGER"], {}),
+    ("contract.manager2", "Meena Raghavan", ["CONTRACT_MANAGER"], {}),  # second contract manager: four-eyes on small amendments
     ("supplier.manager", "Kavitha Sundaram", ["SUPPLIER_MANAGER"], {"categories": ["*"]}),
     ("mdm.purchasing", "Naveen Joseph", ["MDM_STEWARD"], {"steward_domains": ["PURCHASING"]}),
     ("mdm.quality", "Revathi Mohan", ["MDM_STEWARD"], {"steward_domains": ["QUALITY"]}),
@@ -287,7 +288,7 @@ def _migrate_open_supply(sc: Scenario, suppliers: dict) -> None:
     with sc.act("kd.sales", at(date(2026, 10, 5), 14)) as s:
         receiving.create_asn(s, s.get(PurchaseOrder, po_id), lines=[{"line": 10, "qty": "600", "batches": [{"batch": "KD-2610-07", "qty": "600"}]}],
                              ship_date=date(2026, 10, 5), expected_date=date(2026, 10, 9), eway_bill_no="331008765432",
-                             documents=["CoC-KD-2610-07"])
+                             vehicle_no="TN38CK4521", distance_km=250, documents=["CoC-KD-2610-07"])
     sc.note("Migrated: stock 1,400; demand 12,000 (FC-2026-11 + SO-88120); PO-77395 1,800 open, ASN-61207 600 in transit")
 
 
@@ -436,11 +437,12 @@ def run(password: str) -> list[str]:
                                    lines=[{"line": 10, "qty": "5400", "batches": [{"batch": "B-2611-01", "qty": "2700"},
                                                                                 {"batch": "B-2611-02", "qty": "2700"}]}],
                                    ship_date=date(2026, 11, 10), expected_date=date(2026, 11, 12), eway_bill_no="331009876543",
-                                   documents=["CoC-TF-2611", "PackingList-TF-2611"])
+                                   vehicle_no="TN45AB1234", distance_km=320, documents=["CoC-TF-2611", "PackingList-TF-2611"])
         asn_id, asn_no = asn.id, asn.number
     with sc.act("kd.sales", at(date(2026, 11, 18), 9)) as s:
         receiving.create_asn(s, s.get(PurchaseOrder, po_ids["KD002"][0]), lines=[{"line": 10, "qty": "3600", "batches": [{"batch": "KD-2611-18", "qty": "3600"}]}],
-                             ship_date=date(2026, 11, 18), expected_date=date(2026, 11, 21), eway_bill_no="331009912345", documents=["CoC-KD-2611-18"])
+                             ship_date=date(2026, 11, 18), expected_date=date(2026, 11, 21), eway_bill_no="331009912345", vehicle_no="TN38CK4521",
+                             distance_km=250, documents=["CoC-KD-2611-18"])
     with sc.act("receiver", at(date(2026, 11, 12), 11)) as s:
         from app.pic.models import Asn
         gr = receiving.post_gr(s, s.get(PurchaseOrder, po_ids["TF001"][0]), asn=s.get(Asn, asn_id), delivery_note="DN-TF-77410",

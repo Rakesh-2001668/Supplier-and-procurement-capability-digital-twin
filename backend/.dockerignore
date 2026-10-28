@@ -6,3 +6,7 @@ __pycache__/
 tests/
 app.db
 *.bak
+.env.*
+!.env.example
+venv*/
+.venv/

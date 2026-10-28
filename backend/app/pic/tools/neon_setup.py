@@ -11,10 +11,14 @@ Steps
    a. the existing app's Alembic chain (public schema) and a verbatim copy of all 15 legacy tables;
    b. the §15 migration into PIC (one tenant per legacy buyer) with live continuation of the open items and a
       reconciliation report written to docs/PIC_Legacy_Migration_Report.md.
-   Without a snapshot, capability_twin.db (SQLite) is copied verbatim instead.
+   Without a snapshot, capability_twin.db (SQLite) is copied verbatim instead. Docker is not needed: the snapshot
+   (data/legacy/supplier_twin.json) is part of the repository.
+   Then the dataset packs (app.pic.seed.datasets, D1–D11): branch and module cases, purchase types, industry demo
+   tenants, reference data and AI evaluation sets; each pack is applied once per tenant (pic.dataset_load).
 4. Verification: row counts, RLS coverage, audit hash chain, pending events.
 
-Safe to re-run: migrations are versioned, seeds skip existing tenants, legacy rows are inserted ON CONFLICT DO NOTHING.
+Safe to re-run: migrations are versioned, seeds skip existing tenants, legacy rows are inserted ON CONFLICT DO NOTHING,
+dataset packs already loaded are skipped.
 """
 import argparse
 import os
@@ -160,6 +164,7 @@ def main() -> int:
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--skip-seed", action="store_true")
     parser.add_argument("--skip-legacy", action="store_true")
+    parser.add_argument("--skip-datasets", action="store_true")
     parser.add_argument("--legacy-snapshot", type=Path, default=legacy_extract.SNAPSHOT)
     parser.add_argument("--fx-rate", type=Decimal, default=Decimal(1),
                         help="multiplier from legacy amounts to INR (the legacy schema has no currency column)")
@@ -197,6 +202,12 @@ def main() -> int:
                 print(f"   report: {REPORT}")
                 if generated:
                     print(f"   Migrated-tenant users share the password: {password}  (shown once; set PIC_SEED_PASSWORD to choose it)")
+        if not args.skip_datasets:
+            from app.pic.seed import datasets
+            print("   Dataset packs …")
+            for result in datasets.apply_all(password):
+                counts = result.get("summary", {}).get("counts")
+                print(f"   {result['pack']:24} {result['tenant']:5} {result['status']}" + (f"  {counts}" if counts else ""))
     print("4/4 Verification …")
     report = verify()
     print(f"   pic tables: {report['pic_tables']} (forced RLS on {report['pic_tables_with_forced_rls']})")

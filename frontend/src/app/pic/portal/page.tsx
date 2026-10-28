@@ -8,6 +8,9 @@ import { date, dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { BlockChip, CaptureInvoiceDialog, InvoiceRow, PoDetail, PoRow, useSessionUser } from '../invoices/_components';
 import { AsnDialog, BidDialog, CapaPanel, CreditNoteDialog, ProposeChangeDialog, RedlineDialog, RequestChangeDialog, ServiceSheetDialog, SignDialog } from './_components';
+import { AuctionDialog, EventQaDialog } from './_sourcing';
+import { ScheduleConfirmDialog } from '../purchase-orders/[ref]/_ops';
+import { MasterDataCard, SupplierLite } from '../suppliers/[code]/master-data';
 
 type EventRow = { id: string; number: string; type: string; title: string; category: string; status: string; round: number; close_at: string; published_at: string | null };
 type ContractRow = { id: string; number: string; type: string; title: string; status: string; valid_from: string; valid_to: string; target_value_minor: number; payment_terms: string };
@@ -37,10 +40,19 @@ export default function SupplierPortal() {
           { id: 'contracts', label: 'Contracts', content: <Contracts user={user} /> },
           { id: 'services', label: 'Service sheets', content: <ServiceSheets /> },
           { id: 'capa', label: 'Corrective actions (CAPA)', content: <CapaPanel /> },
+          { id: 'company', label: 'Company details', content: <CompanyDetails /> },
         ]} />
       </Card>
     </div>
   );
+}
+
+// ---------------------------------------------------------------- company master data (MDM-04)
+function CompanyDetails() {
+  const profile = useApi<SupplierLite>('/portal/profile');
+  if (profile.isLoading) return <Loading />;
+  if (!profile.data) return <Empty title="Your company details could not be loaded" />;
+  return <MasterDataCard supplier={profile.data} manager portal />;
 }
 
 // ---------------------------------------------------------------- orders
@@ -65,7 +77,7 @@ function Orders() {
 
 function OrderActions({ number }: { number: string }) {
   const { data: po, isLoading } = useApi<PoDetail>(`/purchase-orders/${encodeURIComponent(number)}`);
-  const [dialog, setDialog] = useState<'change' | 'request' | 'asn' | 'ses' | null>(null);
+  const [dialog, setDialog] = useState<'change' | 'request' | 'asn' | 'ses' | 'dates' | null>(null);
   const confirm = useCommand(() => api.post(`/purchase-orders/${encodeURIComponent(number)}/confirmations`, { status: 'CONFIRMED' }), { success: `${number} confirmed` });
   if (isLoading || !po) return <span className="text-xs text-slate-400">…</span>;
   const services = po.lines.some((l) => l.ses_required);
@@ -76,6 +88,7 @@ function OrderActions({ number }: { number: string }) {
       {po.status === 'TRANSMITTED' && (
         <>
           <Button variant="primary" busy={confirm.isPending} onClick={() => confirm.mutate()}>Confirm</Button>
+          <Button onClick={() => setDialog('dates')}>Confirm dates</Button>
           <Button onClick={() => setDialog('change')}>Propose change</Button>
         </>
       )}
@@ -86,6 +99,7 @@ function OrderActions({ number }: { number: string }) {
       {dialog === 'request' && <RequestChangeDialog po={po} onClose={() => setDialog(null)} />}
       {dialog === 'asn' && <AsnDialog po={po} onClose={() => setDialog(null)} />}
       {dialog === 'ses' && <ServiceSheetDialog po={po} onClose={() => setDialog(null)} />}
+      {dialog === 'dates' && <ScheduleConfirmDialog po={po} onClose={() => setDialog(null)} />}
     </div>
   );
 }
@@ -94,6 +108,7 @@ function OrderActions({ number }: { number: string }) {
 function Rfqs() {
   const list = useList<EventRow>('/sourcing/events');
   const [open, setOpen] = useState<string | null>(null);
+  const [side, setSide] = useState<{ kind: 'qa' | 'auction'; number: string } | null>(null);
   return (
     <div>
       <p className="mb-3 text-sm text-slate-600">Sourcing events you are invited to. Bids are sealed (encrypted) until the event closes; you can replace your bid any time before close.</p>
@@ -109,11 +124,20 @@ function Rfqs() {
           { key: 'close_at', header: 'Closes', render: (e) => dateTime(e.close_at) },
           { key: 'action', header: '', render: (e) => {
             const biddable = e.status === 'OPEN' && new Date(e.close_at) > new Date();
-            return <Button variant={biddable ? 'primary' : 'secondary'} onClick={() => setOpen(e.number)}>{biddable ? 'Submit sealed bid' : 'View'}</Button>;
+            return (
+              <div className="flex flex-wrap gap-2">
+                {e.type === 'REVERSE_AUCTION'
+                  ? <Button variant={e.status === 'OPEN' ? 'primary' : 'secondary'} onClick={() => setSide({ kind: 'auction', number: e.number })}>{e.status === 'OPEN' ? 'Open live auction' : 'Auction'}</Button>
+                  : <Button variant={biddable ? 'primary' : 'secondary'} onClick={() => setOpen(e.number)}>{biddable ? 'Submit sealed bid' : 'View'}</Button>}
+                <Button onClick={() => setSide({ kind: 'qa', number: e.number })}>Q&amp;A</Button>
+              </div>
+            );
           } },
         ]}
       />
       {open && <BidDialog number={open} onClose={() => setOpen(null)} />}
+      {side?.kind === 'qa' && <EventQaDialog number={side.number} onClose={() => setSide(null)} />}
+      {side?.kind === 'auction' && <AuctionDialog number={side.number} onClose={() => setSide(null)} />}
     </div>
   );
 }

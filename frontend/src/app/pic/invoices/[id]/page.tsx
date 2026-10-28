@@ -8,6 +8,7 @@ import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { BlockChip, hasRole, MatchChip, useSessionUser } from '../_components';
+import { EInvoiceBadge, EInvoicePanel } from '../_ops';
 
 type MatchDetail = { invoicedQty?: string; creditedQty?: string; netQty?: string; poQty?: string; receivedQty?: string; acceptedQty?: string;
   alreadyInvoicedQty?: string; sesApprovedMinor?: number; poPriceMinor?: number; invoicePriceMinor?: number };
@@ -22,6 +23,7 @@ type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal
   irn: string | null; irn_valid: boolean | null; net_minor: number; tax_minor: number; gross_minor: number; status: string; match_type: string | null;
   first_pass_matched: boolean | null; payment_block: boolean | null; due_date: string | null; erp_doc_no: string | null; posting_key: string | null;
   posted_at: string | null; payment_status: string | null; rule_set_version: string | null; duplicate_of: string | null;
+  retention_minor?: number;
   supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[] };
 type PostResult = { status: string; erpDocument?: string | null; replayed?: boolean; integrationStatus?: string; attempts?: number; error?: string | null };
 
@@ -104,8 +106,13 @@ export default function InvoicePage() {
             <Facts items={[
               ['Supplier', `${inv.supplier.code} · ${inv.supplier.name}`], ['Supplier invoice no.', inv.supplier_invoice_no],
               ['Invoice date', date(inv.invoice_date)], ['Channel', label(inv.channel)],
-              ['IRN', <span key="irn" className={inv.irn_valid === false ? 'text-red-700' : ''}>{irnText(inv)}</span>],
+              ['IRN', inv.irn ? <EInvoiceBadge key="irn" invoiceRef={ref} /> : <span key="irn">{irnText(inv)}</span>],
               ['Net', inr(inv.net_minor)], ['Tax (GST)', inr(inv.tax_minor)], ['Gross', inr(inv.gross_minor)],
+              ...(inv.retention_minor ? [
+                ['Retention withheld', inr(inv.retention_minor)] as [string, string],
+                ['Payable now', inr(inv.gross_minor - inv.creditNotes.reduce((sum, n) => sum + n.gross_minor, 0) - inv.retention_minor)] as [string, string],
+              ] : []),
+              ...(inv.match_type === 'RETENTION' ? [['Document', 'Retention release (no GST: charged on the original invoices)'] as [string, string]] : []),
               ['Match type', <MatchChip key="m" inv={inv} />],
               ['First-pass match', inv.first_pass_matched === null ? 'not matched yet' : inv.first_pass_matched ? 'yes' : 'no'],
               ['Payment block', <BlockChip key="b" blocked={inv.payment_block} />], ['Due date', date(inv.due_date)],
@@ -138,6 +145,7 @@ export default function InvoicePage() {
           ]} />
         )}
         extraTabs={inv ? [
+          ...(inv.irn ? [{ id: 'einvoice', label: 'E-invoice', content: <EInvoicePanel invoiceRef={ref} canVerify={ap} /> }] : []),
           { id: 'exceptions', label: `Exceptions (${openExceptions.length} open)`, content: (
             inv.exceptions.length ? (
               <div className="space-y-3">

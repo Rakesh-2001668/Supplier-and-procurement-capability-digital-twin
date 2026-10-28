@@ -1,0 +1,187 @@
+# pic-web: Next.js 16 standalone on :3000. The only public workload (via ingress.yaml). It is also the BFF:
+# browsers call /api/pic/* on this service, which proxies server-side to http://pic-api:8080.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pic-web
+  labels:
+    app.kubernetes.io/name: pic-web
+    app.kubernetes.io/component: web
+spec:
+  # spec.replicas omitted: owned by the HPA below (min 2, max 6).
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pic-web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pic-web
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: pic-web
+      automountServiceAccountToken: false
+      # >= BackendConfig connectionDraining (30 s) + preStop, so the load balancer drains before SIGTERM lands.
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-web
+          matchLabelKeys: ["pod-template-hash"]
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-web
+          matchLabelKeys: ["pod-template-hash"]
+      containers:
+        - name: web
+          image: pic-web # rewritten by kustomization.yaml images:
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: pic-web-config
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            - name: PORT
+              value: "3000"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+              ephemeral-storage: 512Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 24
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "15"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: next-cache
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: next-cache
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pic-web
+  labels:
+    app.kubernetes.io/name: pic-web
+    app.kubernetes.io/component: web
+  annotations:
+    # Container-native load balancing: the GCLB sends traffic straight to pod IPs through NEGs.
+    cloud.google.com/neg: '{"ingress": true}'
+    # Health check path, 3600 s timeout for SSE, Cloud Armor policy, draining (ingress.yaml).
+    cloud.google.com/backend-config: '{"default": "pic-web"}'
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pic-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pic-web
+  labels:
+    app.kubernetes.io/name: pic-web
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pic-web
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pic-web
+  labels:
+    app.kubernetes.io/name: pic-web
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pic-web

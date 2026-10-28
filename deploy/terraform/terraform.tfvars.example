@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. No secrets belong in this file.
+
+project_id   = "your-gcp-project-id" # REQUIRED
+github_owner = "your-github-owner"   # REQUIRED, lowercase
+domain       = "pic.example.com"     # REQUIRED, public hostname of the web app
+
+environment  = "prod"
+region       = "asia-south1" # Mumbai (DD-11 primary)
+dr_region    = "asia-south2" # Delhi (DD-11 DR, not provisioned yet)
+cluster_name = "pic-prod"
+
+# Who may reach the GKE control plane (kubectl, CI deploy job). Empty = VPC only.
+master_authorized_networks = [
+  # { cidr_block = "203.0.113.0/28", display_name = "office-egress" },
+]
+
+# Edge protection
+armor_rate_limit_per_minute = 1200
+armor_waf_preview           = true # flip to false after reviewing WAF logs
+armor_adaptive_protection   = false
+
+# Optional: pull images through Artifact Registry in-region
+enable_ghcr_mirror = true
+# ghcr_username                   = "your-github-bot-user"
+# ghcr_credentials_secret_version = "projects/your-gcp-project-id/secrets/ghcr-pat/versions/1"
+
+labels = {
+  cost-center = "pic"
+}

@@ -1,5 +1,6 @@
 """F8 Supplier onboarding & qualification, bank changes (MDM-04), status and performance (M06)."""
 import difflib
+import os
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -53,14 +54,14 @@ def _set_category_status(session: Session, supplier: Supplier, category: str, st
 # ---------------------------------------------------------------- F8-01/02 registration and profile
 def register(session: Session, *, code: Optional[str], legal_name: str, gstin: str, pan: str, state_code: str,
              contact_email: str, categories: list[str], payment_terms: str = "N60", incoterms: Optional[str] = None,
-             segment: Optional[str] = None) -> Supplier:
+             segment: Optional[str] = None, address: Optional[dict] = None, channel: str = "SUPPLIER_MANAGER") -> Supplier:
     p = principal(session)
     tenant_id = current_tenant(session)
     supplier = Supplier(
         tenant_id=tenant_id, code=code or next_number(session, "SUPPLIER"), legal_name=legal_name, status="REGISTERED",
         gstin_enc=crypto.encrypt(tenant_id, "gstin", gstin), gstin_masked=crypto.mask(gstin), gstin_hash=crypto.blind_index(tenant_id, gstin),
         pan_hash=crypto.blind_index(tenant_id, pan), state_code=state_code, contact_email=contact_email,
-        payment_terms=payment_terms, incoterms=incoterms, segment=segment, created_by=p.user_id,
+        payment_terms=payment_terms, incoterms=incoterms, segment=segment, address=address or {}, created_by=p.user_id,
     )
     session.add(supplier)
     session.flush()
@@ -69,7 +70,7 @@ def register(session: Session, *, code: Optional[str], legal_name: str, gstin: s
     # SOD-01: whoever creates the supplier master may not create POs for it.
     sod.record(session, "SUPPLIER_CREATE", {"supplier_id": supplier.id})
     audit.record(session, "SUPPLIER", supplier.id, "REGISTERED", object_ref=supplier.code,
-                 after={"legalName": legal_name, "gstin": supplier.gstin_masked, "categories": categories})
+                 after={"legalName": legal_name, "gstin": supplier.gstin_masked, "categories": categories, "channel": channel})
     instance = workflow.start(session, PROCESS, "SUPPLIER", supplier.id, supplier.code)
     workflow.wait(session, instance, "F8-02", outcome="awaiting profile, tax IDs, bank and certificates")
     return supplier
@@ -94,9 +95,130 @@ def submit_profile(session: Session, supplier: Supplier, *, bank_account: str, i
     return {"screening": screening, "bankChange": change.number}
 
 
-# ---------------------------------------------------------------- F8-03 screening
-def screen(session: Session, supplier: Supplier) -> dict:
+# ---------------------------------------------------------------- F8-03 licensed sanctions / watch-list feed
+SANCTIONS_MATCH_RATIO = 0.88
+
+
+class SanctionsUnavailable(Exception):
+    """The provider list download failed."""
+
+
+class SanctionsNoDownload(SanctionsUnavailable):
+    """The provider offers search only, no list download."""
+
+
+class SanctionsProvider:
+    """HTTP adapter for a licensed sanctions / watch-list provider, configured by environment:
+
+    PIC_SANCTIONS_PROVIDER  name of the provider; used as ``source`` of hits and of synced entries (e.g. OPENSANCTIONS)
+    PIC_SANCTIONS_URL       base URL. Screening calls ``GET {url}/search?name=&country=``; list sync calls ``GET {url}/list``
+    PIC_SANCTIONS_API_KEY   sent as ``Authorization: Bearer <key>`` and ``X-API-Key``
+
+    Responses are JSON: a list, or an object with ``results`` / ``matches`` / ``hits`` (search) or ``entries`` / ``results``
+    (list). Each item has ``name`` (or ``caption``) and optionally ``score`` (0..1), ``list``/``dataset`` and ``id``.
+    Items without a score are fuzzy-matched like the local list.
+    """
+
+    def __init__(self, name: str, url: str, api_key: Optional[str]):
+        self.name = name[:60]
+        self.url = url.rstrip("/")
+        self.api_key = api_key
+
+    @classmethod
+    def from_env(cls) -> Optional["SanctionsProvider"]:
+        name, url = os.environ.get("PIC_SANCTIONS_PROVIDER"), os.environ.get("PIC_SANCTIONS_URL")
+        return cls(name.strip().upper(), url.strip(), os.environ.get("PIC_SANCTIONS_API_KEY")) if name and url else None
+
+    def _get(self, path: str, params: Optional[dict] = None):
+        import httpx
+        headers = {"accept": "application/json", "user-agent": "AlphaHelion PIC screening"}
+        if self.api_key:
+            headers.update({"authorization": f"Bearer {self.api_key}", "x-api-key": self.api_key})
+        response = httpx.get(f"{self.url}{path}", params=params, headers=headers, timeout=10)
+        return response
+
+    @staticmethod
+    def _items(data, keys: tuple[str, ...]) -> list:
+        if isinstance(data, list):
+            return data
+        for key in keys:
+            if isinstance(data, dict) and isinstance(data.get(key), list):
+                return data[key]
+        return []
+
+    def search(self, legal_name: str, country: Optional[str]) -> list[dict]:
+        response = self._get("/search", {"name": legal_name, "country": country or "IN"})
+        response.raise_for_status()
+        hits = []
+        for item in self._items(response.json(), ("results", "matches", "hits")):
+            name = str(item.get("name") or item.get("caption") or "") if isinstance(item, dict) else str(item)
+            if not name:
+                continue
+            score = item.get("score") if isinstance(item, dict) else None
+            score = float(score) if score is not None else difflib.SequenceMatcher(None, name.lower(), legal_name.lower()).ratio()
+            if score > SANCTIONS_MATCH_RATIO:
+                hits.append({"name": name[:200], "score": round(score, 3), "source": self.name,
+                             "list": (item.get("list") or item.get("dataset")) if isinstance(item, dict) else None,
+                             "ref": str(item.get("id")) if isinstance(item, dict) and item.get("id") is not None else None})
+        return hits
+
+    def download(self) -> list[dict]:
+        try:
+            response = self._get("/list")
+        except Exception as exc:  # noqa: BLE001
+            raise SanctionsUnavailable(f"{type(exc).__name__}: {exc}")
+        if response.status_code in (404, 405, 501):
+            raise SanctionsNoDownload(f"{self.name} offers no list download (HTTP {response.status_code})")
+        if response.status_code >= 400:
+            raise SanctionsUnavailable(f"{self.name} list download failed (HTTP {response.status_code})")
+        entries = []
+        for item in self._items(response.json(), ("entries", "results", "data")):
+            name = str(item.get("name") or item.get("caption") or "") if isinstance(item, dict) else str(item)
+            if name.strip():
+                entries.append({"name": name.strip()[:200],
+                                "id": str(item.get("id")) if isinstance(item, dict) and item.get("id") is not None else None})
+        return entries
+
+
+def sanctions_provider() -> Optional[SanctionsProvider]:
+    return SanctionsProvider.from_env()
+
+
+def sync_sanctions(session: Session) -> dict:
+    """Replace this provider's entries in sanction_entry with its current list (other sources, e.g. SAMPLE-LIST, stay)."""
+    import hashlib
+    from sqlalchemy import delete
+
+    provider = sanctions_provider()
+    if provider is None:
+        raise Problem(409, "SANCTIONS_PROVIDER_NOT_CONFIGURED",
+                      "Set PIC_SANCTIONS_PROVIDER and PIC_SANCTIONS_URL (and PIC_SANCTIONS_API_KEY) to use a licensed list", rule_ref="F8-03")
+    if provider.name == "SAMPLE-LIST":
+        raise Problem(422, "INVALID_PROVIDER", "The provider name must differ from the built-in SAMPLE-LIST", rule_ref="F8-03")
+    try:
+        entries = provider.download()
+    except (SanctionsUnavailable, ValueError) as exc:  # ValueError: the list is not JSON
+        raise Problem(409 if isinstance(exc, SanctionsNoDownload) else 502, "SANCTIONS_LIST_UNAVAILABLE", str(exc), rule_ref="F8-03")
     tenant_id = current_tenant(session)
+    removed = session.execute(delete(SanctionEntry).where(SanctionEntry.source == provider.name)).rowcount
+    unique = {e["name"].lower(): e for e in entries}
+    for entry in unique.values():
+        session.add(SanctionEntry(tenant_id=tenant_id, name=entry["name"], source=provider.name,
+                                  identifier_hash=hashlib.sha256(entry["id"].encode()).hexdigest() if entry["id"] else None,
+                                  created_by=principal(session).user_id))
+    session.flush()
+    kept = session.execute(select(SanctionEntry.source).where(SanctionEntry.source != provider.name)).scalars().all()
+    result = {"provider": provider.name, "loaded": len(unique), "replaced": removed, "otherSourcesKept": sorted(set(kept)),
+              "syncedAt": clock.now().isoformat()}
+    audit.record(session, "SANCTIONS_LIST", uuid.uuid5(uuid.NAMESPACE_URL, f"pic-sanctions:{provider.name}"), "SANCTIONS_SYNCED",
+                 object_ref=provider.name, after=result)
+    return result
+
+
+# ---------------------------------------------------------------- F8-03 screening
+def screen(session: Session, supplier: Supplier, record_step: bool = True) -> dict:
+    """F8-03 duplicate (GSTIN blind index, similar name) and sanctions screening. ``record_step`` is False when
+    screening re-runs after a master change, so the completed onboarding instance is not touched."""
     duplicates = []
     for other in session.execute(select(Supplier).where(Supplier.id != supplier.id)).scalars():
         if other.gstin_hash and other.gstin_hash == supplier.gstin_hash:
@@ -104,11 +226,22 @@ def screen(session: Session, supplier: Supplier) -> dict:
         elif difflib.SequenceMatcher(None, other.legal_name.lower(), supplier.legal_name.lower()).ratio() > 0.9:
             duplicates.append({"code": other.code, "reason": "similar legal name"})
     sanctions = [s.source for s in session.execute(select(SanctionEntry)).scalars()
-                 if difflib.SequenceMatcher(None, s.name.lower(), supplier.legal_name.lower()).ratio() > 0.88]
+                 if difflib.SequenceMatcher(None, s.name.lower(), supplier.legal_name.lower()).ratio() > SANCTIONS_MATCH_RATIO]
+    provider = sanctions_provider()
+    provider_hits, provider_error = [], None
+    if provider is not None:
+        try:
+            provider_hits = provider.search(supplier.legal_name, supplier.country)
+        except Exception as exc:  # noqa: BLE001 - a feed outage must not block registration; screening goes to REVIEW
+            provider_error = f"{provider.name}: {type(exc).__name__}: {exc}"[:300]
+        if provider_hits and provider.name not in sanctions:
+            sanctions.append(provider.name)
     result = {"duplicates": duplicates, "sanctionsHits": sanctions, "screenedAt": clock.now().isoformat(),
-              "outcome": "BLOCKED" if sanctions else ("REVIEW" if duplicates else "CLEAR")}
+              "outcome": "BLOCKED" if sanctions else ("REVIEW" if duplicates or provider_error else "CLEAR")}
+    if provider is not None:
+        result.update(provider=provider.name, providerHits=provider_hits, providerError=provider_error)
     supplier.screening = result
-    instance = _instance(session, supplier)
+    instance = _instance(session, supplier) if record_step else None
     if instance:
         workflow.step(session, instance, "F8-03", outcome=f"screening {result['outcome']}")
     audit.record(session, "SUPPLIER", supplier.id, "SCREENED", object_ref=supplier.code, after=result)
@@ -196,7 +329,7 @@ def _bank_change_decided(session: Session, task: Task, outcome: str) -> None:
     for cert in session.execute(select(Certificate).where(Certificate.supplier_id == supplier.id)).scalars():
         cert.verified = True
     if supplier.status in ("ACTIVE",):
-        integration.enqueue(session, target_system="SAP_S4", message_type="SUPPLIER_MASTER",
+        integration.enqueue(session, target_system=integration.target_system(session), message_type="SUPPLIER_MASTER",
                             idempotency_key=f"{supplier.code}|BANK|{change.number}", object_type="SUPPLIER",
                             object_id=supplier.id, object_ref=supplier.code,
                             payload={"supplier": supplier.code, "bank": account.account_masked, "ifsc": account.ifsc})
@@ -280,7 +413,7 @@ def decide_qualification(session: Session, qualification: Qualification, decisio
     if decision != "REJECTED" and supplier.status == "REGISTERED":
         supplier.status = "ACTIVE"
         message = integration.enqueue(
-            session, target_system="SAP_S4", message_type="SUPPLIER_MASTER", idempotency_key=f"{supplier.code}|CREATE",
+            session, target_system=integration.target_system(session), message_type="SUPPLIER_MASTER", idempotency_key=f"{supplier.code}|CREATE",
             object_type="SUPPLIER", object_id=supplier.id, object_ref=supplier.code,
             payload={"supplier": supplier.code, "name": supplier.legal_name, "gstin": supplier.gstin_masked,
                      "bank": bank.account_masked, "ifsc": bank.ifsc, "terms": supplier.payment_terms},
@@ -289,7 +422,7 @@ def decide_qualification(session: Session, qualification: Qualification, decisio
         if instance:
             workflow.step(session, instance, "F8-07", outcome=f"supplier master created; ERP vendor {message.erp_doc_no}")
     for cert in certs.values():
-        workflow.create_timer(session, "CERTIFICATE_EXPIRY", "CERTIFICATE", cert.id, clock.at_ist(cert.expires_on, 0, 5))
+        workflow.create_timer(session, "CERTIFICATE_EXPIRY", "CERTIFICATE", cert.id, _expiry_due(cert))
     if instance:
         workflow.step(session, instance, "F8-08", outcome="risk & performance monitoring on; certificate expiry timers set")
         workflow.end(session, instance, "F8-09", outcome=status)
@@ -297,13 +430,26 @@ def decide_qualification(session: Session, qualification: Qualification, decisio
             "ruleSetVersion": rule.ref}
 
 
+def _expiry_due(cert: Certificate):
+    """A certificate is valid through its expiry date; it lapses at the start of the next day (IST)."""
+    return clock.at_ist(cert.expires_on + timedelta(days=1), 0, 5)
+
+
 @workflow.on_timer("CERTIFICATE_EXPIRY")
 def _certificate_expired(session: Session, timer) -> None:
     cert = session.get(Certificate, timer.object_id)
-    if cert is None or cert.expires_on >= clock.today():
+    if cert is None or cert.status == "EXPIRED":
+        return
+    if cert.expires_on >= clock.today():
+        # Timers armed on the expiry date itself (earlier releases) fire while the certificate is still valid: re-arm.
+        if timer.due_at < _expiry_due(cert):
+            workflow.create_timer(session, "CERTIFICATE_EXPIRY", "CERTIFICATE", cert.id, _expiry_due(cert), timer.payload)
         return
     cert.status = "EXPIRED"
     supplier = session.get(Supplier, cert.supplier_id)
+    audit.record(session, "SUPPLIER", supplier.id, "CERTIFICATE_EXPIRED", object_ref=supplier.code,
+                 after={"certificate": cert.type, "number": cert.number, "expiresOn": cert.expires_on.isoformat(),
+                        "mandatoryFor": list(cert.mandatory_for or [])})
     for row in session.execute(select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars():
         if row.category in (cert.mandatory_for or []) and row.status in ACTIVE_CATEGORY_STATUSES:
             _set_category_status(session, supplier, row.category, "CONDITIONAL", f"mandatory certificate {cert.type} expired")

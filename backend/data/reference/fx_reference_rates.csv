@@ -1,0 +1,11 @@
+# FX reference rates (INR per `units` of from_ccy) from Financial Benchmarks India Ltd (FBIL), as published on the RBI homepage
+# (https://www.rbi.org.in/, block: Reference Rate ... (As at 1.00pm of October 28, 2026) (Source : FBIL)).
+# Only rates actually read on the official page are listed. Historical / month-end rates (FBIL archive) could not be read
+# (reCAPTCHA / access controls): supply them from FBIL or a licensed feed by appending rows with the same columns.
+# Loaded as fx_rate (rate per 1 unit of from_ccy, valid from `date`) through the FX administration service.
+# As of: 2026-10-28.
+from_ccy,to_ccy,rate,units,date,source,published_by,url
+USD,INR,95.2278,1,2026-10-28,FBIL,"Reserve Bank of India homepage (FBIL reference rate, as at 1.00 pm IST)",https://www.rbi.org.in/
+EUR,INR,105.8641,1,2026-10-28,FBIL,"Reserve Bank of India homepage (FBIL reference rate, as at 1.00 pm IST)",https://www.rbi.org.in/
+GBP,INR,126.4657,1,2026-10-28,FBIL,"Reserve Bank of India homepage (FBIL reference rate, as at 1.00 pm IST)",https://www.rbi.org.in/
+JPY,INR,60.3100,100,2026-10-28,FBIL,"Reserve Bank of India homepage (FBIL reference rate, as at 1.00 pm IST)",https://www.rbi.org.in/

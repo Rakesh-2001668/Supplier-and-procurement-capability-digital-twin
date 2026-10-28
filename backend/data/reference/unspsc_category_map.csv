@@ -1,0 +1,64 @@
+# UNSPSC segment / family (and class where clearly right) for the PIC category taxonomies. NOT the licensed UNSPSC code set:
+# only the codes needed for this mapping. Codes and titles read from the UN Global Marketplace UNSPSC browser
+# (https://www.ungm.org/Public/UNSPSC, read-only tree endpoints /UNSPSC/Children/{node}); titles exactly as UNGM writes them.
+# UNSPSC version: not shown by UNGM; recorded as UNGM browser as of 2026-10-28. Verify against the licensed set before
+# relying on class-level codes. The first row of a category is its primary mapping. INTERCOMPANY has no UNSPSC code.
+# Not mapped (no verifiable UNGM code): classes for castings, forgings, machinings, seals; heat-treatment services (family only).
+# As of: 2026-10-28.
+category,segment,segment_title,family,family_title,class,class_title,source_url
+ALU-DIECAST,31000000,Manufacturing Components and Supplies,31100000,Castings and casting assemblies,,,https://www.ungm.org/UNSPSC/Children/102648?isReadOnly=true
+FORGINGS,31000000,Manufacturing Components and Supplies,31130000,Forgings,,,https://www.ungm.org/UNSPSC/Children/102648?isReadOnly=true
+STEEL-FORGINGS,31000000,Manufacturing Components and Supplies,31130000,Forgings,,,https://www.ungm.org/UNSPSC/Children/102648?isReadOnly=true
+MACHINING,31000000,Manufacturing Components and Supplies,31390000,Machinings,,,https://www.ungm.org/UNSPSC/Children/102648?isReadOnly=true
+MACHINING,73000000,Industrial Production and Manufacturing Services,73180000,Machining and processing services,,,https://www.ungm.org/UNSPSC/Children/107333?isReadOnly=true
+RAW-MATERIALS,11000000,Mineral and Textile and Inedible Plant and Animal Materials,11170000,Alloys,11172000,Aluminum based alloys,https://www.ungm.org/UNSPSC/Children/144034?isReadOnly=true
+RAW-MATERIALS,30000000,Structures and Building and Construction and Manufacturing Components and Supplies,30260000,Structural materials,,,https://www.ungm.org/UNSPSC/Children/102047?isReadOnly=true
+FASTENERS,31000000,Manufacturing Components and Supplies,31160000,Hardware,,,https://www.ungm.org/UNSPSC/Children/102648?isReadOnly=true
+ELECTRONICS,39000000,Electrical Systems and Lighting and Components and Accessories and Supplies,39120000,Electrical equipment and components and supplies,39121400,Electrical lugs plugs and connectors,https://www.ungm.org/UNSPSC/Children/102550?isReadOnly=true
+ELECTRONICS,41000000,Laboratory and Measuring and Observing and Testing Equipment,41110000,Measuring and observing and testing instruments,,,https://www.ungm.org/UNSPSC/Children/103631?isReadOnly=true
+ELECTRONICS,26000000,Power Generation and Distribution Machinery and Accessories,26120000,Electrical wire and cable and harness,26121700,Wiring harness,https://www.ungm.org/UNSPSC/Children/101803?isReadOnly=true
+ELECTRONICS,32000000,Electronic Components and Supplies,32100000,Printed circuits and integrated circuits and microassemblies,,,https://www.ungm.org/UNSPSC/Children/103311?isReadOnly=true
+RUBBER-SEALS,31000000,Manufacturing Components and Supplies,31400000,Gaskets,31401500,Molded gaskets,https://www.ungm.org/UNSPSC/Children/173989?isReadOnly=true
+RUBBER-SEALS,31000000,Manufacturing Components and Supplies,31410000,Seals,,,https://www.ungm.org/UNSPSC/Children/102648?isReadOnly=true
+PACKAGING,24000000,Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies,24120000,Packaging materials,24121500,Packaging boxes and bags and pouches,https://www.ungm.org/UNSPSC/Children/101377?isReadOnly=true
+PACKAGING,24000000,Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies,24110000,Containers and storage,24112700,Pallets,https://www.ungm.org/UNSPSC/Children/101323?isReadOnly=true
+PACKAGING,24000000,Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies,24110000,Containers and storage,24112900,Crates,https://www.ungm.org/UNSPSC/Children/101323?isReadOnly=true
+PACKAGING,24000000,Material Handling and Conditioning and Storage Machinery and their Accessories and Supplies,24140000,Packing supplies,24141500,Securing and protecting supplies,https://www.ungm.org/UNSPSC/Children/107522?isReadOnly=true
+TOOLING,23000000,Industrial Manufacturing and Processing Machinery and Accessories,23160000,Foundry machines and equipment and supplies,23161700,Foundry dies and tooling,https://www.ungm.org/UNSPSC/Children/101169?isReadOnly=true
+TOOLING,23000000,Industrial Manufacturing and Processing Machinery and Accessories,23250000,Metal forming machinery and accessories,23251800,Metal forming dies and tooling,https://www.ungm.org/UNSPSC/Children/144652?isReadOnly=true
+TOOLING-SERVICES,73000000,Industrial Production and Manufacturing Services,73150000,Manufacturing support services,73152100,Manufacturing equipment maintenance and repair services,https://www.ungm.org/UNSPSC/Children/107339?isReadOnly=true
+LOGISTICS,78000000,Transportation and Storage and Mail Services,78100000,Mail and cargo transport,78101800,Road cargo transport,https://www.ungm.org/UNSPSC/Children/107358?isReadOnly=true
+IT-SERVICES,81000000,Engineering and Research and Technology Based Services,81110000,Computer services,,,https://www.ungm.org/UNSPSC/Children/107371?isReadOnly=true
+IT-SERVICES,81000000,Engineering and Research and Technology Based Services,81160000,Information Technology Service Delivery,81162000,Cloud-based software as a service,https://www.ungm.org/UNSPSC/Children/145204?isReadOnly=true
+SOFTWARE-LICENCES,43000000,Information Technology Broadcasting and Telecommunications,43230000,Software,,,https://www.ungm.org/UNSPSC/Children/104789?isReadOnly=true
+IT-HARDWARE,43000000,Information Technology Broadcasting and Telecommunications,43210000,Computer Equipment and Accessories,43211500,Computers,https://www.ungm.org/UNSPSC/Children/117365?isReadOnly=true
+IT-HARDWARE,43000000,Information Technology Broadcasting and Telecommunications,43210000,Computer Equipment and Accessories,43211900,Computer displays,https://www.ungm.org/UNSPSC/Children/117365?isReadOnly=true
+FACILITIES,76000000,Industrial Cleaning Services,76110000,Cleaning and janitorial services,76111500,General building and office cleaning and maintenance services,https://www.ungm.org/UNSPSC/Children/107350?isReadOnly=true
+FACILITIES,92000000,National Defense and Public Order and Security and Safety Services,92120000,Security and personal safety,92121500,Guard services,https://www.ungm.org/UNSPSC/Children/107432?isReadOnly=true
+FACILITIES,90000000,Travel and Food and Lodging and Entertainment Services,90100000,Restaurants and catering,90101700,Cafeteria services,https://www.ungm.org/UNSPSC/Children/107420?isReadOnly=true
+PROF-SERVICES,80000000,Management and Business Professionals and Administrative Services,80100000,Management advisory services,80101500,Business and corporate management consultation services,https://www.ungm.org/UNSPSC/Children/107364?isReadOnly=true
+PROF-SERVICES,86000000,Education and Training Services,86100000,Vocational training,,,https://www.ungm.org/UNSPSC/Children/107413?isReadOnly=true
+MRO,31000000,Manufacturing Components and Supplies,31170000,Bearings and bushings and wheels and gears,31171500,Bearings,https://www.ungm.org/UNSPSC/Children/103150?isReadOnly=true
+MRO,23000000,Industrial Manufacturing and Processing Machinery and Accessories,23240000,Metal cutting machinery and accessories,23241600,Metal cutting tools,https://www.ungm.org/UNSPSC/Children/144651?isReadOnly=true
+MRO,31000000,Manufacturing Components and Supplies,31190000,Grinding and polishing and smoothing materials,31191500,Abrasives and abrasive media,https://www.ungm.org/UNSPSC/Children/103195?isReadOnly=true
+MRO-LUBRICANTS,15000000,Fuels and Fuel Additives and Lubricants and Anti corrosive Materials,15120000,Lubricants and oils and greases and anti corrosives,,,https://www.ungm.org/UNSPSC/Children/100787?isReadOnly=true
+MRO-CHEMICALS,12000000,Chemicals including Bio Chemicals and Gas Materials,12350000,Compounds and mixtures,,,https://www.ungm.org/UNSPSC/Children/100415?isReadOnly=true
+MRO-CHEMICALS,47000000,Cleaning Equipment and Supplies,47130000,Cleaning and janitorial supplies,47131800,Cleaning and disinfecting solutions,https://www.ungm.org/UNSPSC/Children/105564?isReadOnly=true
+CAPEX-MACHINERY,23000000,Industrial Manufacturing and Processing Machinery and Accessories,23240000,Metal cutting machinery and accessories,,,https://www.ungm.org/UNSPSC/Children/101020?isReadOnly=true
+CAPEX-MACHINERY,23000000,Industrial Manufacturing and Processing Machinery and Accessories,23250000,Metal forming machinery and accessories,,,https://www.ungm.org/UNSPSC/Children/101020?isReadOnly=true
+CAPEX-MACHINERY,27000000,Tools and General Machinery,27120000,Hydraulic machinery and equipment,27121500,Hydraulic presses,https://www.ungm.org/UNSPSC/Children/110940?isReadOnly=true
+CAPEX-MACHINERY,40000000,Distribution and Conditioning Systems and Equipment and Components,40150000,Industrial pumps and compressors,40151600,Compressors,https://www.ungm.org/UNSPSC/Children/103570?isReadOnly=true
+CAPEX-MACHINERY,23000000,Industrial Manufacturing and Processing Machinery and Accessories,23150000,Industrial process machinery and equipment and supplies,23153200,Robotics,https://www.ungm.org/UNSPSC/Children/101120?isReadOnly=true
+HEAT-TREATMENT,73000000,Industrial Production and Manufacturing Services,73180000,Machining and processing services,,,https://www.ungm.org/UNSPSC/Children/107333?isReadOnly=true
+CIVIL-SUBCONTRACT,72000000,Building and Facility Construction and Maintenance Services,72120000,Nonresidential building construction services,,,https://www.ungm.org/UNSPSC/Children/107328?isReadOnly=true
+CIVIL-SUBCONTRACT,72000000,Building and Facility Construction and Maintenance Services,72140000,Heavy construction services,,,https://www.ungm.org/UNSPSC/Children/107328?isReadOnly=true
+CONSTRUCTION-MATERIALS,30000000,Structures and Building and Construction and Manufacturing Components and Supplies,30110000,Concrete and cement and plaster,,,https://www.ungm.org/UNSPSC/Children/102047?isReadOnly=true
+CONSTRUCTION-MATERIALS,30000000,Structures and Building and Construction and Manufacturing Components and Supplies,30110000,Concrete and cement and plaster,30111900,Concrete reinforcement hardware,https://www.ungm.org/UNSPSC/Children/102359?isReadOnly=true
+CONSTRUCTION-MATERIALS,30000000,Structures and Building and Construction and Manufacturing Components and Supplies,30130000,Structural building products,30131600,Bricks,https://www.ungm.org/UNSPSC/Children/102383?isReadOnly=true
+OFFICE-SAFETY,44000000,Office Equipment and Accessories and Supplies,44120000,Office supplies,,,https://www.ungm.org/UNSPSC/Children/105039?isReadOnly=true
+OFFICE-SAFETY,46000000,Defense and Law Enforcement and Security and Safety Equipment and Supplies,46180000,Personal safety and protection,,,https://www.ungm.org/UNSPSC/Children/105325?isReadOnly=true
+MEDICAL-EQUIPMENT,42000000,Medical Equipment and Accessories and Supplies,,,,,https://www.ungm.org/UNSPSC/Children/104?isReadOnly=true
+MEDICAL-CONSUMABLES,42000000,Medical Equipment and Accessories and Supplies,,,,,https://www.ungm.org/UNSPSC/Children/104?isReadOnly=true
+ORTHO-IMPLANTS,42000000,Medical Equipment and Accessories and Supplies,42320000,Orthopedic surgical implants,,,https://www.ungm.org/UNSPSC/Children/104269?isReadOnly=true
+PHARMACEUTICALS,51000000,Drugs and Pharmaceutical Products,,,,,https://www.ungm.org/UNSPSC/Children/104?isReadOnly=true
+INTERCOMPANY,,,,,,,no UNSPSC

@@ -1,0 +1,39 @@
+# Non-secret runtime configuration. Secrets (DATABASE_URL, PIC_JWT_SECRET, PIC_FIELD_KEY, PIC_METRICS_TOKEN) come
+# from the Secret "pic-secrets", which External Secrets Operator syncs from GCP Secret Manager (external-secret.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pic-config
+data:
+  PIC_ENV: "production"
+  PIC_ENABLE_LEGACY_DEMO: "false"
+  PIC_LOG_FORMAT: "json"
+  PIC_LOG_LEVEL: "INFO"
+  # Browsers never call the API directly (all calls go through the web BFF), so no CORS origin is allowed.
+  PIC_CORS_ORIGINS: ""
+  # Number of proxies in front of the API that append to X-Forwarded-For. Production chain is
+  #   client -> Google Cloud Load Balancer (GFE) -> pic-web BFF -> pic-api   => 2 hops.
+  # The API takes the client IP that many entries from the right. Verify against real traffic after go-live;
+  # a value that is too high lets clients spoof their IP via X-Forwarded-For, too low rate-limits the LB/BFF.
+  PIC_TRUSTED_PROXY_HOPS: "2"
+  # Application rate limits are in-memory PER REPLICA (effective limit = value x number of API pods).
+  # The global per-IP limit is enforced at the edge by Cloud Armor (terraform: google_compute_security_policy).
+  PIC_RATE_LIMIT_PER_IP: "600"
+  PIC_RATE_LIMIT_PER_USER: "1200"
+  PIC_RATE_LIMIT_WINDOW_SECONDS: "60"
+  PIC_MAX_BODY_BYTES: "10485760"
+  PIC_OTEL_ENABLED: "false"
+  # Optional OTLP collector endpoint. Left unset on purpose (an empty string is not "unset" for OTel SDKs).
+  # When enabling tracing set PIC_OTEL_ENABLED "true" and uncomment, e.g.:
+  # OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability.svc:4318"
+  # An in-cluster collector on 4317/4318 also needs an egress rule in networkpolicies.yaml (443 is already open).
+  # OTEL_SERVICE_NAME is set per Deployment (pic-api / pic-worker).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pic-web-config
+data:
+  # Server-side only: the Next.js BFF proxies /api/pic/* to the internal API Service.
+  PIC_API_URL: "http://pic-api:8080"
+  PIC_ENV: "production"

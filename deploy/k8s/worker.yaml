@@ -1,0 +1,115 @@
+# pic-worker: background loop (timers, outbox, ERP connector retries). Same image as the API, no ports.
+#
+# EXACTLY ONE replica with strategy Recreate: running two workers concurrently (including the overlap a
+# RollingUpdate would create) is NOT yet proven safe for timers and ERP retries (possible double-fire /
+# duplicate ERP postings). Do not add an HPA, raise replicas, or switch to RollingUpdate until the worker has
+# leader election or row-level claiming verified under concurrency.
+#
+# No PodDisruptionBudget on purpose: minAvailable 1 on a single replica would block node drains / Autopilot
+# upgrades. A drain causes a short worker pause; the loop resumes from the database on restart.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pic-worker
+  labels:
+    app.kubernetes.io/name: pic-worker
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pic-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pic-worker
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: pic-worker
+      automountServiceAccountToken: false
+      # Time to finish the current job after SIGTERM before SIGKILL.
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # Single replica: the constraint only steers placement (and future scale-out) across zones.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-worker
+      containers:
+        - name: worker
+          image: pic-api # same image as the API; rewritten by kustomization.yaml images:
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "app.pic.worker"]
+          envFrom:
+            - configMapRef:
+                name: pic-config
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pic-worker
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: DATABASE_URL
+            - name: PIC_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: PIC_JWT_SECRET
+            - name: PIC_FIELD_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: pic-secrets
+                  key: PIC_FIELD_KEY
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 512Mi
+          # The worker touches /tmp/pic-worker.heartbeat each loop; --check-heartbeat exits non-zero when the
+          # file is missing or older than 60 s. Each probe starts a Python process, hence the generous timeout.
+          startupProbe:
+            exec:
+              command: ["python", "-m", "app.pic.worker", "--check-heartbeat"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 12 # up to ~2 minutes for the first heartbeat
+          livenessProbe:
+            exec:
+              command: ["python", "-m", "app.pic.worker", "--check-heartbeat"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

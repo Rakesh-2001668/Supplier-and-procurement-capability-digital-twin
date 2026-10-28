@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant, current_user, system_tx, tenant_tx
 from app.pic.models import ProcessDefinition, ProcessInstance, ProcessStep, Task, Tenant, Timer
-from app.pic.platform import audit, clock
+from app.pic.platform import audit, clock, outbox
 from app.pic.platform.errors import Problem, not_found
 
 TaskHandler = Callable[[Session, Task, str], None]  # (session, last task, outcome APPROVED|REJECTED|RETURNED)
@@ -198,6 +198,10 @@ def _open_task(session, instance, kind, object_type, object_id, object_ref, role
     create_timer(session, "TASK_SLA", "TASK", task.id, due, {"group": group_key})
     audit.record(session, object_type, object_id, "TASK_CREATED", object_ref=object_ref,
                  after={"task": str(task.id), "role": role, "due": due.isoformat()}, rule_set_version=rule_set_version)
+    # M13 notifications: the consumer resolves who can work the task (role, scope, four-eyes exclusions).
+    outbox.emit(session, "task.assigned", "TASK", task.id, object_ref,
+                {"taskId": str(task.id), "kind": kind, "name": task.name, "role": role, "objectType": object_type,
+                 "objectId": str(object_id), "objectRef": object_ref, "due": due.isoformat()})
     return task
 
 
@@ -332,6 +336,10 @@ def _task_sla(session: Session, timer: Timer) -> None:
     audit.record(session, task.object_type, task.object_id, "TASK_ESCALATED", object_ref=task.object_ref,
                  after={"task": str(task.id), "level": task.escalation_level, "role": task.candidate_role},
                  reason="SLA breached: reminder sent and escalated to manager")
+    outbox.emit(session, "task.escalated", "TASK", task.id, task.object_ref,
+                {"taskId": str(task.id), "kind": task.kind, "name": task.name, "role": task.candidate_role, "level": task.escalation_level,
+                 "objectType": task.object_type, "objectId": str(task.object_id), "objectRef": task.object_ref,
+                 "due": task.due_at.isoformat()})
 
 
 def run_due_timers(tenant_id: uuid.UUID, principal) -> int:

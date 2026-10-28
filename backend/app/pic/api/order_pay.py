@@ -1,6 +1,6 @@
 """F5 purchase orders, F6 receiving and quality, F7 invoices and payments."""
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -41,6 +41,7 @@ class PoIn(BaseModel):
     release: Optional[PoRelease] = None
     unitPriceMinor: Optional[int] = None
     deviationReason: Optional[str] = None
+    retentionPct: Optional[Decimal] = Field(default=None, ge=0, le=20)
 
 
 @router.post("/purchase-orders", status_code=201, tags=["F5 Purchase Order"])
@@ -53,7 +54,7 @@ def create_po(body: PoIn, p: Principal = Depends(require("po:create")), key: Opt
         pos = order.create_from_requisition(
             s, requisition=body.source.id, lines=body.source.lines, supplier_code=body.supplierId, contract_ref=body.contractRef,
             release_qty=body.release.qty if body.release else None, need_date=body.release.needDate if body.release else None,
-            unit_price_minor=body.unitPriceMinor, deviation_reason=body.deviationReason)
+            unit_price_minor=body.unitPriceMinor, deviation_reason=body.deviationReason, retention_pct=body.retentionPct)
         result = [{"id": po.number, "version": po.version, "status": po.status,
                    "inherited": {"price": po.inherited.get("price", 0) / 100 if po.inherited.get("price") else None,
                                  "paymentTerms": po.payment_terms, "incoterms": po.incoterms,
@@ -105,6 +106,24 @@ def change_po(ref: str, body: ChangeIn, p: Principal = Depends(require("po:chang
         return order.change_order(s, po, body.changes, body.reason)
 
 
+class PoReasonIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/purchase-orders/{ref}/cancel", tags=["F5 Purchase Order"])
+def cancel_po(ref: str, body: PoReasonIn, p: Principal = Depends(require("po:change"))):
+    """Cancel an order nothing was shipped, received or invoiced against; its requisition quantity is released."""
+    with uow(p) as s:
+        return order.cancel(s, by_ref(s, PurchaseOrder, ref, lock=True), body.reason)
+
+
+@router.post("/purchase-orders/{ref}/close", tags=["F5 Purchase Order"])
+def close_po(ref: str, body: PoReasonIn, p: Principal = Depends(require("po:change"))):
+    """Close an order with nothing left to receive or invoice (INVOICED, or RECEIVED with every accepted quantity invoiced)."""
+    with uow(p) as s:
+        return order.close(s, by_ref(s, PurchaseOrder, ref, lock=True), body.reason)
+
+
 # ---------------------------------------------------------------- F6 receiving
 class AsnLineIn(BaseModel):
     line: int
@@ -118,6 +137,9 @@ class AsnIn(BaseModel):
     ship_date: date
     expected_date: date
     eway_bill_no: Optional[str] = None
+    eway_bill_valid_until: Optional[datetime] = None
+    vehicle_no: Optional[str] = Field(default=None, max_length=15)
+    distance_km: Optional[int] = Field(default=None, gt=0, le=4000)
     documents: list[str] = []
 
 
@@ -126,7 +148,8 @@ def create_asn(body: AsnIn, p: Principal = Depends(require("asn:create"))):
     with uow(p) as s:
         po = by_ref(s, PurchaseOrder, body.po, lock=True)
         asn = receiving.create_asn(s, po, lines=[l.model_dump(mode="json") for l in body.lines], ship_date=body.ship_date,
-                                   expected_date=body.expected_date, eway_bill_no=body.eway_bill_no, documents=body.documents)
+                                   expected_date=body.expected_date, eway_bill_no=body.eway_bill_no, documents=body.documents,
+                                   eway_bill_valid_until=body.eway_bill_valid_until, vehicle_no=body.vehicle_no, distance_km=body.distance_km)
         return views.asn(s, asn)
 
 
@@ -157,13 +180,14 @@ def post_gr(body: GrIn, p: Principal = Depends(require("gr:post")), key: Optiona
         asn = by_ref(s, Asn, body.asn) if body.asn else None
         gr = receiving.post_gr(s, po, lines=[l.model_dump(mode="json") for l in body.lines], asn=asn, delivery_note=body.delivery_note,
                                posting_date=body.posting_date)
-        return idem.store(views.goods_receipt(s, gr), 201)
+        return idem.store({**views.goods_receipt(s, gr), "warnings": receiving.eway_warnings(s, gr)}, 201)
 
 
 @router.get("/goods-receipts/{ref}", tags=["F6 Receiving"])
 def get_gr(ref: str, p: Principal = Depends(require(READ))):
     with uow(p) as s:
-        return views.goods_receipt(s, by_ref(s, GoodsReceipt, ref))
+        gr = by_ref(s, GoodsReceipt, ref)
+        return {**views.goods_receipt(s, gr), "warnings": receiving.eway_warnings(s, gr)}
 
 
 class UsageDecisionIn(BaseModel):
@@ -244,6 +268,7 @@ class InvoiceIn(BaseModel):
     invoice_date: date
     channel: str = Field(pattern="^(PORTAL|PDF_OCR|E_INVOICE|EDI)$")
     irn: Optional[str] = None
+    signed_qr: Optional[str] = Field(default=None, max_length=8000)
     company_code: str = "1000"
     lines: list[InvoiceLineIn]
 
@@ -259,7 +284,7 @@ def capture_invoice(body: InvoiceIn, p: Principal = Depends(require_any("invoice
         if supplier is None:
             raise Problem(422, "SUPPLIER_REQUIRED", "Give the supplier code")
         invoice = payables.capture(s, supplier=supplier, supplier_invoice_no=body.supplier_invoice_no, invoice_date=body.invoice_date,
-                                   channel=body.channel, irn=body.irn, company_code=body.company_code,
+                                   channel=body.channel, irn=body.irn, company_code=body.company_code, signed_qr=body.signed_qr,
                                    lines=[l.model_dump(mode="json", exclude_none=True) for l in body.lines])
         return idem.store(views.invoice(s, invoice), 201)
 
@@ -348,7 +373,130 @@ def payment_run(body: PaymentRunIn, p: Principal = Depends(require("payment:run"
         return idem.store(payables.payment_run(s, body.run_date, body.include_not_due))
 
 
+@router.get("/purchase-orders/{ref}/retention", tags=["F7 Invoice"])
+def retention(ref: str, p: Principal = Depends(require(READ))):
+    """Retention withheld on the order's posted invoices, released so far and outstanding (construction / subcontract orders)."""
+    with uow(p) as s:
+        return payables.retention_position(s, by_ref(s, PurchaseOrder, ref))
+
+
+class RetentionReleaseIn(BaseModel):
+    reference: str = Field(min_length=3, max_length=120)
+    reason: str = Field(min_length=3, max_length=500)
+    amountMinor: Optional[int] = Field(default=None, gt=0)
+    releaseDate: Optional[date] = None
+
+
+@router.post("/purchase-orders/{ref}/retention-release", status_code=201, tags=["F7 Invoice"])
+def release_retention(ref: str, body: RetentionReleaseIn, p: Principal = Depends(require_any("invoice:post", "payment:run"))):
+    """Release retention (all outstanding, or amountMinor): creates a RETENTION AP document that the next payment run pays."""
+    with uow(p) as s:
+        doc = payables.release_retention(s, by_ref(s, PurchaseOrder, ref, lock=True), reference=body.reference, reason=body.reason,
+                                         amount_minor=body.amountMinor, release_date=body.releaseDate)
+        return views.invoice(s, doc)
+
+
 @router.get("/grir", tags=["F7 Invoice"])
 def grir(p: Principal = Depends(require(READ))):
     with uow(p) as s:
         return payables.grir(s)
+
+
+# ---------------------------------------------------------------- P08 special stocks: subcontracting, consignment, lots (BP §22, §23)
+class ComponentIn(BaseModel):
+    material: str
+    qty: Decimal = Field(gt=0)
+    batch: str = ""
+    storage_location: Optional[str] = None
+
+
+class ProvideComponentsIn(BaseModel):
+    line: int
+    components: list[ComponentIn] = []   # empty: provide the full planned quantity
+    storage_location: str = "0001"
+
+
+@router.get("/purchase-orders/{ref}/components", tags=["F6 Receiving"])
+def subcontracting_components(ref: str, p: Principal = Depends(require(READ))):
+    """Planned components per subcontracting line (from the material's subcontracting BOM) and the stock at the subcontractor."""
+    with uow(p) as s:
+        po = by_ref(s, PurchaseOrder, ref)
+        from app.pic.models import Supplier
+        return {"po": po.number, "lines": [{"line": l.line_no, "components": receiving.subcontracting_components(po, l)}
+                                           for l in order.lines_of(s, po) if l.purchase_type == "SUBCONTRACTING"],
+                "atSubcontractor": receiving.subcontractor_stock(s, s.get(Supplier, po.supplier_id))}
+
+
+@router.post("/purchase-orders/{ref}/components", status_code=201, tags=["F6 Receiving"])
+def provide_components(ref: str, body: ProvideComponentsIn, p: Principal = Depends(require("gr:post"))):
+    """Transfer posting 541: provide own components to the subcontractor; the receipt of the finished part consumes them (543)."""
+    with uow(p) as s:
+        po = by_ref(s, PurchaseOrder, ref, lock=True)
+        return receiving.provide_components(s, po, body.line, storage_location=body.storage_location,
+                                            components=[c.model_dump() for c in body.components] or None)
+
+
+class WithdrawalIn(BaseModel):
+    material: str
+    plant: str
+    qty: Decimal = Field(gt=0)
+    usage_ref: str = Field(min_length=3, max_length=60)
+    purpose: str = Field(default="CONSUMPTION", pattern="^(CONSUMPTION|TRANSFER)$")
+    storage_location: str = "0001"
+    batch: Optional[str] = None
+    serials: list[str] = []
+    cost_object: Optional[str] = Field(default=None, pattern="^[A-Z_]+:[A-Za-z0-9-]+$")
+    replenish: bool = False
+
+
+@router.post("/consignment/withdrawals", status_code=201, tags=["F6 Receiving"])
+def withdraw_consignment(body: WithdrawalIn, p: Principal = Depends(require_any("gr:post", "req:create")),
+                         key: Optional[str] = Depends(idempotency_key)):
+    """Withdraw from consignment stock (201K consumption to a cost object or 411K transfer to own stock): creates the liability
+    that self-billing settles; replenish=true raises the replenishment requisition (usage-triggered)."""
+    with uow(p) as s:
+        idem = idempotent(s, "POST /v1/consignment/withdrawals", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(receiving.withdraw_consignment(s, **body.model_dump()), 201)
+
+
+class SettlementIn(BaseModel):
+    supplier: str
+    period_to: date
+    company_code: str = "1000"
+    reference: Optional[str] = Field(default=None, max_length=60)
+
+
+@router.post("/consignment/settlements", status_code=201, tags=["F7 Invoice"])
+def settle_consignment(body: SettlementIn, p: Principal = Depends(require_any("invoice:post", "payment:run")),
+                       key: Optional[str] = Depends(idempotency_key)):
+    """Self-billing (ERS) for everything withdrawn from the supplier's consignment stock up to period_to and not yet settled."""
+    with uow(p) as s:
+        idem = idempotent(s, "POST /v1/consignment/settlements", key, body)
+        if idem.replay:
+            return idem.replay
+        invoice = payables.settle_consignment(s, supplier=body.supplier, period_to=body.period_to, company_code=body.company_code,
+                                              reference=body.reference)
+        return idem.store(views.invoice(s, invoice), 201)
+
+
+@router.get("/lots/{material}/{batch}/trace", tags=["F6 Receiving"])
+def trace_lot(material: str, batch: str, p: Principal = Depends(require(READ))):
+    """Recall traceability: receipts with receiving location, usage (cases / orders, serials), stock on hand, returns, movements."""
+    with uow(p) as s:
+        return receiving.trace_lot(s, material, batch)
+
+
+class RecallIn(BaseModel):
+    notice_ref: str = Field(min_length=3, max_length=60)
+    reason: str = Field(min_length=3, max_length=500)
+    replenish: bool = False
+
+
+@router.post("/lots/{material}/{batch}/recall", tags=["F6 Receiving"])
+def recall_lot(material: str, batch: str, body: RecallIn, p: Principal = Depends(require("quality:decide"))):
+    """Supplier recall: quarantine and return every unit of the lot still on hand; used units stay in the trace for follow-up."""
+    with uow(p) as s:
+        return receiving.recall_lot(s, material=material, batch=batch, notice_ref=body.notice_ref, reason=body.reason,
+                                    replenish=body.replenish)

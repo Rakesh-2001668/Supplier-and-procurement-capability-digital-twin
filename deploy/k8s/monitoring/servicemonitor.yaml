@@ -1,0 +1,35 @@
+# OPTIONAL. Requires prometheus-operator (or kube-prometheus-stack) CRDs, monitoring.coreos.com/v1.
+# Enable by uncommenting "monitoring/servicemonitor.yaml" in ../kustomization.yaml.
+#
+# /metrics on pic-api requires "Authorization: Bearer <PIC_METRICS_TOKEN>". The token is read from the same
+# Secret the API uses (pic-secrets, synced by External Secrets), which must live in the ServiceMonitor's namespace.
+# Your Prometheus must be configured to select ServiceMonitors in namespace "pic" (serviceMonitorNamespaceSelector
+# / serviceMonitorSelector), and networkpolicies.yaml must allow its namespace (default: "monitoring").
+#
+# Google Managed Prometheus (enabled by default on Autopilot) instead uses a PodMonitoring
+# (monitoring.googleapis.com/v1) with endpoints[].authorization { type: Bearer, credentials: { secret: ... } };
+# its collectors run in namespace "gmp-system", which networkpolicies.yaml already allows.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pic-api
+  labels:
+    app.kubernetes.io/name: pic-api
+    # release: kube-prometheus-stack   # PLACEHOLDER: label your Prometheus selects on, if any
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pic-api
+  namespaceSelector:
+    matchNames: ["pic"]
+  endpoints:
+    - port: http
+      path: /metrics
+      scheme: http
+      interval: 30s
+      scrapeTimeout: 10s
+      authorization:
+        type: Bearer
+        credentials:
+          name: pic-secrets
+          key: PIC_METRICS_TOKEN

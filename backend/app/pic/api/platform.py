@@ -13,8 +13,10 @@ from app.pic.models import (
     Agent, AgentRun, AppUser, Contract, GoodsReceipt, IntegrationMessage, Invoice, MaterialRequest, MrpRun, ProcessDefinition,
     ProcessInstance, PurchaseOrder, Requisition, RuleSet, ServiceEntry, SodRule, SodViolation, SourcingEvent, Supplier, Task, Tenant,
 )
-from app.pic.platform import audit, http, integration, workflow
-from app.pic.platform.auth import READ, TASKS, Principal, current_principal, issue_token, require, verify_password
+from app.pic.platform import audit, http, integration, mfa, workflow
+from app.pic.platform.auth import (
+    MFA_CHALLENGE, MFA_ENROLMENT, READ, TASKS, Principal, current_principal, require, token_response, user_challenge, verify_password,
+)
 from app.pic.platform.core import lineage
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
@@ -65,7 +67,14 @@ def token(body: TokenRequest, request: Request):
             http.record_login_failure(request)
             raise Problem(401, "INVALID_CREDENTIALS", "Unknown tenant, email or password")
         http.clear_login_failures(request)
-        return {"access_token": issue_token(user, tenant), "token_type": "bearer", "roles": user.roles, "tenant": tenant.code}
+        # §14 MFA: a confirmed authenticator means a second step; enforced roles without one must enrol first.
+        if mfa.confirmed_factor(s, user.id) is not None:
+            return {"mfaRequired": True, "challenge": user_challenge(MFA_CHALLENGE, user, tenant), "expiresIn": 300,
+                    "methods": ["TOTP"], "tenant": tenant.code}
+        if mfa.required_for(s, user):
+            raise Problem(403, "MFA_ENROLMENT_REQUIRED", "Your role requires multi-factor authentication. Register an authenticator app to continue.",
+                          rule_ref="MFA", enrolmentChallenge=user_challenge(MFA_ENROLMENT, user, tenant, ttl_seconds=900))
+        return token_response(user, tenant)
 
 
 @router.get("/me", tags=["Identity"])

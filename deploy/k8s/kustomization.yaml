@@ -1,0 +1,44 @@
+# PIC production manifests for GKE Autopilot.
+#   Render:  kubectl kustomize deploy/k8s
+#   Apply:   kubectl apply -k deploy/k8s
+# Prerequisite: External Secrets Operator (CRDs external-secrets.io/v1) must already be installed, otherwise the
+# SecretStore / ExternalSecret objects are rejected. See deploy/README.md for the full order of operations.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: pic
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: pic
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - serviceaccounts.yaml
+  - external-secret.yaml
+  - api.yaml
+  - worker.yaml
+  - web.yaml
+  - networkpolicies.yaml
+  - ingress.yaml
+  # Optional, requires prometheus-operator CRDs (monitoring.coreos.com/v1). Uncomment when present:
+  # - monitoring/servicemonitor.yaml
+
+# Image coordinates. The API and the worker share ONE image ("pic-api") so they always roll out in lockstep.
+# Override per release instead of editing the Deployments:
+#   cd deploy/k8s
+#   kustomize edit set image pic-api=ghcr.io/<owner>/pic-api:<git-sha>
+#   kustomize edit set image pic-web=ghcr.io/<owner>/pic-web:<git-sha>
+# Prefer immutable tags (commit SHA) or a digest ("digest: sha256:...") over "latest" in production.
+# To pull from the in-region Artifact Registry remote repository instead of ghcr.io directly, use
+#   newName: asia-south1-docker.pkg.dev/<project-id>/ghcr/<owner>/pic-api   (see terraform output ghcr_mirror_prefix)
+images:
+  - name: pic-api
+    newName: ghcr.io/your-github-owner/pic-api # PLACEHOLDER: lowercase GitHub owner/org
+    newTag: replace-with-git-sha # PLACEHOLDER: tag pushed by .github/workflows/release.yml
+  - name: pic-web
+    newName: ghcr.io/your-github-owner/pic-web # PLACEHOLDER
+    newTag: replace-with-git-sha # PLACEHOLDER

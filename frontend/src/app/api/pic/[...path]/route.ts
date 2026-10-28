@@ -4,8 +4,8 @@ import { apiBase, clientIp, SESSION_COOKIE } from '@/lib/pic/server';
 // Forwards /api/pic/v1/... to the PIC API with the session token attached.
 // Streams the response body so the server-sent event stream (/v1/stream) passes through.
 
-const FORWARD_REQUEST_HEADERS = ['content-type', 'idempotency-key', 'if-match', 'x-request-id', 'accept'];
-const FORWARD_RESPONSE_HEADERS = ['content-type', 'etag', 'x-request-id', 'retry-after', 'cache-control'];
+const FORWARD_REQUEST_HEADERS = ['content-type', 'idempotency-key', 'if-match', 'x-request-id', 'accept', 'traceparent', 'tracestate'];
+const FORWARD_RESPONSE_HEADERS = ['content-type', 'content-disposition', 'etag', 'x-request-id', 'retry-after', 'cache-control', 'traceparent'];
 
 async function forward(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
@@ -29,7 +29,8 @@ async function forward(request: NextRequest, context: { params: Promise<{ path: 
     upstream = await fetch(target, {
       method: request.method,
       headers,
-      body: hasBody ? await request.text() : undefined,
+      // Raw bytes, not text: multipart uploads (invoice scans, ERP CSV imports) must pass through unchanged.
+      body: hasBody ? await request.arrayBuffer() : undefined,
       cache: 'no-store',
       signal: request.signal,
     });

@@ -92,7 +92,7 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def issue_token(user, tenant) -> str:
+def issue_token(user, tenant, amr: Optional[list[str]] = None) -> str:
     settings = get_settings()
     # Token lifetime follows the wall clock even when the business clock is pinned.
     issued = datetime.now(timezone.utc)
@@ -108,8 +108,40 @@ def issue_token(user, tenant) -> str:
         "iat": int(issued.timestamp()),
         "exp": int((issued + timedelta(minutes=settings.jwt_ttl_minutes)).timestamp()),
         "iss": "pic",
+        # Authentication methods used for this session (RFC 8176): pwd, otp, or the identity provider's amr after SSO.
+        "amr": list(amr or ["pwd"]),
     }
     return jwt.encode(claims, settings.jwt_secret, algorithm=ALGORITHM)
+
+
+def token_response(user, tenant, amr: Optional[list[str]] = None) -> dict:
+    return {"access_token": issue_token(user, tenant, amr), "token_type": "bearer", "roles": user.roles, "tenant": tenant.code}
+
+
+# ---------------------------------------------------------------- short-lived signed challenges (MFA, enrolment, OIDC state)
+CHALLENGE_ISSUER = "pic:challenge"
+MFA_CHALLENGE = "mfa-login"
+MFA_ENROLMENT = "mfa-enrol"
+
+
+def issue_challenge(purpose: str, claims: dict, ttl_seconds: int = 300) -> str:
+    """Signed value that is never an access token: a different issuer and audience, so ``principal_from_token`` rejects it."""
+    issued = datetime.now(timezone.utc)
+    body = {**claims, "iss": CHALLENGE_ISSUER, "aud": purpose, "jti": uuid.uuid4().hex,
+            "iat": int(issued.timestamp()), "exp": int((issued + timedelta(seconds=ttl_seconds)).timestamp())}
+    return jwt.encode(body, get_settings().jwt_secret, algorithm=ALGORITHM)
+
+
+def read_challenge(token: str, purpose: str, code: str = "CHALLENGE_INVALID") -> dict:
+    try:
+        return jwt.decode(token or "", get_settings().jwt_secret, algorithms=[ALGORITHM], issuer=CHALLENGE_ISSUER, audience=purpose)
+    except JWTError as exc:
+        raise Problem(401, code, f"The sign-in step has expired or is not valid ({exc}); sign in again")
+
+
+def user_challenge(purpose: str, user, tenant, ttl_seconds: int = 300) -> str:
+    return issue_challenge(purpose, {"sub": str(user.id), "tid": str(tenant.id), "tcode": tenant.code, "email": user.email,
+                                     "name": user.full_name}, ttl_seconds)
 
 
 def principal_from_token(token: str) -> Principal:
@@ -135,6 +167,24 @@ def current_principal(authorization: Optional[str] = Header(default=None)) -> Pr
     if not authorization or not authorization.lower().startswith("bearer "):
         raise Problem(401, "UNAUTHENTICATED", "Send 'Authorization: Bearer <token>' from POST /v1/auth/token")
     return principal_from_token(authorization.split(" ", 1)[1].strip())
+
+
+def enrolment_principal(authorization: Optional[str] = Header(default=None)) -> Principal:
+    """Accepts a normal access token, or the enrolment challenge returned with MFA_ENROLMENT_REQUIRED.
+    A challenge principal has no roles or scopes, so it can only call the MFA enrolment endpoints."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise Problem(401, "UNAUTHENTICATED", "Send 'Authorization: Bearer <token>' from POST /v1/auth/token")
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        claims = jwt.get_unverified_claims(token)
+    except JWTError:
+        claims = {}
+    if claims.get("iss") != CHALLENGE_ISSUER:
+        return principal_from_token(token)
+    claims = read_challenge(token, MFA_ENROLMENT)
+    return Principal(user_id=uuid.UUID(claims["sub"]), tenant_id=uuid.UUID(claims["tid"]), tenant_code=claims.get("tcode", ""),
+                     email=claims.get("email", ""), name=claims.get("name", ""), roles=[], scopes=set(),
+                     attributes={"mfa_enrolment": True})
 
 
 def require(*scopes: str):

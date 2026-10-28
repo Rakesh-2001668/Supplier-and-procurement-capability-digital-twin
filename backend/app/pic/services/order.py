@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
 from app.pic.models import (
-    Contract, ContractLine, Material, PoConfirmation, PoLine, PoVersion, PrLine, PurchaseOrder, Requisition, Supplier, Task,
+    CatalogueItem, Contract, ContractLine, Material, PoConfirmation, PoLine, PoScheduleLine, PoVersion, PrLine, PurchaseOrder, Requisition, Supplier, Task,
 )
 from app.pic.platform import agents, audit, clock, integration, outbox, rules, sod, workflow
 from app.pic.platform.auth import agent_principal
@@ -20,6 +20,7 @@ from app.pic.platform.serialize import jsonable, row
 from app.pic.services import requisition as req_svc
 from app.pic.services import source
 from app.pic.services import supplier as supplier_svc
+from app.pic.services import transmission
 from app.pic.services.common import by_ref, category_status, principal, require_supplier_user, supplier_by_code
 
 PROCESS = "pic.po"
@@ -41,10 +42,19 @@ SM = StateMachine("PURCHASE_ORDER", {
     ("PARTIALLY_RECEIVED", "receive"): "RECEIVED",
     ("RECEIVED", "invoice"): "INVOICED",
     ("PARTIALLY_RECEIVED", "invoice"): "PARTIALLY_RECEIVED",
+    ("CONFIRMED", "invoice"): "INVOICED",  # receipt-less expense orders (P08): 2-way matched, no goods receipt
     ("INVOICED", "close"): "CLOSED",
     ("DRAFT", "cancel"): "CANCELLED",
     ("RELEASED", "cancel"): "CANCELLED",
     ("TRANSMITTED", "cancel"): "CANCELLED",
+    # A reversed goods receipt (movement 102) re-opens the order for the quantity taken back.
+    ("RECEIVED", "unreceive_partially"): "PARTIALLY_RECEIVED",
+    ("RECEIVED", "unreceive"): "CONFIRMED",
+    ("PARTIALLY_RECEIVED", "unreceive"): "CONFIRMED",
+    ("RECEIVED", "unreceive_unconfirmed"): "TRANSMITTED",
+    ("PARTIALLY_RECEIVED", "unreceive_unconfirmed"): "TRANSMITTED",
+    # Closing a fully received order with nothing left to invoice (e.g. a lot rejected in full and returned).
+    ("RECEIVED", "close"): "CLOSED",
 })
 TYPE_RANK = {"MRP_RUN": 0, "PLANNED_ORDER": 1, "REQUISITION": 2, "SOURCING_EVENT": 3, "CONTRACT": 4}
 
@@ -67,7 +77,7 @@ def lineage_refs(session: Session, po: PurchaseOrder) -> list[str]:
 def create_from_requisition(session: Session, *, requisition: str, lines: list[int], supplier_code: Optional[str] = None,
                             contract_ref: Optional[str] = None, release_qty: Optional[Decimal] = None,
                             need_date: Optional[date] = None, unit_price_minor: Optional[int] = None,
-                            deviation_reason: Optional[str] = None) -> list[PurchaseOrder]:
+                            deviation_reason: Optional[str] = None, retention_pct: Optional[Decimal] = None) -> list[PurchaseOrder]:
     pr = by_ref(session, Requisition, requisition)
     if pr.status not in ("APPROVED", "PARTIALLY_ORDERED"):
         raise rule_violation(f"{pr.number} is {pr.status}; only approved requisitions can be ordered", "P07")
@@ -118,7 +128,51 @@ def create_from_requisition(session: Session, *, requisition: str, lines: list[i
     pos = []
     for supplier_id, items in groups.items():
         pos.append(_create_po(session, pr, supplier_id, items, need_date, unit_price_minor, deviation_reason, determinations))
+    _apply_retention(session, pos, retention_pct)
     return pos
+
+
+def _apply_retention(session: Session, pos: list[PurchaseOrder], retention_pct: Optional[Decimal]) -> None:
+    """Retention withheld from every invoice on the order until released (construction / subcontract orders, BP §23).
+    Explicit percentage, or the tenant's PROJECT-CONTROLS retentionPct for works orders: service lines assigned to a WBS
+    element (material supplies to the project carry no retention unless the buyer sets it)."""
+    source_ref = "explicit"
+    if retention_pct is None:
+        try:
+            rule = rules.resolve(session, "PROJECT-CONTROLS")
+        except Problem:
+            return
+        if not rule.body.get("retentionPct"):
+            return
+        retention_pct, source_ref = D(rule.body["retentionPct"]), rule.ref
+    pct = D(retention_pct)
+    if pct < 0 or pct > 20:
+        raise rule_violation("Retention must be between 0% and 20% of the invoiced value", "RETENTION")
+    for po in pos:
+        if source_ref != "explicit" and not any(l.account_assignment_type == "WBS" and l.purchase_type == "SERVICE"
+                                                for l in lines_of(session, po)):
+            continue
+        po.retention_pct = pct
+        audit.record(session, "PURCHASE_ORDER", po.id, "RETENTION_SET", object_ref=po.number,
+                     after={"retentionPct": jsonable(pct), "source": source_ref})
+
+
+def subcontracting_bom(session: Session, material: Optional[Material], qty: Decimal) -> list[dict]:
+    """P08 subcontracting: the components the buyer provides for ``qty`` finished parts, from the finished material's
+    subcontracting BOM (material attribute ``subcontractingBom`` = [{"material": number, "qtyPer": "1"}])."""
+    bom = ((material.attributes or {}).get("subcontractingBom") if material is not None else None) or []
+    if not bom:
+        raise rule_violation(f"{material.number if material else 'This line'}: subcontracting needs a component list "
+                             "(subcontractingBom on the material master)", "P08")
+    out = []
+    for entry in bom:
+        component = session.execute(select(Material).where(Material.number == entry["material"])).scalar_one_or_none()
+        if component is None:
+            raise rule_violation(f"Subcontracting component {entry['material']} of {material.number} is not a material master", "P08")
+        per = D(entry.get("qtyPer", 1))
+        out.append({"material": component.number, "materialId": str(component.id), "description": component.description,
+                    "qtyPer": jsonable(per), "qty": jsonable(per * D(qty)), "uom": component.base_uom})
+    return out
 
 
 def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items, need_date, price_override, deviation_reason,
@@ -144,8 +198,11 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
     sod.record(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
     total = 0
     overrides = []
+    components: dict[str, list[dict]] = {}  # P08: components provided to the subcontractor, per subcontracting PO line
     for index, (pr_line, allocation) in enumerate(items, start=1):
         material = session.get(Material, pr_line.material_id) if pr_line.material_id else None
+        # Catalogue and punch-out lines carry the supplier's HSN/SAC and GST rate from the catalogue item (no material master).
+        catalogue_item = session.get(CatalogueItem, pr_line.catalogue_item_id) if (material is None and pr_line.catalogue_item_id) else None
         flags = matrix.body[pr_line.purchase_type]
         inherited_price = allocation.unit_price_minor or pr_line.price_est_minor
         price = price_override or inherited_price
@@ -163,7 +220,8 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
             tenant_id=po.tenant_id, po_id=po.id, line_no=index * 10, item_type=pr_line.item_type, purchase_type=pr_line.purchase_type,
             material_id=pr_line.material_id, description=pr_line.description, material_group=pr_line.material_group,
             qty=allocation.qty, uom=pr_line.uom, unit_price_minor=price, net_minor=net,
-            gst_rate=material.gst_rate if material else D(18), hsn_code=material.hsn_code if material else None,
+            gst_rate=material.gst_rate if material else (D(catalogue_item.gst_rate) if catalogue_item and catalogue_item.gst_rate is not None else D(18)),
+            hsn_code=material.hsn_code if material else (catalogue_item.hsn_code if catalogue_item else None),
             need_date=need_date or pr_line.need_date, plant=pr_line.plant, storage_location=pr_line.storage_location,
             account_assignment_type=pr_line.account_assignment_type, account_assignment_code=pr_line.account_assignment_code,
             gr_required=bool(flags["gr"]) and not receiptless, ir_required=bool(flags["ir"]), ses_required=bool(flags["ses"]),
@@ -173,6 +231,8 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
             requisition_id=pr.id, pr_line_no=pr_line.line_no, created_by=p.user_id,
         )
         session.add(po_line)
+        if pr_line.purchase_type == "SUBCONTRACTING":
+            components[str(po_line.line_no)] = subcontracting_bom(session, material, allocation.qty)
         total += net
         req_svc.mark_ordered(session, pr, pr_line, allocation.qty)
         link(session, "REQUISITION", pr.id, pr.number, "PURCHASE_ORDER", po.id, po.number, "converted_from",
@@ -184,9 +244,12 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
                  from_line=cl.line_no, to_line=po_line.line_no)
     po.total_minor = total
     po.overrides = overrides
+    session.flush()
+    for po_line in lines_of(session, po):
+        _default_schedule(session, po_line)
     po.inherited = {"price": items[0][1].unit_price_minor, "paymentTerms": po.payment_terms, "incoterms": po.incoterms,
                     "tolerance": tolerance, "contract": contract.number if contract else None,
-                    "sourceDetermination": determinations}
+                    "sourceDetermination": determinations, **({"components": components} if components else {})}
     session.flush()
     audit.record(session, "PURCHASE_ORDER", po.id, "CREATED", object_ref=po.number,
                  after={"supplier": supplier.code, "totalMinor": total, "inherited": po.inherited, "overrides": overrides},
@@ -323,10 +386,14 @@ def _release(session: Session, po: PurchaseOrder, ai_ref: Optional[str] = None, 
     transmit(session, po)
 
 
-def transmit(session: Session, po: PurchaseOrder, via: str = "PORTAL") -> None:
+def transmit(session: Session, po: PurchaseOrder, via: Optional[str] = None) -> None:
+    """F5-06: send the order over every channel agreed with the supplier (portal always; EDI and e-mail per order_channel)."""
+    channels = transmission.channels_for(session.get(Supplier, po.supplier_id))
+    via = via or "+".join(channels)
     SM.apply(session, po, "transmit", extra_after={"via": via})
     po.transmitted_via = via
     po.transmitted_at = clock.now()
+    transmission.send(session, po, channels)
     sla_hours = int(rules.resolve(session, "PO-APPROVAL", company_code=po.company_code).body["confirmationSlaHours"])
     po.confirmation_due_at = clock.now() + timedelta(hours=sla_hours)
     workflow.create_timer(session, "PO_CONFIRMATION_SLA", "PURCHASE_ORDER", po.id, po.confirmation_due_at, {"version": po.version})
@@ -340,7 +407,7 @@ def transmit(session: Session, po: PurchaseOrder, via: str = "PORTAL") -> None:
 def _post_po(session: Session, event) -> None:
     po = session.get(PurchaseOrder, event.object_id)
     supplier = session.get(Supplier, po.supplier_id)
-    message = integration.enqueue(session, target_system="SAP_S4", message_type="PURCHASE_ORDER",
+    message = integration.enqueue(session, target_system=integration.target_system(session, po.company_code), message_type="PURCHASE_ORDER",
                                   idempotency_key=f"{po.company_code}|PO|{po.number}|v{po.version}", object_type="PURCHASE_ORDER",
                                   object_id=po.id, object_ref=po.number,
                                   payload={"po": po.number, "version": po.version, "supplier": supplier.code, "companyCode": po.company_code,
@@ -352,11 +419,18 @@ def _post_po(session: Session, event) -> None:
 @integration.on_posted("PURCHASE_ORDER")
 def _po_posted(session: Session, message) -> None:
     po = session.get(PurchaseOrder, message.object_id)
+    if (message.payload or {}).get("action") == "CANCEL":
+        audit.record(session, "PURCHASE_ORDER", po.id, "ERP_CANCELLED", object_ref=po.number,
+                     after={"erpDocument": po.erp_doc_no, "cancellationDocument": message.erp_doc_no})
+        return  # the order keeps its ERP document number; the cancellation is its own ERP document
     po.erp_doc_no = message.erp_doc_no
 
 
 # ---------------------------------------------------------------- supplier confirmation (F5-07/08) and change orders
-def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[list[dict]] = None, note: Optional[str] = None) -> dict:
+def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[list[dict]] = None, note: Optional[str] = None,
+            channel: str = "PORTAL") -> dict:
+    """Supplier order response. A line may confirm dates per schedule line:
+    {"line": 10, "scheduleConfirmations": [{"seq": 1, "confirmedDate": "2026-11-20"}]}; a later date than requested is a change."""
     p = principal(session)
     require_supplier_user(session, po.supplier_id)
     if po.status != "TRANSMITTED":
@@ -366,8 +440,20 @@ def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[li
     proposed = lines or []
     outside = ["supplier rejected the order"] if status.upper() == "REJECTED" else []
     po_lines = {l.line_no: l for l in lines_of(session, po)}
+    confirmed_dates: dict[uuid.UUID, date] = {}
     for change in proposed:
-        line = po_lines[int(change["line"])]
+        line = po_lines.get(int(change["line"]))
+        if line is None:
+            raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {change['line']}")
+        schedule = {sl.seq: sl for sl in schedule_lines(session, po, line)}
+        for entry in change.get("scheduleConfirmations") or []:
+            sl = schedule.get(int(entry["seq"]))
+            if sl is None:
+                raise Problem(422, "UNKNOWN_SCHEDULE_LINE", f"{po.number}/{line.line_no} has no schedule line {entry['seq']}")
+            when = date.fromisoformat(str(entry["confirmedDate"]))
+            confirmed_dates[sl.id] = when
+            if when > sl.delivery_date:
+                outside.append(f"line {line.line_no}/{sl.seq}: later date {when.isoformat()} (requested {sl.delivery_date.isoformat()})")
         if "qty" in change:
             qty = D(change["qty"])
             over, under = D(po.tolerance.get("over_pct", 0)), D(po.tolerance.get("under_pct", 0))
@@ -381,6 +467,7 @@ def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[li
                             status="CHANGE_REQUESTED" if outside else "CONFIRMED", confirmed_by=p.user_id, lines=proposed,
                             note=note, hours_to_confirm=hours, created_by=p.user_id)
     session.add(record)
+    transmission.acknowledge(session, po, channel)
     workflow.step(session, instance, "F5-07", outcome=f"{record.status.lower().replace('_', ' ')} in {hours} h")
     if outside:
         workflow.step(session, instance, "F5-08", outcome="no: " + "; ".join(outside) + " → back to buyer")
@@ -390,6 +477,9 @@ def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[li
         audit.record(session, "PURCHASE_ORDER", po.id, "SUPPLIER_CHANGE_REQUESTED", object_ref=po.number, after={"changes": proposed}, reason=note)
         return {"status": po.status, "confirmation": "CHANGE_REQUESTED", "outsideTolerance": outside}
     SM.apply(session, po, "confirm", extra_after={"hoursToConfirm": str(hours)})
+    for line in po_lines.values():
+        for sl in schedule_lines(session, po, line):
+            sl.confirmed_date = confirmed_dates.get(sl.id, sl.delivery_date)
     outbox.emit(session, "purchase_order.confirmed", "PURCHASE_ORDER", po.id, po.number, {"version": po.version, "hours": str(hours)})
     workflow.step(session, instance, "F5-08", outcome="yes: confirmed as ordered" if not proposed else "yes: changes within tolerance")
     if all(l.ses_required for l in po_lines.values()):
@@ -415,11 +505,17 @@ def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reaso
     if not SM.can(po.status, "change"):
         raise illegal_transition("Purchase order", po.number, po.status, "change")
     lines = {l.line_no: l for l in lines_of(session, po)}
-    snapshot = {"header": row(po), "lines": [row(l) for l in lines.values()]}
+    for change in changes:
+        if int(change["line"]) not in lines:
+            raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {change['line']}")
+    changes = jsonable(changes)
+    snapshot = {"header": row(po), "lines": [row(l) for l in lines.values()],
+                "schedule": [row(sl) for sl in schedule_lines(session, po)]}
     session.add(PoVersion(tenant_id=po.tenant_id, po_id=po.id, version=po.version, snapshot=snapshot, change_reason=reason,
                           changes=changes, created_by=principal(session).user_id))
     for change in changes:
         line = lines[int(change["line"])]
+        old_need = line.need_date
         if "qty" in change:
             line.qty = D(change["qty"])
         if "need_date" in change:
@@ -427,6 +523,19 @@ def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reaso
         if "unit_price" in change:
             line.unit_price_minor = int(D(change["unit_price"]) * 100)
         line.net_minor = line_amount(line.qty, line.unit_price_minor)
+        if change.get("schedule"):
+            _replace_schedule(session, po, line, _parse_schedule(line, change["schedule"]))
+        else:
+            _fit_schedule(session, po, line, old_need)
+        for entry in change.get("scheduleConfirmations") or []:
+            # An accepted supplier proposal moves the requested date of that schedule line to the confirmed one.
+            sl = next((x for x in schedule_lines(session, po, line) if x.seq == int(entry["seq"])), None)
+            if sl is not None:
+                sl.delivery_date = date.fromisoformat(str(entry["confirmedDate"]))
+        if schedule_lines(session, po, line):
+            line.need_date = min(sl.delivery_date for sl in schedule_lines(session, po, line))
+    for sl in schedule_lines(session, po):
+        sl.confirmed_date = None  # the new version is re-confirmed by the supplier
     po.total_minor = sum(l.net_minor for l in lines.values())
     po.version += 1
     previous = po.status
@@ -434,9 +543,139 @@ def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reaso
     outbox.emit(session, "purchase_order.changed", "PURCHASE_ORDER", po.id, po.number, {"version": po.version, "changes": changes})
     if previous in ("TRANSMITTED", "CONFIRMED"):
         po.transmitted_at = clock.now()
+        transmission.send(session, po, transmission.channels_for(session.get(Supplier, po.supplier_id)))
         workflow.wait(session, _instance(session, po), "F5-07", outcome=f"v{po.version} sent; re-confirmation required")
     validate(session, po)
     return {"po": po.number, "version": po.version, "status": po.status}
+
+
+# ---------------------------------------------------------------- delivery schedule (Technical Document §5 delivery_schedule[])
+SCHEDULE_RULE = "PO-SCHEDULE"
+
+
+def schedule_lines(session: Session, po: PurchaseOrder, line: Optional[PoLine] = None) -> list[PoScheduleLine]:
+    query = select(PoScheduleLine).where(PoScheduleLine.po_id == po.id)
+    if line is not None:
+        query = query.where(PoScheduleLine.po_line_id == line.id)
+    return session.execute(query.order_by(PoScheduleLine.po_line_id, PoScheduleLine.delivery_date, PoScheduleLine.seq)).scalars().all()
+
+
+def _default_schedule(session: Session, line: PoLine) -> None:
+    """Every new PO line starts with one schedule line: the full quantity on the need date."""
+    session.add(PoScheduleLine(tenant_id=line.tenant_id, po_id=line.po_id, po_line_id=line.id, seq=1, qty=line.qty,
+                               delivery_date=line.need_date, received_qty=0, created_by=principal(session).user_id))
+    session.flush()
+
+
+def _parse_schedule(line: PoLine, entries: list[dict]) -> list[tuple[Decimal, date]]:
+    if not entries:
+        raise rule_violation(f"Line {line.line_no}: give at least one schedule line", SCHEDULE_RULE)
+    parsed = []
+    for entry in entries:
+        try:
+            qty = D(entry["qty"])
+            when = entry.get("deliveryDate") or entry.get("delivery_date")
+            when = when if isinstance(when, date) else date.fromisoformat(str(when))
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            raise rule_violation(f"Line {line.line_no}: each schedule line needs qty and deliveryDate (YYYY-MM-DD)", SCHEDULE_RULE)
+        if qty <= 0:
+            raise rule_violation(f"Line {line.line_no}: schedule quantities must be positive", SCHEDULE_RULE)
+        if when < clock.today():
+            raise rule_violation(f"Line {line.line_no}: delivery date {when.isoformat()} is in the past", SCHEDULE_RULE)
+        parsed.append((qty, when))
+    total = sum(q for q, _ in parsed)
+    if total != line.qty:
+        raise Problem(422, "SCHEDULE_QTY_MISMATCH", f"Line {line.line_no}: schedule quantities add up to {jsonable(total)}, "
+                      f"the line quantity is {jsonable(line.qty)}", rule_ref=SCHEDULE_RULE, scheduledQty=jsonable(total),
+                      lineQty=jsonable(line.qty))
+    return sorted(parsed, key=lambda item: item[1])
+
+
+def _replace_schedule(session: Session, po: PurchaseOrder, line: PoLine, parsed: list[tuple[Decimal, date]]) -> None:
+    for old in schedule_lines(session, po, line):
+        session.delete(old)
+    session.flush()
+    for seq, (qty, when) in enumerate(parsed, start=1):
+        session.add(PoScheduleLine(tenant_id=po.tenant_id, po_id=po.id, po_line_id=line.id, seq=seq, qty=qty, delivery_date=when,
+                                   received_qty=0, created_by=principal(session).user_id))
+    session.flush()
+    line.need_date = parsed[0][1]
+    allocate_receipts(session, po, line)
+
+
+def _fit_schedule(session: Session, po: PurchaseOrder, line: PoLine, old_need: date) -> None:
+    """Keep the schedule consistent with a line-level qty/date change (version n+1 without an explicit schedule)."""
+    current = schedule_lines(session, po, line)
+    if not current:
+        return  # lines migrated before schedule lines existed
+    if len(current) == 1:
+        current[0].qty = line.qty
+        current[0].delivery_date = line.need_date
+    else:
+        shift = line.need_date - old_need
+        if shift:
+            for sl in current:
+                if sl.received_qty < sl.qty:
+                    sl.delivery_date += shift
+        delta = line.qty - sum(sl.qty for sl in current)
+        if delta:
+            last = current[-1]
+            if last.qty + delta <= 0 or last.qty + delta < last.received_qty:
+                raise rule_violation(f"Line {line.line_no} is delivered on {len(current)} dates; give the new schedule with the quantity change",
+                                     SCHEDULE_RULE)
+            last.qty += delta
+    session.flush()
+    allocate_receipts(session, po, line)
+
+
+def allocate_receipts(session: Session, po: PurchaseOrder, line: PoLine) -> None:
+    """Received quantity fills the earliest open schedule line first; over-delivery stays on the last line."""
+    current = schedule_lines(session, po, line)
+    remaining = D(line.received_qty)
+    for sl in current:
+        take = min(remaining, sl.qty) if remaining > 0 else Decimal(0)
+        sl.received_qty = take
+        remaining -= take
+    if current and remaining > 0:
+        current[-1].received_qty += remaining
+
+
+def schedule_view(session: Session, po: PurchaseOrder) -> list[dict]:
+    today = clock.today()
+    lines = {l.id: l for l in lines_of(session, po)}
+    out = []
+    for sl in schedule_lines(session, po):
+        line = lines[sl.po_line_id]
+        open_qty = max(sl.qty - sl.received_qty, Decimal(0))
+        due = sl.confirmed_date or sl.delivery_date
+        out.append({"line": line.line_no, "seq": sl.seq, "description": line.description, "uom": line.uom, "qty": jsonable(sl.qty),
+                    "deliveryDate": sl.delivery_date.isoformat(), "confirmedDate": sl.confirmed_date.isoformat() if sl.confirmed_date else None,
+                    "receivedQty": jsonable(sl.received_qty), "openQty": jsonable(open_qty),
+                    "status": "DELIVERED" if open_qty == 0 else ("PARTIALLY_RECEIVED" if sl.received_qty > 0 else "OPEN"),
+                    "daysLate": (today - due).days if open_qty > 0 and due < today else 0})
+    return sorted(out, key=lambda r: (r["line"], r["deliveryDate"], r["seq"]))
+
+
+def set_schedule(session: Session, po: PurchaseOrder, line_no: int, entries: list[dict], reason: Optional[str] = None) -> dict:
+    """PUT schedule: before supplier confirmation the schedule is edited in place (audited); after confirmation the
+    change is a new PO version that the supplier re-confirms (§6.1)."""
+    line = next((l for l in lines_of(session, po) if l.line_no == line_no), None)
+    if line is None:
+        raise Problem(404, "NOT_FOUND", f"{po.number} has no line {line_no}")
+    parsed = _parse_schedule(line, entries)
+    if po.status in ("DRAFT", "IN_APPROVAL", "RELEASED", "TRANSMITTED"):
+        before = [{"seq": sl.seq, "qty": jsonable(sl.qty), "deliveryDate": sl.delivery_date.isoformat()} for sl in schedule_lines(session, po, line)]
+        _replace_schedule(session, po, line, parsed)
+        after = [{"seq": seq, "qty": jsonable(q), "deliveryDate": d.isoformat()} for seq, (q, d) in enumerate(parsed, start=1)]
+        audit.record(session, "PURCHASE_ORDER", po.id, "SCHEDULE_CHANGED", object_ref=po.number,
+                     before={"line": line_no, "schedule": before}, after={"line": line_no, "version": po.version, "schedule": after},
+                     reason=reason or "Delivery schedule edited before supplier confirmation")
+        return {"po": po.number, "version": po.version, "status": po.status, "mode": "IN_PLACE", "schedule": schedule_view(session, po)}
+    if not SM.can(po.status, "change"):
+        raise illegal_transition("Purchase order", po.number, po.status, "change schedule")
+    result = change_order(session, po, [{"line": line_no, "schedule": [{"qty": jsonable(q), "deliveryDate": d.isoformat()} for q, d in parsed]}],
+                          reason or f"Delivery schedule of line {line_no} changed")
+    return {**result, "mode": "NEW_VERSION", "schedule": schedule_view(session, po)}
 
 
 @workflow.on_timer("PO_CONFIRMATION_SLA")
@@ -469,6 +708,129 @@ def update_receipt_status(session: Session, po: PurchaseOrder) -> None:
         return
     if SM.can(po.status, command) and not (command == "receive_partially" and po.status == "PARTIALLY_RECEIVED"):
         SM.apply(session, po, command)
+
+
+def receipt_reversed(session: Session, po: PurchaseOrder, gr_number: str) -> None:
+    """After a goods-receipt reversal (movement 102) the order is open again for the quantity taken back: RECEIVED goes
+    back to PARTIALLY_RECEIVED, or to CONFIRMED (TRANSMITTED if the current version was never confirmed) when nothing
+    received remains, so the correct receipt can be posted."""
+    if po.status not in ("RECEIVED", "PARTIALLY_RECEIVED"):
+        return
+    goods = [l for l in lines_of(session, po) if l.gr_required]
+    under = D(po.tolerance.get("under_pct", 0))
+    if goods and all(l.received_qty >= l.qty * (1 - under / 100) for l in goods):
+        return
+    if any(l.received_qty > 0 for l in goods):
+        command = "unreceive_partially"
+    else:
+        confirmed = session.execute(select(PoConfirmation.id).where(PoConfirmation.po_id == po.id, PoConfirmation.po_version == po.version,
+                                                                    PoConfirmation.status == "CONFIRMED")).first()
+        command = "unreceive" if confirmed else "unreceive_unconfirmed"
+    if SM.can(po.status, command):
+        SM.apply(session, po, command, reason=f"goods receipt {gr_number} reversed")
+
+
+# ---------------------------------------------------------------- cancellation and closure (§6.1 PO states)
+def _release_requisition(session: Session, po: PurchaseOrder, line: PoLine) -> None:
+    """Give a cancelled line's quantity back to its requisition line so the buyer can re-order it."""
+    if not line.requisition_id:
+        return
+    pr = session.get(Requisition, line.requisition_id)
+    pr_line = session.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line.pr_line_no)).scalar_one_or_none()
+    if pr_line is None:
+        return
+    pr_line.ordered_qty = max(pr_line.ordered_qty - line.qty, Decimal(0))
+    if pr_line.sourcing_status == "ORDERED":
+        pr_line.sourcing_status = "SOURCED"
+    remaining = [l.ordered_qty for l in req_svc._lines(session, pr)]
+    command = "reopen" if all(q == 0 for q in remaining) else "reopen_partially"
+    if pr.status == "PARTIALLY_ORDERED" and command == "reopen_partially":
+        return
+    if req_svc.SM.can(pr.status, command):
+        req_svc.SM.apply(session, pr, command, reason=f"{po.number} cancelled")
+
+
+def cancel(session: Session, po: PurchaseOrder, reason: str) -> dict:
+    """Cancel an order that nothing has been shipped, received or invoiced against (e.g. the supplier rejected it). Open
+    tasks and the confirmation timer close, the requisition quantity is released for re-ordering, contract consumption
+    booked at release is reversed, and ``purchase_order.cancelled`` informs the ERP and the supplier portal."""
+    from app.pic.models import OutboxEvent, ProcessedEvent, Timer
+
+    if not (reason or "").strip():
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for the cancellation", rule_ref="PO-CANCEL")
+    if not SM.can(po.status, "cancel"):
+        raise illegal_transition("Purchase order", po.number, po.status, "cancel")
+    lines = lines_of(session, po)
+    if any(l.shipped_qty > 0 or l.received_qty > 0 or l.invoiced_qty > 0 or l.ses_approved_minor > 0 for l in lines):
+        raise rule_violation(f"{po.number} has shipments, receipts or invoices; it cannot be cancelled", "PO-CANCEL")
+    before = po.status
+    SM.apply(session, po, "cancel", reason=reason.strip(), extra_after={"version": po.version})
+    for task in session.execute(select(Task).where(Task.object_id == po.id, Task.status == "OPEN")).scalars():
+        task.status = "CANCELLED"
+        for timer in session.execute(select(Timer).where(Timer.object_id == task.id, Timer.fired_at.is_(None))).scalars():
+            timer.fired_at, timer.payload = clock.now(), {**(timer.payload or {}), "cancelled": True}
+    for timer in session.execute(select(Timer).where(Timer.object_id == po.id, Timer.kind == "PO_CONFIRMATION_SLA",
+                                                     Timer.fired_at.is_(None))).scalars():
+        timer.fired_at, timer.payload = clock.now(), {**(timer.payload or {}), "cancelled": True}
+    released = session.execute(select(OutboxEvent.id).where(OutboxEvent.topic == "purchase_order.released",
+                                                            OutboxEvent.object_id == po.id)).scalars().all()
+    consumed = bool(released) and session.execute(select(ProcessedEvent.event_id).where(
+        ProcessedEvent.consumer == "contract-consumption", ProcessedEvent.event_id.in_(released))).first() is not None
+    for line in lines:
+        _release_requisition(session, po, line)
+        if consumed and line.contract_line_id:
+            contract_line = session.get(ContractLine, line.contract_line_id)
+            contract_line.released_qty -= line.qty
+            contract_line.released_value_minor -= line.net_minor
+    outbox.emit(session, "purchase_order.cancelled", "PURCHASE_ORDER", po.id, po.number,
+                {"version": po.version, "from": before, "reason": reason.strip(), "supplier": session.get(Supplier, po.supplier_id).code})
+    instance = _instance(session, po)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.end(session, instance, instance.current_step or "F5-07", outcome=f"cancelled: {reason.strip()}", status="CANCELLED")
+    return {"po": po.number, "status": po.status, "from": before}
+
+
+@outbox.consumer("purchase_order.cancelled", "erp-po-posting")
+def _post_po_cancellation(session: Session, event) -> None:
+    po = session.get(PurchaseOrder, event.object_id)
+    if not po.erp_doc_no:
+        return  # never reached the ERP
+    message = integration.enqueue(session, target_system=integration.target_system(session, po.company_code), message_type="PURCHASE_ORDER",
+                                  idempotency_key=f"{po.company_code}|PO|{po.number}|CANCEL", object_type="PURCHASE_ORDER",
+                                  object_id=po.id, object_ref=po.number,
+                                  payload={"po": po.number, "version": po.version, "action": "CANCEL", "erpDocument": po.erp_doc_no,
+                                           "companyCode": po.company_code, "reason": event.payload.get("reason")})
+    integration.process(session, message)
+
+
+def close(session: Session, po: PurchaseOrder, reason: Optional[str] = None) -> dict:
+    """Close an order with nothing left to receive or invoice: INVOICED, or RECEIVED where every accepted quantity is
+    invoiced (a lot rejected in full and returned). No invoice may still be in process. A requisition whose orders are
+    all closed or cancelled is closed with it."""
+    from app.pic.models import Invoice, InvoiceLine
+
+    if not SM.can(po.status, "close"):
+        raise illegal_transition("Purchase order", po.number, po.status, "close")
+    lines = lines_of(session, po)
+    open_lines = [l.line_no for l in lines if l.accepted_qty > l.invoiced_qty or (l.ses_required and l.ses_approved_minor > l.invoiced_minor)]
+    if open_lines:
+        raise rule_violation(f"{po.number} lines {open_lines} still have received value to invoice", "PO-CLOSE")
+    pending = session.execute(select(Invoice.number).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id).where(
+        InvoiceLine.po_line_id.in_([l.id for l in lines]), Invoice.status.not_in(("POSTED", "PAID", "REJECTED")))).scalars().first()
+    if pending:
+        raise rule_violation(f"Invoice {pending} on {po.number} is still in process", "PO-CLOSE")
+    before = po.status
+    SM.apply(session, po, "close", reason=reason or "nothing left to receive or invoice")
+    outbox.emit(session, "purchase_order.closed", "PURCHASE_ORDER", po.id, po.number, {"from": before, "reason": reason})
+    closed_requisitions = []
+    for requisition_id in {l.requisition_id for l in lines if l.requisition_id}:
+        pr = session.get(Requisition, requisition_id)
+        others = session.execute(select(PurchaseOrder.status).join(PoLine, PoLine.po_id == PurchaseOrder.id).where(
+            PoLine.requisition_id == requisition_id)).scalars().all()
+        if pr.status == "ORDERED" and all(status in ("CLOSED", "CANCELLED") for status in others):
+            req_svc.SM.apply(session, pr, "close", reason=f"all orders closed ({po.number} last)")
+            closed_requisitions.append(pr.number)
+    return {"po": po.number, "status": po.status, "from": before, "closedRequisitions": closed_requisitions}
 
 
 # ---------------------------------------------------------------- PO-03 change requests after confirmation
@@ -560,14 +922,19 @@ def expediting_view(session: Session) -> list[dict]:
                                .order_by(TwinSnapshot.as_of.desc())).scalars().first()
         asn = session.execute(select(Asn).where(Asn.po_id == po.id).order_by(Asn.created_at.desc())).scalars().first()
         late_prob = twin.late_delivery_prob if twin else None
-        days_late = (today - line.need_date).days if line.need_date and line.need_date < today else 0
-        soon = line.need_date is not None and (line.need_date - today).days <= 7
-        risk = "LATE" if days_late > 0 else "AT_RISK" if (late_prob is not None and late_prob >= Decimal("0.30")) or (soon and asn is None) else "ON_TRACK"
-        open_qty = line.qty - line.received_qty
-        out.append({"po": po.number, "line": line.line_no, "supplier": supplier.code, "description": line.description, "openQty": str(open_qty),
-                    "uom": line.uom, "needDate": line.need_date.isoformat() if line.need_date else None, "daysLate": days_late, "status": po.status,
-                    "lateProb": str(late_prob) if late_prob is not None else None, "asn": asn.number if asn else None, "risk": risk,
-                    "valueAtRiskMinor": line_amount(open_qty, line.unit_price_minor) if risk != "ON_TRACK" else 0})
+        # With a delivery schedule, lateness is per open schedule line (confirmed date if the supplier gave one).
+        schedule = [sl for sl in schedule_lines(session, po, line) if sl.received_qty < sl.qty]
+        buckets = [(sl.seq, sl.qty - sl.received_qty, sl.confirmed_date or sl.delivery_date, sl.confirmed_date) for sl in schedule] \
+            or [(None, line.qty - line.received_qty, line.need_date, None)]
+        for seq, open_qty, due, confirmed in buckets:
+            days_late = (today - due).days if due and due < today else 0
+            soon = due is not None and (due - today).days <= 7
+            risk = "LATE" if days_late > 0 else "AT_RISK" if (late_prob is not None and late_prob >= Decimal("0.30")) or (soon and asn is None) else "ON_TRACK"
+            out.append({"po": po.number, "line": line.line_no, "scheduleSeq": seq, "supplier": supplier.code, "description": line.description,
+                        "openQty": str(open_qty), "uom": line.uom, "needDate": due.isoformat() if due else None,
+                        "confirmedDate": confirmed.isoformat() if confirmed else None, "daysLate": days_late, "status": po.status,
+                        "lateProb": str(late_prob) if late_prob is not None else None, "asn": asn.number if asn else None, "risk": risk,
+                        "valueAtRiskMinor": line_amount(open_qty, line.unit_price_minor) if risk != "ON_TRACK" else 0})
     return sorted(out, key=lambda r: ({"LATE": 0, "AT_RISK": 1, "ON_TRACK": 2}[r["risk"]], -r["daysLate"], r["needDate"] or ""))
 
 

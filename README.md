@@ -69,3 +69,44 @@ The legacy schema has no currency column. Use `--fx-rate` if the amounts are not
   - Append-only, hash-chained audit trail.
   - Exactly-once ERP posting with idempotency keys.
   - Throttling of failed sign-ins.
+
+## Production deployment
+
+Production readiness status, the ASVS L2 / NFR checklist and the open decisions are in `docs/PIC_Production_Readiness.md`;
+operations runbooks are in `docs/runbooks/`.
+
+| Piece | Where |
+|---|---|
+| Container images | `backend/Dockerfile` (API and worker, Python 3.14, non-root uid 10001), `frontend/Dockerfile` (Next.js standalone, non-root) |
+| Local / staging stack | `docker-compose.yml`: `api`, `worker`, `web`, plus `db` and `migrate` under the `local-db` profile; settings from `.env` (`.env.compose.example`) |
+| Kubernetes | `deploy/k8s` (kustomize): Deployments with probes, HPA, PDB, NetworkPolicies, GKE Ingress with managed TLS, External Secrets |
+| GCP infrastructure | `deploy/terraform`: GKE Autopilot (asia-south1), Artifact Registry, Secret Manager, KMS, Cloud Armor, static IP |
+| Image publishing | `.github/workflows/release.yml`: GHCR `pic-api` / `pic-web`, tags `<sha>` and `latest`, on push to main |
+| Database migrations | `.github/workflows/neon.yml` only (never from the cluster or compose against Neon) |
+| Security scanning | `.github/workflows/security.yml` (gitleaks, CodeQL, ZAP) and the SCA steps in `ci.yml` |
+| Load tests | `tests/load` (k6, staging only); MRP scale harness `python -m app.pic.tools.perf_mrp` (scratch database only) |
+
+With `PIC_ENV=production` the API refuses to start on weak settings (short or placeholder `PIC_JWT_SECRET`, a `PIC_FIELD_KEY` that
+is not 32 random bytes, `DATABASE_URL` without `sslmode=require`, `*` or localhost CORS origins), the prototype routers and
+OpenAPI docs are off, and the web app redirects the prototype screens to `/pic`. Operational endpoints: `GET /healthz`
+(liveness), `GET /readyz` (database, schema head, worker heartbeat, outbox backlog) and `GET /metrics` (Prometheus, needs
+`Authorization: Bearer $PIC_METRICS_TOKEN`).
+
+Main runtime settings (all optional except the secrets; defaults in `backend/app/pic/config.py`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PIC_ENV` | `dev` | `production` enables the start-up checks and production defaults |
+| `PIC_ENABLE_LEGACY_DEMO` | off in production, on elsewhere | Mount the prototype routers (`app.routers`, `app.api`) |
+| `PIC_API_DOCS` | off in production, on elsewhere | `/docs`, `/redoc`, `/openapi.json` |
+| `PIC_RATE_LIMIT_PER_IP` / `PIC_RATE_LIMIT_PER_USER` / `PIC_RATE_LIMIT_WINDOW_SECONDS` | 600 / 1200 / 60 (off in dev and test) | Sliding-window limits on `/v1` per replica; 429 problem+json with `Retry-After` |
+| `PIC_TRUSTED_PROXY_HOPS` | `0` | Proxies that append `X-Forwarded-For` (2 behind GCLB + web BFF) |
+| `PIC_MAX_BODY_BYTES` / `PIC_MAX_UPLOAD_BYTES` | 10 MiB / 25 MiB | Request body limits (uploads: multipart, CSV, PDF, images) |
+| `PIC_HSTS` | `auto` | `Strict-Transport-Security` when the request arrived over HTTPS (`always`, `off`) |
+| `PIC_LOG_FORMAT` / `PIC_LOG_LEVEL` | `json` outside dev / `INFO` | Structured logs with traceId, tenant and user; secrets redacted |
+| `PIC_METRICS_TOKEN` | unset | Bearer token for `/metrics` (without it: local unproxied callers outside production only) |
+| `PIC_METRICS_CACHE_SECONDS` | `30` | Cache for the database-derived metrics and SLOs |
+| `PIC_OTEL_ENABLED` | `false` | Export OpenTelemetry spans (build with `--build-arg WITH_OTEL=true`; standard `OTEL_*` variables) |
+| `PIC_READY_REQUIRE_WORKER` / `PIC_READY_MAX_OUTBOX_LAG_SECONDS` | `false` / `0` | Make `/readyz` fail without a live worker or above an outbox lag |
+| `PIC_WORKER_HEARTBEAT_FILE` / `PIC_WORKER_STALE_SECONDS` / `PIC_WORKER_INTERVAL_SECONDS` | `/tmp/pic-worker.heartbeat` / 60 / 2 | Worker liveness and tick interval |
+| `NEXT_PUBLIC_PIC_ENV` (web build arg) | `production` in the image | Build-time flag; `legacyDemoEnabled` in `frontend/src/lib/pic/deployment.ts` |

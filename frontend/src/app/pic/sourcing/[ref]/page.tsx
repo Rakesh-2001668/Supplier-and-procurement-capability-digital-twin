@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { ObjectPage } from '@/components/pic/object';
 import { Button, DataTable, Facts, StatusChip } from '@/components/pic/ui';
 import { api, readSessionUser } from '@/lib/pic/api';
@@ -11,15 +11,18 @@ import { useApi, useCommand } from '@/lib/pic/hooks';
 import {
   AwardDialog, BidsPanel, Criterion, EventLine, Invitee, MatrixRow, normaliseScenario, RoundDialog, ScenariosPanel, ScoreDialog, SourcingEvent,
 } from './_parts';
+import { AuctionPanel, ClarificationsPanel } from './_ops';
 
 const PRE_CLOSE = ['DRAFT', 'PUBLISHED', 'OPEN'];
 const MANAGE = ['BUYER', 'CATEGORY_MANAGER'];
 const EVALUATE = ['CATEGORY_MANAGER', 'QUALITY_INSPECTOR'];
 
+const noSubscribe = () => () => {};
+
+/** Roles from the session cookie; null while rendering on the server. */
 function useRoles() {
-  const [roles, setRoles] = useState<string[] | null>(null);
-  useEffect(() => setRoles(readSessionUser()?.roles ?? []), []);
-  return roles;
+  const cookie = useSyncExternalStore(noSubscribe, () => document.cookie, () => null);
+  return useMemo(() => (cookie === null ? null : readSessionUser()?.roles ?? []), [cookie]);
 }
 
 export default function SourcingEventPage() {
@@ -36,9 +39,9 @@ export default function SourcingEventPage() {
   const bids = useApi<MatrixRow[]>(ev && (!sealed || peek) ? `${path}/bids` : null);
   const [dialog, setDialog] = useState<'score' | 'round' | 'award' | null>(null);
   const [awardScenario, setAwardScenario] = useState<string | null>(null);
-  const [, tick] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => tick((n) => n + 1), 30000);
+    const t = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(t);
   }, []);
 
@@ -51,7 +54,10 @@ export default function SourcingEventPage() {
 
   const scenarios = (ev?.scenarios ?? []).map(normaliseScenario);
   const weightTotal = ev?.criteria.reduce((s, c) => s + c.weight, 0) ?? 0;
-  const closeReached = ev ? Date.now() >= new Date(ev.close_at).getTime() : false;
+  const auction = ev?.type === 'REVERSE_AUCTION';
+  // A reverse auction closes at its live end, which soft-close bids may have pushed past the scheduled close.
+  const closesAt = ev ? (auction && ev.auction_ends_at ? ev.auction_ends_at : ev.close_at) : '';
+  const closeReached = ev ? now >= new Date(closesAt).getTime() : false;
   const evaluating = ev?.status === 'UNDER_EVALUATION';
   const sc = ev?.should_cost;
   const cons = ev?.constraints;
@@ -71,8 +77,8 @@ export default function SourcingEventPage() {
             )}
             {canManage && ev.status === 'OPEN' && (
               <Button variant="primary" busy={close.isPending} disabled={!closeReached} onClick={() => close.mutate()}
-                title={!closeReached ? `Can close after ${dateTime(ev.close_at)}` : undefined}>
-                {closeReached ? 'Close & unseal bids' : `Closes ${dateTime(ev.close_at)}`}
+                title={!closeReached ? `Can close after ${dateTime(closesAt)}` : undefined}>
+                {closeReached ? (auction ? 'Close auction & evaluate' : 'Close & unseal bids') : `Closes ${dateTime(closesAt)}`}
               </Button>
             )}
             {canScore && evaluating && <Button onClick={() => setDialog('score')} disabled={!bids.data?.length}>Score bids</Button>}
@@ -104,8 +110,11 @@ export default function SourcingEventPage() {
                 </p>
               </div>
             )}
-            {ev.status === 'OPEN' && (
+            {ev.status === 'OPEN' && !auction && (
               <p className="text-sm text-slate-600">Bidding is open in round {ev.round}. {closeReached ? 'Close time reached – close the event to unseal the bids.' : `Bids stay sealed until ${dateTime(ev.close_at)}.`}</p>
+            )}
+            {ev.status === 'OPEN' && auction && (
+              <p className="text-sm text-slate-600">Live reverse auction in round {ev.round}, ending {dateTime(closesAt)}{closesAt !== ev.close_at ? ` (extended from ${dateTime(ev.close_at)})` : ''}. {closeReached ? 'The auction has ended – close it to evaluate the final prices.' : 'Follow the ladder in the Live auction tab.'}</p>
             )}
           </div>
         )}
@@ -120,6 +129,7 @@ export default function SourcingEventPage() {
           ]} />
         )}
         extraTabs={ev ? [
+          ...(auction ? [{ id: 'auction', label: ev.status === 'OPEN' ? 'Live auction' : 'Auction', content: <AuctionPanel path={path} status={ev.status} canManage={canManage} /> }] : []),
           {
             id: 'criteria', label: `Criteria (${weightTotal}%)`, content: (
               <div>
@@ -155,6 +165,7 @@ export default function SourcingEventPage() {
                 matrix={bids.data} loading={bids.isLoading} error={bids.error} />
             ),
           },
+          ...(ev.status !== 'DRAFT' ? [{ id: 'clarifications', label: 'Clarifications', content: <ClarificationsPanel path={path} canManage={canManage} /> }] : []),
           {
             id: 'scenarios', label: `Award scenarios (${scenarios.length})`, content: (
               <ScenariosPanel event={ev} scenarios={scenarios} canAward={canManage && evaluating}

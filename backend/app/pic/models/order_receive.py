@@ -49,6 +49,7 @@ class PurchaseOrder(TenantScoped, Base):
     confirmation_due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     rule_set_version: Mapped[str] = mapped_column(String(120), nullable=False)
     erp_doc_no: Mapped[Optional[str]] = mapped_column(String(40))
+    retention_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))  # construction/subcontract retention withheld per invoice
 
 
 class PoLine(TenantScoped, Base):

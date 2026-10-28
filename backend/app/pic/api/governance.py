@@ -229,6 +229,21 @@ def set_active(user_id: uuid.UUID, body: ActiveIn, p: Principal = Depends(requir
         return {"id": str(user.id), "email": user.email, "active": user.active}
 
 
+class ReasonIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/admin/users/{user_id}/mfa/reset", tags=["Admin"])
+def reset_mfa(user_id: uuid.UUID, body: ReasonIn, p: Principal = Depends(require("admin:rules"))):
+    """Remove a user's authenticator (lost phone). Audited with the reason; the user enrols again at next sign-in if required."""
+    from app.pic.platform import mfa
+
+    with uow(p) as s:
+        user = _user(s, user_id)
+        mfa.admin_reset(s, user, body.reason)
+        return {"id": str(user.id), "email": user.email, "mfaEnrolled": user.mfa_enrolled}
+
+
 @router.get("/admin/templates", tags=["Admin"])
 def industry_templates(p: Principal = Depends(require(READ))):
     with uow(p) as s:

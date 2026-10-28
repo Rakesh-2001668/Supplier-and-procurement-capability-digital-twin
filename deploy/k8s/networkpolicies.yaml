@@ -1,0 +1,132 @@
+# Network policy for namespace pic (enforced by GKE Dataplane V2, always on in Autopilot).
+# Model: deny everything (ingress AND egress), then allow per workload:
+#   internet -> GCLB -> pic-web:3000 -> pic-api:8080 -> Neon :5432 / ERP + OTLP :443
+#   pic-worker -> Neon :5432 / ERP + OTLP :443 (no ingress at all)
+#   monitoring -> pic-api:8080 (/metrics, bearer-token protected)
+# Kubelet probes are not subject to NetworkPolicy, so health probes keep working.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# DNS for every pod. Autopilot clusters normally use Cloud DNS for GKE, where pods resolve through the metadata
+# server 169.254.169.254:53; clusters on kube-dns (or with NodeLocal DNSCache, 169.254.20.10) use the other
+# peers. All three are allowed so the policy is correct whichever DNS provider the cluster has.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - ipBlock:
+            cidr: 169.254.169.254/32
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pic-web
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pic-web
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    # Google Front End proxies and health checkers (container-native LB targets pod IPs directly).
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - protocol: TCP
+          port: 3000
+  egress:
+    # BFF -> internal API only. The web has no other outbound need; add a rule here if that changes (e.g. OTLP).
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-api
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pic-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pic-api
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pic-web
+      ports:
+        - protocol: TCP
+          port: 8080
+    # Metrics scrapers: prometheus-operator in "monitoring", or Google Managed Prometheus collectors in
+    # "gmp-system". Rename to match your monitoring namespace.
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: ["monitoring", "gmp-system"]
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Neon PostgreSQL (TLS on 5432) and HTTPS (ERP connectors, OTLP/HTTPS, Neon API). Neon and SaaS ERPs have
+    # no fixed IP ranges, hence 0.0.0.0/0; outbound traffic leaves via Cloud NAT with static IPs (terraform
+    # output nat_ip_addresses), which can be allow-listed on the Neon / ERP side.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pic-worker
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pic-worker
+  policyTypes: ["Ingress", "Egress"]
+  # No ingress rules: nothing may connect to the worker.
+  ingress: []
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 443

@@ -7,6 +7,7 @@ python-dotenv==1.2.3
 SQLAlchemy==2.0.54
 psycopg2-binary==2.9.13
 alembic==1.20.0
+python-multipart==0.0.32  # file uploads (invoice documents, ERP CSV imports)
 
 # Security: tokens, password hashing, field-level encryption
 python-jose==3.5.0
@@ -15,9 +16,10 @@ cryptography==50.0.2
 
 # AI layer (used by the legacy copilot prototype; PIC routes LLM calls through the LiteLLM gateway)
 langgraph==1.2.11
-litellm==1.102.0
+litellm==1.102.2
 langfuse==4.15.4
 
-# Tests
-pytest==8.4.2
+# HTTP client (connectors, e-sign, OCR, punch-out; also used by FastAPI's TestClient)
 httpx==0.28.1
+
+# Test tools live in requirements-dev.txt

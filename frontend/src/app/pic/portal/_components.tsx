@@ -6,6 +6,7 @@ import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { isNumber, isPositive, minus, PoDetail, today } from '../invoices/_components';
+import { emptyEway, EwayFields, ewayPayload, ewayProblem } from '../receiving/_components';
 
 const rupees = (minor: number) => (minor / 100).toFixed(2);
 
@@ -59,11 +60,11 @@ export function AsnDialog({ po, onClose }: { po: PoDetail; onClose: () => void }
   const [lines, setLines] = useState(goods.map((l) => ({ line: l, qty: minus(l.qty, l.shipped_qty), batch: '' })));
   const [shipDate, setShipDate] = useState(today());
   const [expected, setExpected] = useState(today());
-  const [eway, setEway] = useState('');
+  const [eway, setEway] = useState(emptyEway);
   const [coc, setCoc] = useState('');
   const chosen = lines.filter((l) => isPositive(l.qty));
   const send = useCommand(() => api.post<{ number: string }>('/asns', {
-    po: po.number, ship_date: shipDate, expected_date: expected, eway_bill_no: eway.trim() || undefined, documents: coc.trim() ? [coc.trim()] : [],
+    po: po.number, ship_date: shipDate, expected_date: expected, ...ewayPayload(eway), documents: coc.trim() ? [coc.trim()] : [],
     lines: chosen.map((l) => ({ line: l.line.line_no, qty: l.qty, batches: l.batch.trim() ? [{ batch: l.batch.trim(), qty: l.qty }] : [] })),
   }), { success: (r) => `ASN ${r.number} sent`, onSuccess: onClose });
   const update = (i: number, patch: { qty?: string; batch?: string }) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
@@ -72,9 +73,9 @@ export function AsnDialog({ po, onClose }: { po: PoDetail; onClose: () => void }
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Ship date">{(id) => <Input id={id} type="date" value={shipDate} onChange={(e) => setShipDate(e.target.value)} />}</Field>
         <Field label="Expected arrival">{(id) => <Input id={id} type="date" value={expected} onChange={(e) => setExpected(e.target.value)} />}</Field>
-        <Field label="E-way bill no.">{(id) => <Input id={id} value={eway} onChange={(e) => setEway(e.target.value)} />}</Field>
         <Field label="Certificate of conformity reference">{(id) => <Input id={id} value={coc} onChange={(e) => setCoc(e.target.value)} />}</Field>
       </div>
+      <div className="mt-3"><EwayFields value={eway} onChange={setEway} /></div>
       <div className="mt-4 space-y-2">
         {lines.map((l, i) => (
           <div key={l.line.id} className="grid gap-3 rounded-lg border border-slate-200 p-3 md:grid-cols-3">
@@ -89,7 +90,7 @@ export function AsnDialog({ po, onClose }: { po: PoDetail; onClose: () => void }
       </div>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" disabled={!chosen.length || !shipDate || !expected} busy={send.isPending} onClick={() => send.mutate()}>Send ASN</Button>
+        <Button variant="primary" disabled={!chosen.length || !shipDate || !expected || !!ewayProblem(eway)} busy={send.isPending} onClick={() => send.mutate()}>Send ASN</Button>
       </div>
     </Dialog>
   );
