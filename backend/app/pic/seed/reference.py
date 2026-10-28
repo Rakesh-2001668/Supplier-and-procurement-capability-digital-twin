@@ -30,7 +30,8 @@ NUMBER_RANGES = {
     "MATERIAL_REQUEST": ("MRQ-", 7731, 0), "MATERIAL": ("M-", 400001, 0), "SUPPLIER": ("SUP-", 1001, 0),
     "BANK_CHANGE": ("BCR-", 101, 0), "PAYMENT": ("PAY-", 880001, 0), "PAYMENT_RUN": ("PRUN-", 2611, 0),
     "MAVERICK_HIT": ("MAV-", 1001, 0), "CATEGORY_PLAN": ("CP-", 101, 0), "CAPA": ("CAPA-", 301, 0), "PO_CHANGE": ("PCR-", 501, 0),
-    "RECONCILIATION": ("REC-", 101, 0),
+    "RECONCILIATION": ("REC-", 101, 0), "CONTRACT_AMENDMENT": ("CA-", 101, 0), "PAYMENT_FILE": ("PF-", 1001, 0),
+    "SUPPLIER_CHANGE": ("SMC-", 101, 0), "INTEGRATION_BATCH": ("IB-", 101, 0), "PUNCHOUT": ("PUN-", 1001, 0),
 }
 
 L = 100_000 * 100   # one lakh rupees in paise
@@ -119,6 +120,24 @@ RULE_SETS = {
     "DEMAND-SENSING": ({"alpha": "0.3", "biasThreshold": "0.15", "horizon": 3}, "Forecast smoothing and Demand Sensing Agent bias threshold (M02)"),
     "SUPPLIER-RISK": ({"minOtifPct": 90, "maxPpm": 1000, "maxLateProb": "0.30", "certificateWarnDays": 60, "bankChangeInvoiceDays": 30,
                        "preferredOtifPct": 95}, "Supplier risk signals and preferred-status threshold (M06)"),
+    "CONTRACT-AMENDMENT": ({"thresholdMinor": 1 * CR, "above": ["LEGAL", "FINANCE_CONTROLLER"], "below": ["CONTRACT_MANAGER"],
+                            "termination": ["LEGAL", "CPO"], "noticeDays": 90}, "Contract amendment and termination approvals (M07)"),
+    "AUCTION": ({"minDecrementPct": "0.5", "extensionMinutes": 5, "triggerMinutes": 2, "showRank": True, "showBestPrice": False},
+                "Reverse auction rules: minimum decrement, soft close and supplier feedback (M05)"),
+    "EWAY-BILL": ({"requiredAboveMinor": 50_000 * 100, "kmPerDay": 200, "format": "^[0-9]{12}$"}, "E-way bill on ASN for goods movements (M09)"),
+    "PAYMENT-FILE": ({"format": "ISO20022_PAIN001", "debtorName": None, "debtorAccountRef": None, "debtorIfsc": None},
+                     "Bank payment file; debtor account details are configured per tenant (M10)"),
+    "SUPPLIER-MASTER-CHANGE": ({"approvers": ["FINANCE_CONTROLLER", "SUPPLIER_MANAGER"], "fieldGroups": ["TAX", "ADDRESS", "CONTACT"]},
+                               "Supplier tax-ID, address and contact changes: two approvers, never the requester (MDM-04)"),
+    "SUPPLIER-INVITATION": ({"validDays": 14}, "Supplier self-registration invitation validity (F8-01)"),
+    "CATEGORY-BUDGET": ({"mode": "SOFT", "warnAtPct": 90}, "Category-plan budget check at requisition submit (M01/M04)"),
+    "PUNCHOUT": ({"sessionMinutes": 30, "protocols": ["CXML", "OCI"]}, "Punch-out session rules (M04)"),
+    "NOTIFICATIONS": ({"email": False, "kinds": ["TASK_ASSIGNED", "TASK_ESCALATED", "RECOMMENDATION", "PO_TRANSMITTED", "INVOICE_EXCEPTION",
+                                                 "CHANGE_REQUEST", "CLARIFICATION_ANSWERED", "CONTRACT_EXPIRING"]},
+                      "In-app notifications; e-mail delivery switches on when SMTP is configured"),
+    "MFA": ({"enforce": False, "requiredRoles": ["TENANT_ADMIN", "FINANCE_CONTROLLER", "CPO", "PROCUREMENT_HEAD", "COST_OBJECT_OWNER", "DEPT_HEAD",
+                                                 "CAPEX_COMMITTEE", "AP_CLERK"], "issuer": "AlphaHelion PIC"},
+            "MFA (TOTP) for approvers, finance and admins (§14); set enforce=true per tenant once users have enrolled"),
 }
 
 SOD_RULES = [

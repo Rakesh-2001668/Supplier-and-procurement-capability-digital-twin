@@ -37,6 +37,9 @@ class Supplier(TenantScoped, Base):
     twin_ref: Mapped[Optional[str]] = mapped_column(String(40))
     screening: Mapped[dict] = mapped_column(JSONB, default=dict)
     contact_email: Mapped[Optional[str]] = mapped_column(String(200))
+    address: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # line1, line2, city, state_code, pin, country
+    punchout: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # protocol, url, identity (no secrets)
+    punchout_secret_enc: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class SupplierCategoryStatus(TenantScoped, Base):

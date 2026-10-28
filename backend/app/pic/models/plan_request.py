@@ -56,6 +56,8 @@ class PlannedOrder(TenantScoped, Base):
     source: Mapped[dict] = mapped_column(JSONB, default=dict)
     exception_codes: Mapped[list] = mapped_column(JSONB, default=list)
     requisition_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    source_system: Mapped[str] = mapped_column(String(20), default="PLATFORM", server_default="PLATFORM")  # PLATFORM | SAP_S4 | ...
+    external_ref: Mapped[Optional[str]] = mapped_column(String(60))
 
 
 class MrpException(TenantScoped, Base):

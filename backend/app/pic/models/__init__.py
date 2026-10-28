@@ -6,6 +6,7 @@ from app.pic.models.source_contract import *  # noqa: F401,F403
 from app.pic.models.order_receive import *  # noqa: F401,F403
 from app.pic.models.pay_value import *  # noqa: F401,F403
 from app.pic.models.governance import *  # noqa: F401,F403
+from app.pic.models.operations import *  # noqa: F401,F403
 
 # Tables without tenant_id or with their own isolation handling.
 NON_RLS_TABLES = {"tenant", "process_definition"}

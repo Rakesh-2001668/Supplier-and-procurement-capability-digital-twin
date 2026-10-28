@@ -35,6 +35,8 @@ class SourcingEvent(TenantScoped, Base):
     constraints: Mapped[dict] = mapped_column(JSONB, default=dict)  # max_suppliers, max_share, min_share
     tco_params: Mapped[dict] = mapped_column(JSONB, default=dict)  # carrying rate, cost of capital, CoPQ per defect
     savings_target_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    auction: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # minDecrementPct, extensionMinutes, triggerMinutes
+    auction_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class EventLine(TenantScoped, Base):
@@ -155,6 +157,9 @@ class Contract(TenantScoped, Base):
     thresholds_hit: Mapped[list] = mapped_column(JSONB, default=list)
     rule_set_version: Mapped[Optional[str]] = mapped_column(String(80))
     activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    termination_reason: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class ContractLine(TenantScoped, Base):

@@ -128,6 +128,8 @@ class Asn(TenantScoped, Base):
     ship_date: Mapped[date] = mapped_column(Date, nullable=False)
     expected_date: Mapped[date] = mapped_column(Date, nullable=False)
     eway_bill_no: Mapped[Optional[str]] = mapped_column(String(20))
+    eway_bill_valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    vehicle_no: Mapped[Optional[str]] = mapped_column(String(15))
     documents: Mapped[list] = mapped_column(JSONB, default=list)  # CoC, packing list
 
 
