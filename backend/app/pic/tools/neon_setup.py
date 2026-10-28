@@ -4,7 +4,8 @@
     python -m app.pic.tools.neon_setup --verify-only
 
 Steps
-1. PIC schema: Alembic migrations 0001 (87 tables) and 0002 (pic_app role, row-level security, append-only audit).
+1. PIC schema: Alembic migrations 0001 (87 tables), 0002 (pic_app role, row-level security, append-only audit) and
+   0003 (spend governance, forecasts, risk/CAPA, change requests, reconciliation, recommendations, currencies/FX).
 2. PIC data: the Axion Mobility signature case run through the services (only if tenant AXN does not exist yet).
 3. Legacy data from the snapshot extracted from the Docker supplier_twin database (app.pic.tools.legacy_extract):
    a. the existing app's Alembic chain (public schema) and a verbatim copy of all 15 legacy tables;
@@ -27,6 +28,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import DateTime, MetaData, create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert
+
+from dotenv import dotenv_values
 
 from app.pic.config import BACKEND_DIR, get_settings
 from app.pic.tools import legacy_extract
@@ -165,7 +168,8 @@ def main() -> int:
     if not args.verify_only:
         print("1/4 PIC migrations …")
         migrate_pic()
-        password = os.environ.get("PIC_SEED_PASSWORD")
+        # Shell environment first, then backend/.env (the API settings ignore keys they do not declare).
+        password = os.environ.get("PIC_SEED_PASSWORD") or dotenv_values(BACKEND_DIR / ".env").get("PIC_SEED_PASSWORD") or None
         generated = password is None
         password = password or secrets.token_urlsafe(12)
         if not args.skip_seed:

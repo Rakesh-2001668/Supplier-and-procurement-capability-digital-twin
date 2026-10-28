@@ -37,7 +37,7 @@ The migrated legacy tenants are `GMC` (Global Manufacturing Corp) and `DBY` (Dum
 
 ## Neon
 
-Put the Neon connection string in `backend/.env` as `DATABASE_URL`, using the direct (non-pooler) host and `sslmode=require`. Then run `python -m app.pic.tools.neon_setup`. It is safe to re-run. On a database that already has tenants, it adds what a newer release needs (number ranges, rule sets, templates, currencies, agents, taxonomy) without re-seeding.
+Step-by-step instructions for Neon and GitHub, including the Actions secrets and preview branches, are in `docs/PIC_GitHub_Neon_Setup.md`. In short: put the Neon connection string in `backend/.env` as `DATABASE_URL`, using the direct (non-pooler) host and `sslmode=require`. Then run `python -m app.pic.tools.neon_setup`. It is safe to re-run. On a database that already has tenants, it adds what a newer release needs (number ranges, rule sets, templates, currencies, agents, taxonomy) without re-seeding.
 
 ## Legacy data (Docker supplier_twin)
 

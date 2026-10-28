@@ -102,10 +102,10 @@ Spend carrying maverick flags (paid history): OVER_INVOICED 259,200.00.
 | Low | `UNCLASSIFIED_SPEND` | REQ-DUM-PO-2025-00045: 'Dummy Req' could not be classified (no item or category in the legacy request) | `REQ-DUM-PO-2025-00045` |
 
 - `OVERPAID_PO`: More invoices were paid against the PO than its value.
-- `CLOSED_WITHOUT_RECEIPT`: The PO is closed and paid in the legacy system but nothing was received.
 - `PAID_DISPUTED_INVOICE`: An invoice was paid while marked as disputed.
-- `SUPPLIER_COMPLIANCE_FLAG`: The legacy supplier profile is flagged for compliance.
+- `CLOSED_WITHOUT_RECEIPT`: The PO is closed and paid in the legacy system but nothing was received.
 - `GR_VALUE_MISMATCH`: The goods receipt value does not equal quantity × PO price.
+- `SUPPLIER_COMPLIANCE_FLAG`: The legacy supplier profile is flagged for compliance.
 - `TEST_DATA`: Rows that look like test or dummy data.
 - `UNCLASSIFIED_SPEND`: The legacy request has no item or category, so the spend could not be classified.
 
@@ -164,8 +164,8 @@ Spend carrying maverick flags (paid history): NO_GOODS_RECEIPT 69,116.81, PO_NOT
 | Low | `UNCLASSIFIED_SPEND` | REQ-2315: 'Automated secondary process improvement' could not be classified (no item or category in the legacy request) | `REQ-2315` |
 
 - `PAID_BEFORE_APPROVAL`: An invoice was paid while its PO was still waiting for approval.
-- `QUOTE_PO_MISMATCH`: The PO value differs from the approved quotation.
 - `PAID_WITHOUT_RECEIPT`: An invoice was paid with no goods receipt (no 3-way match).
+- `QUOTE_PO_MISMATCH`: The PO value differs from the approved quotation.
 - `SUPPLIER_COMPLIANCE_FLAG`: The legacy supplier profile is flagged for compliance.
 - `UNCLASSIFIED_SPEND`: The legacy request has no item or category, so the spend could not be classified.
 
