@@ -1,0 +1,2507 @@
+{
+ "source": {
+  "kind": "docker",
+  "container": "supplier_twin_db",
+  "database": "supplier_twin"
+ },
+ "extractedAt": "2026-10-27T13:52:04+00:00",
+ "alembicVersion": "d504090e6c08",
+ "counts": {
+  "tenants": 8,
+  "users": 6,
+  "supplier_profiles": 6,
+  "order_requests": 11,
+  "quotations": 12,
+  "negotiation_messages": 0,
+  "purchase_orders": 11,
+  "po_approvals": 4,
+  "contracts": 0,
+  "advance_ship_notices": 3,
+  "goods_receipts": 3,
+  "sales_invoices": 29,
+  "payments": 15,
+  "inventory_items": 19,
+  "stock_transactions": 29
+ },
+ "sha256": "f1877089910c1cf3e8546c87d0100f3f88456cfdc229ae111ed51fa0538a5769",
+ "columns": {
+  "tenants": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "type",
+    "type": "character varying"
+   },
+   {
+    "name": "name",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "users": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "email",
+    "type": "character varying"
+   },
+   {
+    "name": "full_name",
+    "type": "character varying"
+   },
+   {
+    "name": "role",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "supplier_profiles": [
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "description",
+    "type": "character varying"
+   },
+   {
+    "name": "financial_risk_score",
+    "type": "integer"
+   },
+   {
+    "name": "esg_score",
+    "type": "integer"
+   },
+   {
+    "name": "compliance_status",
+    "type": "character varying"
+   },
+   {
+    "name": "last_audit_date",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "order_requests": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "description",
+    "type": "text"
+   },
+   {
+    "name": "target_supplier_id",
+    "type": "character varying"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "quotations": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "request_id",
+    "type": "character varying"
+   },
+   {
+    "name": "supplier_tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "amount",
+    "type": "double precision"
+   },
+   {
+    "name": "terms",
+    "type": "text"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "negotiation_messages": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "quotation_id",
+    "type": "character varying"
+   },
+   {
+    "name": "sender_tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "message",
+    "type": "text"
+   },
+   {
+    "name": "proposed_amount",
+    "type": "double precision"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "purchase_orders": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "po_number",
+    "type": "character varying"
+   },
+   {
+    "name": "quotation_id",
+    "type": "character varying"
+   },
+   {
+    "name": "supplier_tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "total_amount",
+    "type": "double precision"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "po_approvals": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "po_id",
+    "type": "character varying"
+   },
+   {
+    "name": "approver_id",
+    "type": "character varying"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "comments",
+    "type": "text"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "contracts": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "po_id",
+    "type": "character varying"
+   },
+   {
+    "name": "supplier_tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "document_content",
+    "type": "text"
+   },
+   {
+    "name": "buyer_signature",
+    "type": "character varying"
+   },
+   {
+    "name": "supplier_signature",
+    "type": "character varying"
+   },
+   {
+    "name": "signed_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "advance_ship_notices": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "po_id",
+    "type": "character varying"
+   },
+   {
+    "name": "carrier",
+    "type": "character varying"
+   },
+   {
+    "name": "tracking_number",
+    "type": "character varying"
+   },
+   {
+    "name": "expected_date",
+    "type": "character varying"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "goods_receipts": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "po_id",
+    "type": "character varying"
+   },
+   {
+    "name": "received_quantity",
+    "type": "double precision"
+   },
+   {
+    "name": "received_amount_value",
+    "type": "double precision"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   }
+  ],
+  "sales_invoices": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "po_id",
+    "type": "character varying"
+   },
+   {
+    "name": "buyer_tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "amount",
+    "type": "double precision"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "dispatch_status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "invoiced_quantity",
+    "type": "double precision"
+   },
+   {
+    "name": "match_status",
+    "type": "character varying"
+   },
+   {
+    "name": "due_date",
+    "type": "character varying"
+   },
+   {
+    "name": "description",
+    "type": "text"
+   }
+  ],
+  "payments": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "invoice_id",
+    "type": "character varying"
+   },
+   {
+    "name": "amount",
+    "type": "double precision"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "due_date",
+    "type": "character varying"
+   },
+   {
+    "name": "description",
+    "type": "text"
+   }
+  ],
+  "inventory_items": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "sku",
+    "type": "character varying"
+   },
+   {
+    "name": "name",
+    "type": "character varying"
+   },
+   {
+    "name": "quantity_on_hand",
+    "type": "integer"
+   },
+   {
+    "name": "unit_price",
+    "type": "double precision"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "category",
+    "type": "character varying"
+   },
+   {
+    "name": "unit",
+    "type": "character varying"
+   },
+   {
+    "name": "min_threshold",
+    "type": "integer"
+   },
+   {
+    "name": "max_capacity",
+    "type": "integer"
+   },
+   {
+    "name": "location",
+    "type": "character varying"
+   },
+   {
+    "name": "status",
+    "type": "character varying"
+   }
+  ],
+  "stock_transactions": [
+   {
+    "name": "id",
+    "type": "character varying"
+   },
+   {
+    "name": "inventory_item_id",
+    "type": "character varying"
+   },
+   {
+    "name": "change_quantity",
+    "type": "integer"
+   },
+   {
+    "name": "reference_type",
+    "type": "character varying"
+   },
+   {
+    "name": "reference_id",
+    "type": "character varying"
+   },
+   {
+    "name": "tenant_id",
+    "type": "character varying"
+   },
+   {
+    "name": "created_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "updated_at",
+    "type": "timestamp with time zone"
+   },
+   {
+    "name": "notes",
+    "type": "text"
+   },
+   {
+    "name": "performed_by",
+    "type": "character varying"
+   },
+   {
+    "name": "balance_after",
+    "type": "integer"
+   }
+  ]
+ },
+ "tables": {
+  "tenants": [
+   {
+    "id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "type": "SUPPLIER",
+    "name": "Lawrence LLC",
+    "created_at": "2026-10-05T11:45:18.290557+00:00"
+   },
+   {
+    "id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "type": "SUPPLIER",
+    "name": "James-Hampton",
+    "created_at": "2026-10-05T11:45:18.290563+00:00"
+   },
+   {
+    "id": "22645dd7-8966-467d-8907-61585915241f",
+    "type": "SUPPLIER",
+    "name": "Gonzalez Inc",
+    "created_at": "2026-10-05T11:45:18.290572+00:00"
+   },
+   {
+    "id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "type": "SUPPLIER",
+    "name": "Jones, Figueroa and Stephenson",
+    "created_at": "2026-10-05T11:45:18.290568+00:00"
+   },
+   {
+    "id": "TENANT_BUYER_001",
+    "type": "BUYER",
+    "name": "Dummy Buyer",
+    "created_at": "2026-10-09T05:35:33.960656+00:00"
+   },
+   {
+    "id": "TENANT_SUPPLIER_001",
+    "type": "SUPPLIER",
+    "name": "Dummy Supplier",
+    "created_at": "2026-10-09T05:35:33.960668+00:00"
+   },
+   {
+    "id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "type": "SUPPLIER",
+    "name": "Morrison PLC",
+    "created_at": "2026-10-05T11:45:18.290576+00:00"
+   },
+   {
+    "id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "type": "BUYER",
+    "name": "Global Manufacturing Corp",
+    "created_at": "2026-10-05T11:45:18.290547+00:00"
+   }
+  ],
+  "users": [
+   {
+    "id": "0f94c55a-c4d6-402a-91ae-6f4bb05c9120",
+    "email": "carriedavis@example.net",
+    "full_name": "Julian Malone",
+    "role": "Supplier Admin",
+    "tenant_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "created_at": "2026-10-05T11:45:18.299959+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "4ab1f09b-cb77-44ad-88bb-62328bacfe96",
+    "email": "marycooper@example.net",
+    "full_name": "Jill Campbell",
+    "role": "Supplier Admin",
+    "tenant_id": "22645dd7-8966-467d-8907-61585915241f",
+    "created_at": "2026-10-05T11:45:18.299967+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "757995a9-aa0f-4346-9e97-2fccc19eb3c5",
+    "email": "procurement@globalmfg.com",
+    "full_name": "Alice Buyer",
+    "role": "Admin",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.299945+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "866b750a-3a21-4fd8-b31c-5432c320486d",
+    "email": "joellindsey@example.com",
+    "full_name": "Steven Payne",
+    "role": "Supplier Admin",
+    "tenant_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "created_at": "2026-10-05T11:45:18.299954+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "ad586bb3-00b9-469b-97b8-984537d6703c",
+    "email": "autumn26@example.org",
+    "full_name": "David Craig",
+    "role": "Supplier Admin",
+    "tenant_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "created_at": "2026-10-05T11:45:18.299971+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "f7c1fe54-7242-46f6-9200-33e5732f9946",
+    "email": "yolandale@example.net",
+    "full_name": "James Hughes",
+    "role": "Supplier Admin",
+    "tenant_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "created_at": "2026-10-05T11:45:18.299963+00:00",
+    "updated_at": null
+   }
+  ],
+  "supplier_profiles": [
+   {
+    "tenant_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "description": "A leading provider of high-quality industrial materials and electronic components.",
+    "financial_risk_score": 86,
+    "esg_score": 70,
+    "compliance_status": "FLAG",
+    "last_audit_date": "2026-07-31T13:34:35.828557+00:00"
+   },
+   {
+    "tenant_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "description": "A leading provider of high-quality industrial materials and electronic components.",
+    "financial_risk_score": 67,
+    "esg_score": 51,
+    "compliance_status": "COMPLIANT",
+    "last_audit_date": "2026-04-07T13:34:35.897347+00:00"
+   },
+   {
+    "tenant_id": "22645dd7-8966-467d-8907-61585915241f",
+    "description": "A leading provider of high-quality industrial materials and electronic components.",
+    "financial_risk_score": 69,
+    "esg_score": 77,
+    "compliance_status": "FLAG",
+    "last_audit_date": "2026-09-24T13:34:35.983278+00:00"
+   },
+   {
+    "tenant_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "description": "A leading provider of high-quality industrial materials and electronic components.",
+    "financial_risk_score": 76,
+    "esg_score": 59,
+    "compliance_status": "COMPLIANT",
+    "last_audit_date": "2026-08-17T13:34:35.940318+00:00"
+   },
+   {
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "description": "A leading provider of high-quality industrial materials and electronic components.",
+    "financial_risk_score": 82,
+    "esg_score": 53,
+    "compliance_status": "FLAG",
+    "last_audit_date": "2026-06-28T14:41:49.517731+00:00"
+   },
+   {
+    "tenant_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "description": "A leading provider of high-quality industrial materials and electronic components.",
+    "financial_risk_score": 71,
+    "esg_score": 78,
+    "compliance_status": "FLAG",
+    "last_audit_date": "2026-05-13T13:34:36.027168+00:00"
+   }
+  ],
+  "order_requests": [
+   {
+    "id": "090fca8c-ff70-49ee-bf31-96b6ac717c38",
+    "description": "Extended attitude-oriented hierarchy",
+    "target_supplier_id": "22645dd7-8966-467d-8907-61585915241f",
+    "status": "APPROVED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.490285+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "20bdead2-013b-4bb9-bb50-96c5be6a2ed7",
+    "description": "De-engineered directional complexity",
+    "target_supplier_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "status": "APPROVED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.441835+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "5c6b29cb-da2a-4367-912d-fe665158d487",
+    "description": "Automated secondary process improvement",
+    "target_supplier_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "status": "APPROVED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.516333+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "9a7cbe13-3c94-42b9-990d-ddd335e331aa",
+    "description": "Switchable next generation attitude",
+    "target_supplier_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "status": "APPROVED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.337941+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "REQ-804D5B",
+    "description": "Purchase Request for Propulsion Engineering: Cryogenic Fuel Injector Nozzles for Starship Stage 2",
+    "target_supplier_id": "TENANT_SUPPLIER_001",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T07:11:21.662869+00:00",
+    "updated_at": "2026-10-20T07:11:21.662869+00:00"
+   },
+   {
+    "id": "REQ-D3F610",
+    "description": "Purchase Request for Propulsion Engineering: Cryogenic Fuel Injector Nozzles for Starship Stage 2",
+    "target_supplier_id": "TENANT_SUPPLIER_001",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T05:36:41.670789+00:00",
+    "updated_at": "2026-10-20T05:36:41.670789+00:00"
+   },
+   {
+    "id": "REQ-DUM-PO-2025-00045",
+    "description": "Dummy Req",
+    "target_supplier_id": null,
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-10T15:14:52.243262+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "REQ-DUM-PO-2025-00089",
+    "description": "Dummy Req",
+    "target_supplier_id": null,
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-09T08:57:56.785072+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "REQ-DUM-PO-2025-00123",
+    "description": "Dummy Req",
+    "target_supplier_id": null,
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-09T05:38:45.474891+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "RFQ-2026-092",
+    "description": "5-Axis Aerospace Avionics Enclosure Housing - AERO-ENC-7075-REV4 (150 units)",
+    "target_supplier_id": "TENANT_SUPPLIER_001",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-16T12:16:35.403695+00:00",
+    "updated_at": "2026-10-19T11:56:05.910302+00:00"
+   },
+   {
+    "id": "ae302c7b-b324-43cd-9cf3-5b324f07204a",
+    "description": "Optional 6thgeneration projection",
+    "target_supplier_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "status": "APPROVED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.402837+00:00",
+    "updated_at": null
+   }
+  ],
+  "quotations": [
+   {
+    "id": "102104a5-c857-44af-8fa7-7cba3a3d6cd6",
+    "request_id": "090fca8c-ff70-49ee-bf31-96b6ac717c38",
+    "supplier_tenant_id": "22645dd7-8966-467d-8907-61585915241f",
+    "amount": 25654.45,
+    "terms": "Though nor meeting choose score. Appear now alone buy.",
+    "status": "APPROVED",
+    "tenant_id": "22645dd7-8966-467d-8907-61585915241f",
+    "created_at": "2026-10-05T11:45:18.496888+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "67f900ce-82c2-45a6-8c4d-5f2aa3762ccb",
+    "request_id": "5c6b29cb-da2a-4367-912d-fe665158d487",
+    "supplier_tenant_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "amount": 44296.4,
+    "terms": "Pick benefit enough form down. Lay interest price above discussion without same those.",
+    "status": "APPROVED",
+    "tenant_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "created_at": "2026-10-05T11:45:18.520846+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "79027486-699d-44e4-87e1-6817e76ffc5e",
+    "request_id": "20bdead2-013b-4bb9-bb50-96c5be6a2ed7",
+    "supplier_tenant_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "amount": 3800.34,
+    "terms": "Rather detail girl interesting paper build after. Cell note eye focus.",
+    "status": "APPROVED",
+    "tenant_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "created_at": "2026-10-05T11:45:18.468166+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "7b806203-e85a-4c2e-ac6e-a7e26fb21bc5",
+    "request_id": "ae302c7b-b324-43cd-9cf3-5b324f07204a",
+    "supplier_tenant_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "amount": 35232.31,
+    "terms": "Network value call fast. Firm public foreign some reveal race.",
+    "status": "APPROVED",
+    "tenant_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "created_at": "2026-10-05T11:45:18.408766+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "QUO-2026-092-A",
+    "request_id": "RFQ-2026-092",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 39750,
+    "terms": "Lead Time: 14 days | Net 30 Days | DDP Buyer Warehouse",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-19T11:55:53.462523+00:00",
+    "updated_at": "2026-10-19T11:55:53.462523+00:00"
+   },
+   {
+    "id": "QUO-479161",
+    "request_id": "REQ-804D5B",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 50400,
+    "terms": "Payment: Net 30 Days | Incoterms: DDP Spaceport Warehouse Bay 4",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T07:11:21.662869+00:00",
+    "updated_at": "2026-10-20T07:11:21.662869+00:00"
+   },
+   {
+    "id": "QUO-6FE0F7",
+    "request_id": "REQ-D3F610",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 50400,
+    "terms": "Payment: Net 30 Days | Incoterms: DDP Spaceport Warehouse Bay 4",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T05:36:41.670789+00:00",
+    "updated_at": "2026-10-20T05:36:41.670789+00:00"
+   },
+   {
+    "id": "QUO-DUM-PO-2025-00045",
+    "request_id": "REQ-DUM-PO-2025-00045",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 29500,
+    "terms": "Dummy terms",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-10T15:14:52.286372+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "QUO-DUM-PO-2025-00089",
+    "request_id": "REQ-DUM-PO-2025-00089",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 29500,
+    "terms": "Dummy terms",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-09T08:57:56.835008+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "QUO-DUM-PO-2025-00123",
+    "request_id": "REQ-DUM-PO-2025-00123",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 29500,
+    "terms": "Dummy terms",
+    "status": "APPROVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-09T05:38:45.575882+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "QUOTE-D43C69",
+    "request_id": "RFQ-2026-092",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "amount": 42000,
+    "terms": "Lead Time: 2 days | Payment: Net 30 Days (Electronic Bank Wire) | Incoterms: DDP Buyer Warehouse | Valid: 30 days. 100% CMM dimensional metrology report and EN 10204 3.1 material test certificate included. Dispatches from FGI Bay FG-03 in 48 hours.",
+    "status": "QUOTED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-16T12:16:36.331437+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "dd2a270b-18d2-4c23-a113-41c01594e55b",
+    "request_id": "9a7cbe13-3c94-42b9-990d-ddd335e331aa",
+    "supplier_tenant_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "amount": 33884.5,
+    "terms": "West collection left truth strong. Author build lot sit help chance.",
+    "status": "APPROVED",
+    "tenant_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "created_at": "2026-10-05T11:45:18.349767+00:00",
+    "updated_at": null
+   }
+  ],
+  "negotiation_messages": [],
+  "purchase_orders": [
+   {
+    "id": "162f1eda-50e0-4d87-9aae-b5026d371c58",
+    "po_number": "PO-2026-7022",
+    "quotation_id": "7b806203-e85a-4c2e-ac6e-a7e26fb21bc5",
+    "supplier_tenant_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "total_amount": 35232.31,
+    "status": "ISSUED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.414299+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "7e4bc424-0a5b-4bcd-94cf-e599811b8bef",
+    "po_number": "PO-2026-1175",
+    "quotation_id": "67f900ce-82c2-45a6-8c4d-5f2aa3762ccb",
+    "supplier_tenant_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "total_amount": 44296.4,
+    "status": "ISSUED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.525493+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "8995defa-c056-45b4-a900-f40bf999dbe8",
+    "po_number": "PO-2026-6488",
+    "quotation_id": "dd2a270b-18d2-4c23-a113-41c01594e55b",
+    "supplier_tenant_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "total_amount": 125000,
+    "status": "PENDING_APPROVAL",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.362287+00:00",
+    "updated_at": "2026-10-05T11:45:45.62838+00:00"
+   },
+   {
+    "id": "9e073bae-866c-4e47-b3bb-b5d7afbd3798",
+    "po_number": "PO-2026-2473",
+    "quotation_id": "79027486-699d-44e4-87e1-6817e76ffc5e",
+    "supplier_tenant_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "total_amount": 3800.34,
+    "status": "ISSUED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.474015+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "PO-2025-00045",
+    "po_number": "PO-2025-00045",
+    "quotation_id": "QUO-DUM-PO-2025-00045",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "total_amount": 29500,
+    "status": "INVOICED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-10T15:14:52.31031+00:00",
+    "updated_at": "2026-10-10T15:14:52.373969+00:00"
+   },
+   {
+    "id": "PO-2025-00089",
+    "po_number": "PO-2025-00089",
+    "quotation_id": "QUO-DUM-PO-2025-00089",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "total_amount": 29500,
+    "status": "INVOICED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-09T08:57:57.010835+00:00",
+    "updated_at": "2026-10-12T04:46:03.335995+00:00"
+   },
+   {
+    "id": "PO-2025-00123",
+    "po_number": "PO-2025-00123",
+    "quotation_id": "QUO-DUM-PO-2025-00123",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "total_amount": 29500,
+    "status": "INVOICED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-09T05:38:45.647537+00:00",
+    "updated_at": "2026-10-16T14:55:52.480613+00:00"
+   },
+   {
+    "id": "f825d313-f211-4e72-ad47-90239ca88d01",
+    "po_number": "PO-2026-8183",
+    "quotation_id": "102104a5-c857-44af-8fa7-7cba3a3d6cd6",
+    "supplier_tenant_id": "22645dd7-8966-467d-8907-61585915241f",
+    "total_amount": 25654.45,
+    "status": "ISSUED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.501692+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "po-128f577d",
+    "po_number": "PO-2026-4E0D",
+    "quotation_id": "QUO-2026-092-A",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "total_amount": 39750,
+    "status": "ISSUED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-19T11:55:53.462523+00:00",
+    "updated_at": "2026-10-19T11:55:53.462523+00:00"
+   },
+   {
+    "id": "po-b70b2b65",
+    "po_number": "PO-2026-58A9",
+    "quotation_id": "QUO-6FE0F7",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "total_amount": 50400,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T05:36:41.670789+00:00",
+    "updated_at": "2026-10-20T05:39:22.63043+00:00"
+   },
+   {
+    "id": "po-fb1f16b2",
+    "po_number": "PO-2026-AE99",
+    "quotation_id": "QUO-479161",
+    "supplier_tenant_id": "TENANT_SUPPLIER_001",
+    "total_amount": 50400,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T07:11:21.662869+00:00",
+    "updated_at": "2026-10-20T07:11:22.862845+00:00"
+   }
+  ],
+  "po_approvals": [
+   {
+    "id": "APP-1483C5",
+    "po_id": "po-fb1f16b2",
+    "approver_id": "Pending Department/Executive Review",
+    "status": "PENDING",
+    "comments": "Approval required: PO total $50,400.00 exceeds standard authorization threshold.",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T07:11:21.662869+00:00",
+    "updated_at": "2026-10-20T07:11:21.662869+00:00"
+   },
+   {
+    "id": "APP-1BDE3D",
+    "po_id": "po-fb1f16b2",
+    "approver_id": "Elena Rostova",
+    "status": "APPROVED",
+    "comments": "Level 2 financial sign-off approved under CAPEX FY2026.",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T07:11:21.975033+00:00",
+    "updated_at": "2026-10-20T07:11:21.975033+00:00"
+   },
+   {
+    "id": "APP-2DC700",
+    "po_id": "po-b70b2b65",
+    "approver_id": "Elena Rostova",
+    "status": "APPROVED",
+    "comments": "Level 2 financial sign-off approved under CAPEX FY2026.",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T05:39:15.749193+00:00",
+    "updated_at": "2026-10-20T05:39:15.749193+00:00"
+   },
+   {
+    "id": "APP-5B947E",
+    "po_id": "po-b70b2b65",
+    "approver_id": "Pending Department/Executive Review",
+    "status": "PENDING",
+    "comments": "Approval required: PO total $50,400.00 exceeds standard authorization threshold.",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T05:36:41.670789+00:00",
+    "updated_at": "2026-10-20T05:36:41.670789+00:00"
+   }
+  ],
+  "contracts": [],
+  "advance_ship_notices": [
+   {
+    "id": "ASN-A50B69",
+    "po_id": "PO-2025-00123",
+    "carrier": "FedEx Aerospace Freight",
+    "tracking_number": "FX-TEST-88912-US",
+    "expected_date": "2026-10-22",
+    "status": "SHIPPED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-16T09:00:36.454067+00:00",
+    "updated_at": "2026-10-16T09:00:36.454067+00:00"
+   },
+   {
+    "id": "ASN-DBBDF9",
+    "po_id": "po-b70b2b65",
+    "carrier": "FedEx Aerospace Freight",
+    "tracking_number": "FX-STAR-99218-US",
+    "expected_date": "2026-11-20",
+    "status": "SHIPPED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-20T05:39:19.806666+00:00",
+    "updated_at": "2026-10-20T05:39:19.806666+00:00"
+   },
+   {
+    "id": "ASN-F19178",
+    "po_id": "po-fb1f16b2",
+    "carrier": "FedEx Aerospace Freight",
+    "tracking_number": "FX-STAR-99218-US",
+    "expected_date": "2026-11-20",
+    "status": "SHIPPED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-20T07:11:22.330006+00:00",
+    "updated_at": "2026-10-20T07:11:22.330006+00:00"
+   }
+  ],
+  "goods_receipts": [
+   {
+    "id": "GR-666F9909",
+    "po_id": "PO-2025-00089",
+    "received_quantity": 1,
+    "received_amount_value": 29500,
+    "status": "RECEIVED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T09:19:19.662136+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "GR-A23BD20A",
+    "po_id": "PO-2025-00123",
+    "received_quantity": 1,
+    "received_amount_value": 29500,
+    "status": "RECEIVED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T08:45:27.367805+00:00",
+    "updated_at": null
+   },
+   {
+    "id": "GRN-71FF62",
+    "po_id": "PO-2025-00045",
+    "received_quantity": 100,
+    "received_amount_value": 2500,
+    "status": "RECEIVED",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-13T07:17:35.537412+00:00",
+    "updated_at": null
+   }
+  ],
+  "sales_invoices": [
+   {
+    "id": "567a1a83-1d78-43b9-8b84-008dc76a259a",
+    "po_id": "9e073bae-866c-4e47-b3bb-b5d7afbd3798",
+    "buyer_tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "amount": 3800.34,
+    "status": "PENDING",
+    "dispatch_status": "DISPATCHED",
+    "tenant_id": "309c7081-3d30-43fc-946e-63423a811cde",
+    "created_at": "2026-10-05T11:45:18.480311+00:00",
+    "updated_at": null,
+    "invoiced_quantity": null,
+    "match_status": null,
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "66157773-03a0-4b3e-91e2-bddba80e601d",
+    "po_id": "7e4bc424-0a5b-4bcd-94cf-e599811b8bef",
+    "buyer_tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "amount": 44296.4,
+    "status": "PENDING",
+    "dispatch_status": "DISPATCHED",
+    "tenant_id": "ca617a63-0a2b-4f5f-8e19-d0c8db655bf1",
+    "created_at": "2026-10-05T11:45:18.530541+00:00",
+    "updated_at": null,
+    "invoiced_quantity": null,
+    "match_status": null,
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "8b1ccf63-e8b3-45cb-8267-7ae631aa7b95",
+    "po_id": "f825d313-f211-4e72-ad47-90239ca88d01",
+    "buyer_tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "amount": 25654.45,
+    "status": "PENDING",
+    "dispatch_status": "DISPATCHED",
+    "tenant_id": "22645dd7-8966-467d-8907-61585915241f",
+    "created_at": "2026-10-05T11:45:18.506012+00:00",
+    "updated_at": null,
+    "invoiced_quantity": null,
+    "match_status": null,
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-00A855F0",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T08:58:19.915246+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-2025-1118",
+    "po_id": "PO-2025-00045",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 8200,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T10:10:31.681671+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-2025-1119",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 12500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T10:10:31.613756+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-2025-1120",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T10:10:31.5102+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-33A2F258",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T11:18:12.359919+00:00",
+    "updated_at": "2026-10-12T12:15:56.916938+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-45FDBA86",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T11:17:32.992629+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-4F71D524",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T12:01:26.986553+00:00",
+    "updated_at": "2026-10-12T12:15:44.005999+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-500BF04A",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T06:55:15.051708+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-550B1F1C",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T08:58:02.544327+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-551AC542",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T08:20:21.6673+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-64B5068D",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 32000,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T11:39:20.716904+00:00",
+    "updated_at": "2026-10-12T12:15:53.021229+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-65857A98",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T12:03:30.061911+00:00",
+    "updated_at": "2026-10-21T08:37:28.256767+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "MATCHED",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-7B0E150B",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T08:57:31.901727+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-8AF8D579",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T08:57:57.035663+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-9306FD51",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T08:29:20.3721+00:00",
+    "updated_at": "2026-10-12T08:45:31.305109+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "MATCHED",
+    "due_date": "2026-11-11T13:59:17.785389",
+    "description": "Precision Machined Metal Parts for PO-2025-00123"
+   },
+   {
+    "id": "INV-94D74063",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T11:30:16.329641+00:00",
+    "updated_at": "2026-10-12T12:15:54.433917+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-9683FE6D",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "DISPATCHED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-16T14:55:52.739331+00:00",
+    "updated_at": "2026-10-16T14:55:53.379732+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "MATCHED",
+    "due_date": "2026-11-15T20:25:52.733652",
+    "description": "Automated PO-Flip Commercial Invoice for PO-2025-00123 - Shipped w/ ASN FX-TEST-88912-US"
+   },
+   {
+    "id": "INV-A9590A77",
+    "po_id": "PO-2025-00045",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-10T15:14:52.357539+00:00",
+    "updated_at": "2026-10-12T10:59:11.695457+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-AD2889BE",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T06:55:29.419043+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-B5AA9552",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T14:39:37.342024+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-B5B9EFFD",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-10T15:12:51.944905+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-D0B2C2D0",
+    "po_id": "PO-2025-00123",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PENDING",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T08:46:41.855865+00:00",
+    "updated_at": null,
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-DD966C12",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T11:17:51.206858+00:00",
+    "updated_at": "2026-10-12T12:15:55.650649+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "PENDING",
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "INV-EE51835D",
+    "po_id": "PO-2025-00089",
+    "buyer_tenant_id": "TENANT_BUYER_001",
+    "amount": 29500,
+    "status": "PAID",
+    "dispatch_status": "PENDING",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T04:46:03.192505+00:00",
+    "updated_at": "2026-10-12T09:19:38.317462+00:00",
+    "invoiced_quantity": 1,
+    "match_status": "MATCHED",
+    "due_date": null,
+    "description": "[DISPUTE: Price Discrepancy - Unit price higher than agreed contract quotation.]"
+   },
+   {
+    "id": "ad1773ee-42aa-44e1-85b2-42268d95694a",
+    "po_id": "162f1eda-50e0-4d87-9aae-b5026d371c58",
+    "buyer_tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "amount": 35232.31,
+    "status": "PAID",
+    "dispatch_status": "DISPATCHED",
+    "tenant_id": "1ef4bf40-8033-49f5-ba1b-2617dcceffe4",
+    "created_at": "2026-10-05T11:45:18.418812+00:00",
+    "updated_at": "2026-10-05T11:45:18.435544+00:00",
+    "invoiced_quantity": null,
+    "match_status": null,
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "f089138d-71f9-4773-97b0-38e34843b59d",
+    "po_id": "8995defa-c056-45b4-a900-f40bf999dbe8",
+    "buyer_tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "amount": 33884.5,
+    "status": "PAID",
+    "dispatch_status": "DISPATCHED",
+    "tenant_id": "047fb121-28d5-43e5-84dd-827a92211b5e",
+    "created_at": "2026-10-05T11:45:18.372057+00:00",
+    "updated_at": "2026-10-05T11:45:18.397667+00:00",
+    "invoiced_quantity": null,
+    "match_status": null,
+    "due_date": null,
+    "description": null
+   }
+  ],
+  "payments": [
+   {
+    "id": "PAY-011A353C",
+    "invoice_id": "INV-64B5068D",
+    "amount": 32000,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T17:45:45.971117+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-12T17:45:45.971090",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-C6EF2E77). Batch Payment Run - Invoice INV-64B5068D"
+   },
+   {
+    "id": "PAY-1065F8CA",
+    "invoice_id": "INV-A9590A77",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T16:29:11.666266+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-12T16:29:11.666245",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-21D0EF35). Automated AP verification run"
+   },
+   {
+    "id": "PAY-2025-0837",
+    "invoice_id": "INV-2025-1118",
+    "amount": 8200,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-04T15:40:31.442371+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-04T15:40:31.442371",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-5-0837). Authorized settlement."
+   },
+   {
+    "id": "PAY-2025-0839",
+    "invoice_id": "INV-2025-1119",
+    "amount": 12500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-07T15:40:31.442371+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-07T15:40:31.442371",
+    "description": "Paid via Commercial Virtual Card (Ref: REF-5-0839). Authorized settlement."
+   },
+   {
+    "id": "PAY-2025-0841",
+    "invoice_id": "INV-2025-1120",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T15:40:31.442371+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-09T15:40:31.442371",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-5-0841). Authorized settlement."
+   },
+   {
+    "id": "PAY-416C1A7C",
+    "invoice_id": "INV-DD966C12",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T17:45:55.634769+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-12T17:45:55.634749",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-9DCF7469). Batch Payment Run - Invoice INV-DD966C12"
+   },
+   {
+    "id": "PAY-603CC5C0",
+    "invoice_id": "INV-4F71D524",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T17:45:40.704389+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-12T17:45:40.704363",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-858468C9). Batch Payment Run - Invoice INV-4F71D524"
+   },
+   {
+    "id": "PAY-8AC32A2C",
+    "invoice_id": "INV-EE51835D",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T09:19:38.312214+00:00",
+    "updated_at": null,
+    "due_date": null,
+    "description": "Paid via ACH Direct Deposit (Ref: REF-7C2B6DAB). Approved via Accounts Payable Workflow"
+   },
+   {
+    "id": "PAY-B86D7F7F",
+    "invoice_id": "INV-94D74063",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T17:45:53.636047+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-12T17:45:53.635998",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-D9BD15F1). Batch Payment Run - Invoice INV-94D74063"
+   },
+   {
+    "id": "PAY-BDDC9D60",
+    "invoice_id": "INV-9306FD51",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T08:45:30.954663+00:00",
+    "updated_at": null,
+    "due_date": "2026-11-11T13:59:17.785389",
+    "description": "Paid via ACH (Ref: REF-2F6A5CDD). Verified by Buyer Accounts Payable"
+   },
+   {
+    "id": "PAY-C24B9109",
+    "invoice_id": "INV-9683FE6D",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-16T14:55:53.298066+00:00",
+    "updated_at": null,
+    "due_date": "2026-11-15T20:25:52.733652",
+    "description": "Paid via Smart Contract Blockchain Auto-Disbursement (Ref: TX-8E5E30AEA443). Disbursed on Block #5 under consortium consensus"
+   },
+   {
+    "id": "PAY-DB46F0D0",
+    "invoice_id": "INV-33A2F258",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T17:45:56.722172+00:00",
+    "updated_at": null,
+    "due_date": "2026-10-12T17:45:56.722156",
+    "description": "Paid via ACH Direct Deposit (Ref: REF-89F536BA). Batch Payment Run - Invoice INV-33A2F258"
+   },
+   {
+    "id": "PAY-FF572775",
+    "invoice_id": "INV-65857A98",
+    "amount": 29500,
+    "status": "COMPLETED",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-21T08:37:26.742894+00:00",
+    "updated_at": null,
+    "due_date": null,
+    "description": "Paid via ACH Direct Deposit (Ref: REF-3C98453C). Approved via Accounts Payable Workflow"
+   },
+   {
+    "id": "c9abe927-2953-43c3-90a2-db78883b06b1",
+    "invoice_id": "ad1773ee-42aa-44e1-85b2-42268d95694a",
+    "amount": 35232.31,
+    "status": "COMPLETED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.429452+00:00",
+    "updated_at": null,
+    "due_date": null,
+    "description": null
+   },
+   {
+    "id": "e3bc257b-3797-4fc8-b478-e50845d0e6a0",
+    "invoice_id": "f089138d-71f9-4773-97b0-38e34843b59d",
+    "amount": 33884.5,
+    "status": "COMPLETED",
+    "tenant_id": "fb71d98d-1203-420f-95fd-7f6639403172",
+    "created_at": "2026-10-05T11:45:18.387314+00:00",
+    "updated_at": null,
+    "due_date": null,
+    "description": null
+   }
+  ],
+  "inventory_items": [
+   {
+    "id": "INV-SKU-001",
+    "sku": "AERO-TI-FAST-01",
+    "name": "Titanium Grade 5 Aerospace Fasteners M8x40",
+    "quantity_on_hand": 3462,
+    "unit_price": 42.5,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-20T05:39:21.878955+00:00",
+    "category": "Fasteners & Hardware",
+    "unit": "pcs",
+    "min_threshold": 500,
+    "max_capacity": 6000,
+    "location": "Warehouse A - Bay 03",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SKU-002",
+    "sku": "RAW-ALUM-A356",
+    "name": "Aluminum Ingots A356 Aerospace Grade",
+    "quantity_on_hand": 8335,
+    "unit_price": 5.8,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-13T05:47:30.480909+00:00",
+    "category": "Raw Materials",
+    "unit": "kg",
+    "min_threshold": 2000,
+    "max_capacity": 15000,
+    "location": "Warehouse A - Bay 01",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SKU-003",
+    "sku": "ELEC-MCU-CORTEX",
+    "name": "High-Reliability ARM Cortex-M7 Microcontroller",
+    "quantity_on_hand": 192,
+    "unit_price": 115,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-20T07:11:22.655863+00:00",
+    "category": "Electronic Components",
+    "unit": "pcs",
+    "min_threshold": 300,
+    "max_capacity": 2500,
+    "location": "Warehouse B - Cleanroom Bay 1",
+    "status": "LOW_STOCK"
+   },
+   {
+    "id": "INV-SKU-004",
+    "sku": "HYD-ACT-SERVO",
+    "name": "Precision Servo-Hydraulic Actuator 25kN",
+    "quantity_on_hand": 45,
+    "unit_price": 1850,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "category": "Machined Assemblies",
+    "unit": "units",
+    "min_threshold": 20,
+    "max_capacity": 120,
+    "location": "Warehouse C - Heavy Bay 4",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SKU-005",
+    "sku": "SEAL-VITON-HIGH",
+    "name": "Viton Fluoropolymer High-Temp O-Ring Set",
+    "quantity_on_hand": 1200,
+    "unit_price": 18.2,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "category": "Seals & Gaskets",
+    "unit": "sets",
+    "min_threshold": 350,
+    "max_capacity": 3000,
+    "location": "Warehouse B - Shelf 14",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SKU-006",
+    "sku": "STEEL-CR-2MM",
+    "name": "Cold Rolled Deep Drawing Steel Coils 2.0mm",
+    "quantity_on_hand": 14000,
+    "unit_price": 2.45,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "category": "Raw Materials",
+    "unit": "kg",
+    "min_threshold": 4000,
+    "max_capacity": 25000,
+    "location": "Warehouse A - Yard Bay 8",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SKU-007",
+    "sku": "TOOL-CARB-INSERT",
+    "name": "Tungsten Carbide CNC Milling Inserts (Box of 10)",
+    "quantity_on_hand": 28,
+    "unit_price": 145,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "category": "Tooling & Consumables",
+    "unit": "boxes",
+    "min_threshold": 50,
+    "max_capacity": 250,
+    "location": "Warehouse B - Tool Crib",
+    "status": "LOW_STOCK"
+   },
+   {
+    "id": "INV-SKU-008",
+    "sku": "COMP-CARBON-PANEL",
+    "name": "Pre-preg Carbon Fiber Structural Honeycomb Panel",
+    "quantity_on_hand": 95,
+    "unit_price": 860,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "category": "Composite Materials",
+    "unit": "sheets",
+    "min_threshold": 30,
+    "max_capacity": 200,
+    "location": "Warehouse C - Climate Vault 2",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SKU-EE9DCA",
+    "sku": "AERO-TI-ISK-101",
+    "name": "AREOSPACE ALUMINIUM PARTS",
+    "quantity_on_hand": 100,
+    "unit_price": 25,
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-13T07:17:35.537412+00:00",
+    "updated_at": "2026-10-13T07:17:35.537412+00:00",
+    "category": "Raw Materials",
+    "unit": "pcs",
+    "min_threshold": 50,
+    "max_capacity": 5000,
+    "location": "Warehouse A - Bay 01",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-001",
+    "sku": "RAW-TI-6AL4V-B",
+    "name": "Titanium Ti-6Al-4V Grade 5 Round Billets (150mm dia)",
+    "quantity_on_hand": 480,
+    "unit_price": 88.5,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-14T14:59:29.672791+00:00",
+    "category": "Raw Materials",
+    "unit": "kg",
+    "min_threshold": 120,
+    "max_capacity": 1500,
+    "location": "Raw Material Yard - Bay RM-01",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-002",
+    "sku": "RAW-INC-718-BAR",
+    "name": "Inconel 718 Aerospace Superalloy Hexagonal Bar (50mm)",
+    "quantity_on_hand": 310,
+    "unit_price": 142,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-14T14:59:29.672791+00:00",
+    "category": "Raw Materials",
+    "unit": "kg",
+    "min_threshold": 80,
+    "max_capacity": 800,
+    "location": "Raw Material Yard - Bay RM-02",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-003",
+    "sku": "RAW-AL-7075-T6",
+    "name": "Aviation Aluminum 7075-T6 Pre-Cut Billets (300x200x50mm)",
+    "quantity_on_hand": 950,
+    "unit_price": 54,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-14T14:59:29.672791+00:00",
+    "category": "Raw Materials",
+    "unit": "pcs",
+    "min_threshold": 250,
+    "max_capacity": 2500,
+    "location": "Material Staging Rack A3",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-004",
+    "sku": "TOOL-CARB-EM12",
+    "name": "Solid Micro-Grain Carbide 4-Flute Endmills 12mm TiAlN",
+    "quantity_on_hand": 18,
+    "unit_price": 96,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-14T14:59:29.672791+00:00",
+    "category": "Tooling & Fixtures",
+    "unit": "pcs",
+    "min_threshold": 25,
+    "max_capacity": 150,
+    "location": "Tool Crib - Station 4-B",
+    "status": "LOW_STOCK"
+   },
+   {
+    "id": "INV-SUP-005",
+    "sku": "TOOL-COOL-SYNTH",
+    "name": "High-Pressure Synthetic CNC Cutting Coolant (200L Drum)",
+    "quantity_on_hand": 8,
+    "unit_price": 380,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-14T14:59:29.672791+00:00",
+    "category": "Tooling & Fixtures",
+    "unit": "drums",
+    "min_threshold": 4,
+    "max_capacity": 20,
+    "location": "Chemical Vault Zone C",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-006",
+    "sku": "WIP-TURB-OP20",
+    "name": "5-Axis Milled High-Pressure Turbine Impeller (Pre-Balance)",
+    "quantity_on_hand": 22,
+    "unit_price": 1650,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-21T09:27:58.165045+00:00",
+    "category": "Work In Progress",
+    "unit": "units",
+    "min_threshold": 15,
+    "max_capacity": 100,
+    "location": "CNC Cell 3 - WIP Buffer",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-007",
+    "sku": "WIP-CRYO-VLV-B",
+    "name": "Cryogenic Valve Seat Bodies (Post Rough-Turn / Pre-Heat Treat)",
+    "quantity_on_hand": 88,
+    "unit_price": 620,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-14T14:59:29.672791+00:00",
+    "category": "Work In Progress",
+    "unit": "units",
+    "min_threshold": 30,
+    "max_capacity": 200,
+    "location": "Heat Treatment Staging Buffer",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-008",
+    "sku": "FG-ACT-SHF-01",
+    "name": "Precision Flight-Actuator Drive Shafts (CMM Certified)",
+    "quantity_on_hand": 138,
+    "unit_price": 740,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-20T07:11:22.330006+00:00",
+    "category": "Finished Goods",
+    "unit": "pcs",
+    "min_threshold": 50,
+    "max_capacity": 400,
+    "location": "Finished Goods Depot - Bay FG-01",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-009",
+    "sku": "FG-FLG-ASMY-88",
+    "name": "Micro-Tolerance Aerospace Flange Mount Assembly",
+    "quantity_on_hand": 80,
+    "unit_price": 920,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-16T09:00:36.454067+00:00",
+    "category": "Finished Goods",
+    "unit": "pcs",
+    "min_threshold": 25,
+    "max_capacity": 250,
+    "location": "Finished Goods Depot - Bay FG-02",
+    "status": "IN_STOCK"
+   },
+   {
+    "id": "INV-SUP-010",
+    "sku": "FG-SENS-HSG-30",
+    "name": "Hermetically Sealed Avionics Sensor Housings",
+    "quantity_on_hand": 328,
+    "unit_price": 245,
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-24T14:59:29.672791+00:00",
+    "updated_at": "2026-10-20T05:39:19.806666+00:00",
+    "category": "Finished Goods",
+    "unit": "pcs",
+    "min_threshold": 100,
+    "max_capacity": 600,
+    "location": "Finished Goods Depot - Bay FG-03",
+    "status": "IN_STOCK"
+   }
+  ],
+  "stock_transactions": [
+   {
+    "id": "TX-25A3B5B6",
+    "inventory_item_id": "INV-SUP-008",
+    "change_quantity": -12,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-PO-2026-AE99",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-20T07:11:22.330006+00:00",
+    "updated_at": "2026-10-20T07:11:22.330006+00:00",
+    "notes": "Customer Order Dispatch: PO-2026-AE99 via FedEx Aerospace Freight (Tracking: FX-STAR-99218-US). CoC: COC-APEX-88210. Ref ASN: ASN-F19178",
+    "performed_by": "Shipping & Logistics Lead",
+    "balance_after": 138
+   },
+   {
+    "id": "TX-2EB712C8",
+    "inventory_item_id": "INV-SKU-003",
+    "change_quantity": 12,
+    "reference_type": "GOODS_IN",
+    "reference_id": "GRN-2026-07C1",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T07:11:22.655863+00:00",
+    "updated_at": "2026-10-20T07:11:22.655863+00:00",
+    "notes": "Dock Goods Receipt Note GRN-2026-07C1 for PO PO-2026-AE99 at Receiving Dock 04-B. Storage Bin: BIN-AERO-W04",
+    "performed_by": "Marcus Vance",
+    "balance_after": 192
+   },
+   {
+    "id": "TX-385DF26D",
+    "inventory_item_id": "INV-SUP-006",
+    "change_quantity": -20,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "WO-APEX-4450",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-21T09:27:58.165045+00:00",
+    "updated_at": "2026-10-21T09:27:58.165045+00:00",
+    "notes": "Issued to 5-Axis CNC Cell 1 - DMG Mori for WO-APEX-4450. Notes: Allocated for high-precision turbine impeller machining run",
+    "performed_by": "Shop Floor Dispatch Lead",
+    "balance_after": 22
+   },
+   {
+    "id": "TX-6E75A933",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": -25,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "WO-TEST-99",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:20:58.780271+00:00",
+    "updated_at": "2026-10-12T13:20:58.780271+00:00",
+    "notes": "Test Outbound Issue",
+    "performed_by": "Test Dispatcher",
+    "balance_after": 8275
+   },
+   {
+    "id": "TX-828BADE9",
+    "inventory_item_id": "INV-SKU-004",
+    "change_quantity": -5,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-2026-0422",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "notes": "Dispatched to Final Testing & Integration Bay",
+    "performed_by": "Sarah Jenkins (Flight Systems QC)",
+    "balance_after": 45
+   },
+   {
+    "id": "TX-854F8B1B",
+    "inventory_item_id": "INV-SKU-001",
+    "change_quantity": 1000,
+    "reference_type": "GOODS_IN",
+    "reference_id": "PO-2025-00045",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "notes": "Inbound receiving from Apex Tooling Inc. Quality passed.",
+    "performed_by": "Marcus Vance (Receiving Sup.)",
+    "balance_after": 3450
+   },
+   {
+    "id": "TX-B0917F72",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": 50,
+    "reference_type": "GOODS_RECEIPT",
+    "reference_id": "GRN-E2E-TEST",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-13T05:47:29.775591+00:00",
+    "updated_at": "2026-10-13T05:47:29.775591+00:00",
+    "notes": "E2E verification of Goods In receipt",
+    "performed_by": "Automated Tester",
+    "balance_after": 8355
+   },
+   {
+    "id": "TX-B4D22E7D",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": 100,
+    "reference_type": "GOODS_IN",
+    "reference_id": "PO-TEST-001",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:20:56.546873+00:00",
+    "updated_at": "2026-10-12T13:20:56.546873+00:00",
+    "notes": "Test Inbound Receiving",
+    "performed_by": "Test Operator",
+    "balance_after": 8300
+   },
+   {
+    "id": "TX-BABE0664",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": 50,
+    "reference_type": "GOODS_RECEIPT",
+    "reference_id": "GRN-E2E-TEST",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T16:57:06.182335+00:00",
+    "updated_at": "2026-10-12T16:57:06.182335+00:00",
+    "notes": "E2E verification of Goods In receipt",
+    "performed_by": "Automated Tester",
+    "balance_after": 8325
+   },
+   {
+    "id": "TX-D13EBC68",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": -20,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-E2E-TEST",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T16:57:06.469022+00:00",
+    "updated_at": "2026-10-12T16:57:06.469022+00:00",
+    "notes": "E2E verification of Goods Out dispatch",
+    "performed_by": "Automated Tester",
+    "balance_after": 8305
+   },
+   {
+    "id": "TX-D77DB843",
+    "inventory_item_id": "INV-SUP-010",
+    "change_quantity": -12,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-PO-2026-58A9",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-20T05:39:19.806666+00:00",
+    "updated_at": "2026-10-20T05:39:19.806666+00:00",
+    "notes": "Customer Order Dispatch: PO-2026-58A9 via FedEx Aerospace Freight (Tracking: FX-STAR-99218-US). CoC: COC-APEX-88210. Ref ASN: ASN-DBBDF9",
+    "performed_by": "Shipping & Logistics Lead",
+    "balance_after": 328
+   },
+   {
+    "id": "TX-E4B21226",
+    "inventory_item_id": "INV-SKU-EE9DCA",
+    "change_quantity": 100,
+    "reference_type": "GOODS_IN",
+    "reference_id": "PO-2025-00045",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-13T07:17:35.537412+00:00",
+    "updated_at": "2026-10-13T07:17:35.537412+00:00",
+    "notes": "Passed inbound dock quality inspection",
+    "performed_by": "Receiving Dock Inspector",
+    "balance_after": 100
+   },
+   {
+    "id": "TX-E544023F",
+    "inventory_item_id": "INV-SUP-008",
+    "change_quantity": -10,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-PO-2025-00123",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-16T09:00:36.454067+00:00",
+    "updated_at": "2026-10-16T09:00:36.454067+00:00",
+    "notes": "Customer Order Dispatch: PO-2025-00123 via FedEx Aerospace Freight (Tracking: FX-TEST-88912-US). CoC: COC-AS9100D-APEX-2026. Ref ASN: ASN-A50B69",
+    "performed_by": "Shipping & Logistics Lead",
+    "balance_after": 150
+   },
+   {
+    "id": "TX-F2FCC967",
+    "inventory_item_id": "INV-SKU-003",
+    "change_quantity": -120,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "WO-2026-9901",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "notes": "Issued to Avionics Assembly Line 2 for Batch #84",
+    "performed_by": "Elena Rostova (Production Lead)",
+    "balance_after": 180
+   },
+   {
+    "id": "TX-F39D4FF6",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": 2500,
+    "reference_type": "GOODS_IN",
+    "reference_id": "PO-2025-00089",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-12T13:11:03.085036+00:00",
+    "updated_at": "2026-10-12T13:11:03.085036+00:00",
+    "notes": "Bulk raw ingot shipment cleared dock inspection",
+    "performed_by": "David Kim (Materials Mgmt)",
+    "balance_after": 8200
+   },
+   {
+    "id": "TX-F89FB8F6",
+    "inventory_item_id": "INV-SKU-001",
+    "change_quantity": 12,
+    "reference_type": "GOODS_IN",
+    "reference_id": "GRN-2026-BDE9",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-20T05:39:21.878955+00:00",
+    "updated_at": "2026-10-20T05:39:21.878955+00:00",
+    "notes": "Dock Goods Receipt Note GRN-2026-BDE9 for PO PO-2026-58A9 at Receiving Dock 04-B. Storage Bin: BIN-AERO-W04",
+    "performed_by": "Marcus Vance",
+    "balance_after": 3462
+   },
+   {
+    "id": "TX-F91A9016",
+    "inventory_item_id": "INV-SKU-002",
+    "change_quantity": -20,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-E2E-TEST",
+    "tenant_id": "TENANT_BUYER_001",
+    "created_at": "2026-10-13T05:47:30.480909+00:00",
+    "updated_at": "2026-10-13T05:47:30.480909+00:00",
+    "notes": "E2E verification of Goods Out dispatch",
+    "performed_by": "Automated Tester",
+    "balance_after": 8335
+   },
+   {
+    "id": "TX-FFC529DC",
+    "inventory_item_id": "INV-SUP-009",
+    "change_quantity": -5,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-PO-2025-00123",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-16T09:00:36.454067+00:00",
+    "updated_at": "2026-10-16T09:00:36.454067+00:00",
+    "notes": "Customer Order Dispatch: PO-2025-00123 via FedEx Aerospace Freight (Tracking: FX-TEST-88912-US). CoC: COC-AS9100D-APEX-2026. Ref ASN: ASN-A50B69",
+    "performed_by": "Shipping & Logistics Lead",
+    "balance_after": 80
+   },
+   {
+    "id": "TX-SUP-0997BE81",
+    "inventory_item_id": "INV-SUP-008",
+    "change_quantity": -40,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-APEX-7712",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-13T14:59:29.672791+00:00",
+    "updated_at": "2026-10-13T14:59:29.672791+00:00",
+    "notes": "Customer Dispatch: Dispatched 40 units to AlphaHelion Global for PO-2025-001 with ASN & CoC.",
+    "performed_by": "Shipping & Logistics Lead",
+    "balance_after": 160
+   },
+   {
+    "id": "TX-SUP-1A3A4F98",
+    "inventory_item_id": "INV-SUP-004",
+    "change_quantity": -12,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "TOOL-ISSUE-110",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-12T14:59:29.672791+00:00",
+    "updated_at": "2026-10-12T14:59:29.672791+00:00",
+    "notes": "Issued 12 endmills to CNC High-Speed Milling Cell.",
+    "performed_by": "Tool Crib Manager",
+    "balance_after": 18
+   },
+   {
+    "id": "TX-SUP-31088CCC",
+    "inventory_item_id": "INV-SUP-004",
+    "change_quantity": 30,
+    "reference_type": "GOODS_IN",
+    "reference_id": "PO-TOOL-8810",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-09-30T14:59:29.672791+00:00",
+    "updated_at": "2026-09-30T14:59:29.672791+00:00",
+    "notes": "Sandvik Coromant micro-grain endmills delivery.",
+    "performed_by": "Tool Crib Manager",
+    "balance_after": 30
+   },
+   {
+    "id": "TX-SUP-34BA3F52",
+    "inventory_item_id": "INV-SUP-002",
+    "change_quantity": -40,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "WO-APEX-4412",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-11T14:59:29.672791+00:00",
+    "updated_at": "2026-10-11T14:59:29.672791+00:00",
+    "notes": "Issued 40 kg Inconel 718 to 5-axis Mazak machining cell.",
+    "performed_by": "Production Scheduler",
+    "balance_after": 310
+   },
+   {
+    "id": "TX-SUP-3F6CA258",
+    "inventory_item_id": "INV-SUP-009",
+    "change_quantity": 100,
+    "reference_type": "GOODS_IN",
+    "reference_id": "QA-PASS-8835",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-10T14:59:29.672791+00:00",
+    "updated_at": "2026-10-10T14:59:29.672791+00:00",
+    "notes": "Batch completed ultrasonic testing. Placed in finished goods staging.",
+    "performed_by": "Quality Control Inspector",
+    "balance_after": 100
+   },
+   {
+    "id": "TX-SUP-4337E521",
+    "inventory_item_id": "INV-SUP-001",
+    "change_quantity": 500,
+    "reference_type": "GOODS_IN",
+    "reference_id": "MILL-IN-8821",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-02T14:59:29.672791+00:00",
+    "updated_at": "2026-10-02T14:59:29.672791+00:00",
+    "notes": "Titanium Billets received from Allegheny Technologies Mill. Heat #TI-9042.",
+    "performed_by": "Material Receiving Inspector",
+    "balance_after": 500
+   },
+   {
+    "id": "TX-SUP-890D66E9",
+    "inventory_item_id": "INV-SUP-003",
+    "change_quantity": -50,
+    "reference_type": "CYCLE_COUNT_ADJUSTMENT",
+    "reference_id": "AUDIT-APEX-09",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-14T08:59:29.672791+00:00",
+    "updated_at": "2026-10-14T08:59:29.672791+00:00",
+    "notes": "Physical audit reconciliation: 50 aluminum billets scrapped due to mill porosity defects.",
+    "performed_by": "Materials Quality Auditor",
+    "balance_after": 950
+   },
+   {
+    "id": "TX-SUP-A3AC23DE",
+    "inventory_item_id": "INV-SUP-009",
+    "change_quantity": -15,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "DISP-APEX-7719",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-13T20:59:29.672791+00:00",
+    "updated_at": "2026-10-13T20:59:29.672791+00:00",
+    "notes": "Dispatched 15 units to AlphaHelion Global against PO-2026-0042.",
+    "performed_by": "Shipping Bay Supervisor",
+    "balance_after": 85
+   },
+   {
+    "id": "TX-SUP-B0FA2295",
+    "inventory_item_id": "INV-SUP-002",
+    "change_quantity": 350,
+    "reference_type": "GOODS_IN",
+    "reference_id": "MAT-IN-4910",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-05T14:59:29.672791+00:00",
+    "updated_at": "2026-10-05T14:59:29.672791+00:00",
+    "notes": "Aerospace Inconel 718 bar delivery. Certified MTR Batch #INC-7701.",
+    "performed_by": "Receiving Dock Inspector",
+    "balance_after": 350
+   },
+   {
+    "id": "TX-SUP-C016EADF",
+    "inventory_item_id": "INV-SUP-001",
+    "change_quantity": -20,
+    "reference_type": "GOODS_OUT",
+    "reference_id": "WO-APEX-4401",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-09T14:59:29.672791+00:00",
+    "updated_at": "2026-10-09T14:59:29.672791+00:00",
+    "notes": "Issued 20 kg titanium billets to CNC Cell 1 for Turbine Impeller roughing.",
+    "performed_by": "Shop Floor Dispatch Lead",
+    "balance_after": 480
+   },
+   {
+    "id": "TX-SUP-F5C5B437",
+    "inventory_item_id": "INV-SUP-008",
+    "change_quantity": 200,
+    "reference_type": "GOODS_IN",
+    "reference_id": "QA-PASS-8820",
+    "tenant_id": "TENANT_SUPPLIER_001",
+    "created_at": "2026-10-08T14:59:29.672791+00:00",
+    "updated_at": "2026-10-08T14:59:29.672791+00:00",
+    "notes": "Passed Final CMM Inspection & Laser Metrology. Transferred to Finished Goods Depot.",
+    "performed_by": "QA Metrology Director",
+    "balance_after": 200
+   }
+  ]
+ }
+}

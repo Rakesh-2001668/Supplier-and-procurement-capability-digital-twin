@@ -1,0 +1,93 @@
+name: Neon database
+
+# main → apply PIC migrations and the idempotent setup (seed only when empty, legacy load, upgrades) to the Neon
+#        production branch, then verify RLS, row counts and audit chains.
+# pull requests → a throwaway Neon branch per PR (needs the Neon GitHub integration: secret NEON_API_KEY and
+#        variable NEON_PROJECT_ID), loaded and verified the same way, deleted when the PR closes.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   DATABASE_URL       Neon direct (non-pooler) connection string, sslmode=require
+#   PIC_JWT_SECRET     same value as backend/.env
+#   PIC_FIELD_KEY      same value as backend/.env (field encryption; never rotate without re-encrypting)
+#   PIC_SEED_PASSWORD  password for seeded demo users (required here so nothing is printed to the log)
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/neon.yml"]
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+    paths: ["backend/**", ".github/workflows/neon.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: neon-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-main:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: neon-production
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      PIC_JWT_SECRET: ${{ secrets.PIC_JWT_SECRET }}
+      PIC_FIELD_KEY: ${{ secrets.PIC_FIELD_KEY }}
+      PIC_SEED_PASSWORD: ${{ secrets.PIC_SEED_PASSWORD }}
+    steps:
+      - name: Check secrets
+        run: |
+          missing=""
+          for v in DATABASE_URL PIC_JWT_SECRET PIC_FIELD_KEY PIC_SEED_PASSWORD; do [ -z "${!v}" ] && missing="$missing $v"; done
+          if [ -n "$missing" ]; then echo "::error::Missing repository secrets:$missing"; exit 1; fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Migrate, load and verify Neon
+        run: python -m app.pic.tools.neon_setup
+
+  preview-branch:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && vars.NEON_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Neon branch for this PR
+        id: branch
+        uses: neondatabase/create-branch-action@v5
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch_name: preview/pr-${{ github.event.pull_request.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: Migrate, load and verify the preview branch
+        env:
+          DATABASE_URL: ${{ steps.branch.outputs.db_url }}
+          PIC_JWT_SECRET: ${{ secrets.PIC_JWT_SECRET }}
+          PIC_FIELD_KEY: ${{ secrets.PIC_FIELD_KEY }}
+          PIC_SEED_PASSWORD: ${{ secrets.PIC_SEED_PASSWORD }}
+        run: python -m app.pic.tools.neon_setup
+
+  delete-preview-branch:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && vars.NEON_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          branch: preview/pr-${{ github.event.pull_request.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}

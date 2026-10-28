@@ -1,0 +1,22 @@
+# API and data layer
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+SQLAlchemy==2.0.54
+psycopg2-binary==2.9.13
+alembic==1.20.0
+
+# Security: tokens, password hashing, field-level encryption
+python-jose==3.5.0
+bcrypt==5.0.0
+cryptography==50.0.2
+
+# AI layer (used by the legacy copilot prototype; PIC routes LLM calls through the LiteLLM gateway)
+langgraph==1.2.11
+litellm==1.102.0
+langfuse==4.15.4
+
+# Tests
+pytest==8.4.2
+httpx==0.28.1

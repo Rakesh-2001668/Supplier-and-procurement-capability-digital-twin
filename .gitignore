@@ -1,0 +1,14 @@
+.env
+.env.local
+**/__pycache__/
+backend/venv/
+venv/
+frontend/node_modules/
+frontend/.next/
+.env.*
+!.env.*.example
+!*.env.example
+backend/app.db
+.pytest_cache/
+*.log
+frontend/next-env.d.ts

@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+:root {
+  --bg-app: #F8FAFC;
+  --bg-surface: #FFFFFF;
+  --border-light: #E2E8F0;
+  --text-primary: #0F172A;
+  --text-secondary: #64748B;
+  --primary: #2563EB;
+  --primary-hover: #1D4ED8;
+  --sidebar-hover: #EFF6FF;
+  --sidebar-active: #DBEAFE;
+  
+  --success: #10B981;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --info: #3B82F6;
+}
+
+body {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+
+/* ==========================================================================
+   GUARANTEED BUTTON STYLING FOR INVENTORY GOODS IN & GOODS OUT
+   Ensures rich vibrant background colors and 100% visible white text/icons
+   ========================================================================== */
+
+/* GOODS IN (INBOUND RECEIVING) - VIBRANT EMERALD GREEN */
+.btn-goods-in,
+.bg-emerald-600,
+button.bg-emerald-600,
+a.bg-emerald-600,
+[data-action="goods-in"] {
+  background-color: #059669 !important;
+  background-image: none !important;
+  color: #ffffff !important;
+  border: 1px solid #047857 !important;
+  font-weight: 700 !important;
+}
+
+.btn-goods-in:hover,
+.bg-emerald-700,
+button.hover\:bg-emerald-700:hover,
+button.bg-emerald-600:hover,
+[data-action="goods-in"]:hover {
+  background-color: #047857 !important;
+  color: #ffffff !important;
+  border-color: #065f46 !important;
+}
+
+.btn-goods-in:active,
+button.bg-emerald-600:active {
+  background-color: #065f46 !important;
+}
+
+/* Ensure all nested text, spans, and icons inside Goods In buttons are crisp white */
+.btn-goods-in *,
+.bg-emerald-600 *,
+button.bg-emerald-600 *,
+[data-action="goods-in"] * {
+  color: #ffffff !important;
+  stroke: #ffffff !important;
+}
+
+/* GOODS OUT (OUTBOUND DISPATCHING) - VIBRANT AMBER/ORANGE */
+.btn-goods-out,
+.bg-amber-600,
+button.bg-amber-600,
+a.bg-amber-600,
+[data-action="goods-out"] {
+  background-color: #d97706 !important;
+  background-image: none !important;
+  color: #ffffff !important;
+  border: 1px solid #b45309 !important;
+  font-weight: 700 !important;
+}
+
+.btn-goods-out:hover,
+.bg-amber-700,
+button.hover\:bg-amber-700:hover,
+button.bg-amber-600:hover,
+[data-action="goods-out"]:hover {
+  background-color: #b45309 !important;
+  color: #ffffff !important;
+  border-color: #92400e !important;
+}
+
+.btn-goods-out:active,
+button.bg-amber-600:active {
+  background-color: #92400e !important;
+}
+
+/* Ensure all nested text, spans, and icons inside Goods Out buttons are crisp white */
+.btn-goods-out *,
+.bg-amber-600 *,
+button.bg-amber-600 *,
+[data-action="goods-out"] * {
+  color: #ffffff !important;
+  stroke: #ffffff !important;
+}

@@ -1,0 +1,67 @@
+# Local stack: PostgreSQL 16 + PIC API + worker + web.
+#   cp .env.compose.example .env   (fill in the secrets)
+#   docker compose up --build
+#   docker compose run --rm api python -m app.pic.tools.neon_setup   (first run: schema, seed, legacy data)
+# For Neon, point DATABASE_URL at Neon instead and drop the db service.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-pic}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pic}"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-pic}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pic}}
+      PIC_JWT_SECRET: ${PIC_JWT_SECRET:?set PIC_JWT_SECRET in .env}
+      PIC_FIELD_KEY: ${PIC_FIELD_KEY:?set PIC_FIELD_KEY in .env}
+      PIC_SEED_PASSWORD: ${PIC_SEED_PASSWORD:-}
+      PIC_CORS_ORIGINS: ${PIC_CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/readyz')"]
+      interval: 10s
+      retries: 6
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    command: ["python", "-m", "app.pic.worker"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-pic}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-pic}}
+      PIC_JWT_SECRET: ${PIC_JWT_SECRET}
+      PIC_FIELD_KEY: ${PIC_FIELD_KEY}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: ./frontend
+    environment:
+      PIC_API_URL: http://api:8080
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
