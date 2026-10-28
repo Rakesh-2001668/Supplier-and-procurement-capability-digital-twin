@@ -40,6 +40,7 @@ class Supplier(TenantScoped, Base):
     address: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # line1, line2, city, state_code, pin, country
     punchout: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # protocol, url, identity (no secrets)
     punchout_secret_enc: Mapped[Optional[str]] = mapped_column(Text)
+    order_channel: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # channels [PORTAL|EDI|EMAIL], ediId, email
 
 
 class SupplierCategoryStatus(TenantScoped, Base):
