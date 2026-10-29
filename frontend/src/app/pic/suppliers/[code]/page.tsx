@@ -7,7 +7,7 @@ import { Button, Card, DataTable, Dialog, Empty, Facts, Field, Input, Kpi, Loadi
 import { api } from '@/lib/pic/api';
 import { date, dateTime, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
-import { useSupplierManager } from '../roles';
+import { useCertificateVerifier, useSupplierManager } from '../roles';
 import { Address, MasterDataCard, PunchoutCard, PunchoutConfig } from './master-data';
 
 type CategoryStatus = { id: string; category: string; status: string; waiver_reason: string | null; qualified_on: string | null; updated_at: string | null };
@@ -23,7 +23,8 @@ type Supplier360 = {
   id: string; code: string; legal_name: string; status: string; gstin_masked: string; state_code: string; country: string; segment: string | null;
   risk_tier: string | null; payment_terms: string; incoterms: string | null; twin_ref: string | null; contact_email: string;
   address: Address | null; punchout: PunchoutConfig | null;
-  screening: { outcome?: string; duplicates?: unknown[]; sanctionsHits?: unknown[]; screenedAt?: string } | null;
+  screening: { outcome?: string; duplicates?: { code: string; reason: string }[]; sanctionsHits?: unknown[]; screenedAt?: string; providerError?: string | null;
+    disposition?: { decision: string; byName?: string; at?: string; note?: string; screenedAt?: string; mergedInto?: string } } | null;
   categories: CategoryStatus[]; twin: Twin[]; scorecards: Scorecard[]; certificates: Certificate[]; bankAccounts: BankAccount[]; qualifications: Qualification[];
 };
 type BankChange = { id: string; number: string; supplier_code: string; status: string; bank_account_id: string; created_at: string };
@@ -36,13 +37,17 @@ export default function Supplier360Page() {
   const path = `/suppliers/${encodeURIComponent(code)}`;
   const { data: s, isLoading, error } = useApi<Supplier360>(path);
   const manager = useSupplierManager();
-  const [dialog, setDialog] = useState<{ kind: 'qualify' | 'block' | 'assess' | 'decide' | 'callback'; id?: string } | null>(null);
+  const verifier = useCertificateVerifier();
+  const [dialog, setDialog] = useState<{ kind: 'qualify' | 'block' | 'assess' | 'decide' | 'callback' | 'unblock' | 'bank' | 'screening' | 'verify'; id?: string } | null>(null);
   const changes = useList<BankChange>('/bank-changes?status=PENDING_CALLBACK');
   const pending = changes.items.filter((c) => c.supplier_code === code);
 
   if (isLoading) return <Loading />;
   if (error || !s) return <ProblemBox error={error} />;
   const openQuals = s.qualifications.filter((q) => q.status === 'OPEN');
+  const disposition = s.screening?.disposition;
+  const reviewOpen = s.screening?.outcome === 'REVIEW' && !(disposition?.decision === 'CLEARED' && disposition.screenedAt === s.screening.screenedAt);
+  const closed = ['BLOCKED', 'MERGED'].includes(s.status);
   const latest = s.scorecards[s.scorecards.length - 1];
 
   return (
@@ -57,8 +62,11 @@ export default function Supplier360Page() {
         </div>
         {manager && (
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => setDialog({ kind: 'qualify' })} disabled={s.status === 'BLOCKED'}>Start qualification</Button>
-            {s.status !== 'BLOCKED' && <Button variant="danger" onClick={() => setDialog({ kind: 'block' })}>Block supplier</Button>}
+            <Button onClick={() => setDialog({ kind: 'qualify' })} disabled={closed}>Start qualification</Button>
+            {!closed && <Button onClick={() => setDialog({ kind: 'bank' })}>Request bank change</Button>}
+            {s.screening?.outcome && s.status !== 'MERGED' && <Button onClick={() => setDialog({ kind: 'screening' })}>{reviewOpen ? 'Dispose screening' : 'Re-screen'}</Button>}
+            {!closed && <Button variant="danger" onClick={() => setDialog({ kind: 'block' })}>Block supplier</Button>}
+            {s.status === 'BLOCKED' && <Button variant="primary" onClick={() => setDialog({ kind: 'unblock' })}>Unblock supplier</Button>}
           </div>
         )}
       </div>
@@ -84,6 +92,17 @@ export default function Supplier360Page() {
       )}
       {changes.error && <ProblemBox error={changes.error} />}
 
+      {reviewOpen && (
+        <div role="status" className="rounded-lg border border-amber-300 bg-amber-50/60 p-4 text-sm text-amber-900">
+          <p className="font-semibold">Screening needs review before any category can be qualified or the ERP vendor created (F8-03)</p>
+          <ul className="mt-1 list-disc pl-5 text-xs">
+            {(s.screening?.duplicates ?? []).map((d) => <li key={d.code}>{d.code}: {d.reason}</li>)}
+            {s.screening?.providerError && <li>Sanctions provider error: {s.screening.providerError}</li>}
+          </ul>
+          <p className="mt-1 text-xs">A supplier manager other than the person who registered the supplier clears it, merges it into the duplicate, or re-screens.</p>
+        </div>
+      )}
+
       <Card>
         <Facts items={[
           ['GSTIN', <span key="g" className="font-mono">{s.gstin_masked}</span>],
@@ -94,7 +113,8 @@ export default function Supplier360Page() {
           ['Segment', s.segment ? label(s.segment) : '–'],
           ['Risk tier', s.risk_tier ?? '–'],
           ['Screening', s.screening?.outcome ? <span key="sc">{label(s.screening.outcome)} <span className="text-xs font-normal text-slate-500">
-            {s.screening.duplicates?.length ?? 0} duplicates · {s.screening.sanctionsHits?.length ?? 0} sanctions hits · {dateTime(s.screening.screenedAt)}</span></span> : 'not screened yet'],
+            {s.screening.duplicates?.length ?? 0} duplicates · {s.screening.sanctionsHits?.length ?? 0} sanctions hits · {dateTime(s.screening.screenedAt)}
+            {disposition ? ` · ${label(disposition.decision)} by ${disposition.byName ?? 'supplier manager'}${disposition.mergedInto ? ` into ${disposition.mergedInto}` : ''}` : ''}</span></span> : 'not screened yet'],
         ]} />
       </Card>
 
@@ -164,6 +184,8 @@ export default function Supplier360Page() {
                 { key: 'status', header: 'Status', render: (c) => <StatusChip status={c.status} /> },
                 { key: 'verified', header: 'Verified', render: (c) => (c.verified ? 'Yes' : 'Not yet') },
                 { key: 'mandatory_for', header: 'Mandatory for', render: (c) => c.mandatory_for?.join(', ') || '–' },
+                { key: 'actions', header: '', render: (c) => (verifier && !c.verified && c.status === 'VALID' && new Date(c.expires_on).getTime() >= Date.now() - 864e5
+                  ? <Button onClick={() => setDialog({ kind: 'verify', id: c.id })}>Verify</Button> : null) },
               ]} />
             ),
           },
@@ -214,6 +236,10 @@ export default function Supplier360Page() {
       {dialog?.kind === 'callback' && dialog.id && <CallbackDialog number={dialog.id} supplier={s} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'assess' && <AssessDialog q={s.qualifications.find((q) => q.id === dialog.id)} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'decide' && <DecideDialog q={s.qualifications.find((q) => q.id === dialog.id)} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'unblock' && <UnblockDialog supplier={s} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'bank' && <BankChangeDialog supplier={s} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'screening' && <ScreeningDialog supplier={s} review={reviewOpen} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'verify' && <VerifyCertificateDialog cert={s.certificates.find((c) => c.id === dialog.id)} onClose={() => setDialog(null)} />}
     </div>
   );
 }
@@ -321,6 +347,85 @@ function CallbackDialog({ number, supplier, onClose }: { number: string; supplie
   );
 }
 
+function UnblockDialog({ supplier, onClose }: { supplier: Supplier360; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const unblock = useCommand(() => api.post<{ status: string; paymentBlockLifted: string[] }>(`/suppliers/${encodeURIComponent(supplier.code)}/unblock`, { reason: reason.trim() }), {
+    success: (r) => `${supplier.code} is ${label(r.status).toLowerCase()} again${r.paymentBlockLifted.length ? ` · payment block lifted on ${r.paymentBlockLifted.join(', ')}` : ''}`, onSuccess: onClose });
+  return (
+    <Dialog open title={`Unblock ${supplier.code}`} onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-700">Restores the status before the block and lifts the payment blocks the block set on posted invoices. A sanctions match must be re-screened clear first.</p>
+      <Field label="Reason (required)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Alert closed as a false positive after the compliance review" />}</Field>
+      <Actions onClose={onClose}><Button variant="primary" disabled={reason.trim().length < 3} busy={unblock.isPending} onClick={() => unblock.mutate()}>Unblock supplier</Button></Actions>
+    </Dialog>
+  );
+}
+
+function BankChangeDialog({ supplier, onClose }: { supplier: Supplier360; onClose: () => void }) {
+  const [account, setAccount] = useState('');
+  const [ifsc, setIfsc] = useState('');
+  const [holder, setHolder] = useState(supplier.legal_name);
+  const accountOk = /^[0-9]{9,18}$/.test(account);
+  const ifscOk = /^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc);
+  const request = useCommand(() => api.post<{ number: string }>(`/suppliers/${encodeURIComponent(supplier.code)}/bank-changes`, {
+    bank_account: account, ifsc, holder_name: holder.trim() }), {
+    success: (r) => `${r.number} requested – another supplier manager verifies the call-back, then two finance controllers approve`, onSuccess: onClose });
+  return (
+    <Dialog open title={`Request bank change – ${supplier.code}`} onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-600">MDM-04: the new account is used only after an independent call-back, approval by two different finance controllers and the cooling-off period. You cannot verify or approve your own request.</p>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Account number" hint={account && !accountOk ? '9–18 digits' : undefined}>{(id) => <Input id={id} inputMode="numeric" autoComplete="off" value={account} onChange={(e) => setAccount(e.target.value.replace(/\s/g, ''))} />}</Field>
+        <Field label="IFSC" hint={ifsc && !ifscOk ? 'e.g. SBIN0001234' : undefined}>{(id) => <Input id={id} value={ifsc} onChange={(e) => setIfsc(e.target.value.toUpperCase().trim())} maxLength={11} />}</Field>
+        <div className="md:col-span-2"><Field label="Account holder">{(id) => <Input id={id} value={holder} onChange={(e) => setHolder(e.target.value)} />}</Field></div>
+      </div>
+      <Actions onClose={onClose}><Button variant="primary" disabled={!accountOk || !ifscOk || holder.trim().length < 3} busy={request.isPending} onClick={() => request.mutate()}>Request change</Button></Actions>
+    </Dialog>
+  );
+}
+
+function ScreeningDialog({ supplier, review, onClose }: { supplier: Supplier360; review: boolean; onClose: () => void }) {
+  const duplicates = supplier.screening?.duplicates ?? [];
+  const [decision, setDecision] = useState(review ? 'CLEAR' : 'RESCREEN');
+  const [note, setNote] = useState('');
+  const [mergeInto, setMergeInto] = useState(duplicates[0]?.code ?? '');
+  const options = review
+    ? [{ value: 'CLEAR', label: 'Clear – not a duplicate / provider outage checked manually' },
+      ...(duplicates.length ? [{ value: 'MERGE', label: 'Merge – this registration duplicates an existing supplier' }] : []),
+      { value: 'RESCREEN', label: 'Re-screen – run duplicate and sanctions checks again' }]
+    : [{ value: 'RESCREEN', label: 'Re-screen – run duplicate and sanctions checks again' }];
+  const dispose = useCommand(() => api.post<{ screening: { outcome: string } }>(`/suppliers/${encodeURIComponent(supplier.code)}/screening-disposition`, {
+    decision, note: note.trim(), merge_into: decision === 'MERGE' ? mergeInto : undefined }), {
+    success: (r) => decision === 'RESCREEN' ? `Re-screened · ${label(r.screening.outcome)}` : decision === 'MERGE' ? `${supplier.code} merged into ${mergeInto}` : 'Screening review cleared',
+    onSuccess: onClose });
+  return (
+    <Dialog open title={`Screening – ${supplier.code}`} onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-600">Outcome {label(supplier.screening?.outcome ?? 'not screened')} · {dateTime(supplier.screening?.screenedAt)}. Clearing or merging is recorded in the audit trail and cannot be done by the person who registered the supplier.</p>
+      <div className="grid gap-3">
+        <Field label="Decision">{(id) => <Select id={id} value={decision} onChange={(e) => setDecision(e.target.value)} options={options} />}</Field>
+        {decision === 'MERGE' && (
+          <Field label="Merge into">{(id) => <Select id={id} value={mergeInto} onChange={(e) => setMergeInto(e.target.value)}
+            options={duplicates.map((d) => ({ value: d.code, label: `${d.code} – ${d.reason}` }))} />}</Field>
+        )}
+        <Field label="Note (required)">{(id) => <Textarea id={id} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Different PAN and GSTIN; MCA records checked; unrelated entity" />}</Field>
+      </div>
+      <Actions onClose={onClose}><Button variant="primary" disabled={note.trim().length < 3 || (decision === 'MERGE' && !mergeInto)} busy={dispose.isPending} onClick={() => dispose.mutate()}>Record</Button></Actions>
+    </Dialog>
+  );
+}
+
+function VerifyCertificateDialog({ cert, onClose }: { cert?: Certificate; onClose: () => void }) {
+  const [note, setNote] = useState('');
+  const verify = useCommand(() => api.post(`/certificates/${cert?.id}/verify`, { note: note.trim() }),
+    { success: `Certificate ${cert?.type ?? ''} ${cert?.number ?? ''} verified`, onSuccess: onClose });
+  if (!cert) return null;
+  return (
+    <Dialog open title={`Verify certificate – ${cert.type}`} onClose={onClose}>
+      <p className="mb-3 text-sm text-slate-600">{cert.number} · issued {date(cert.issued_on)} · expires {date(cert.expires_on)}. Check it against the issuing body&apos;s register or the original; the person who uploaded it cannot verify it.</p>
+      <Field label="How was it verified? (required)">{(id) => <Textarea id={id} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. IATF database checked, certificate active" />}</Field>
+      <Actions onClose={onClose}><Button variant="primary" disabled={note.trim().length < 3} busy={verify.isPending} onClick={() => verify.mutate()}>Verify certificate</Button></Actions>
+    </Dialog>
+  );
+}
+
 function BlockDialog({ supplier, onClose }: { supplier: Supplier360; onClose: () => void }) {
   const [reason, setReason] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -331,7 +436,7 @@ function BlockDialog({ supplier, onClose }: { supplier: Supplier360; onClose: ()
     <Dialog open title={`Block ${supplier.code}`} onClose={onClose}>
       {!confirming ? (
         <>
-          <p className="mb-3 text-sm text-slate-700">Blocking sets every category of {supplier.legal_name} to Blocked: the supplier can no longer be invited, awarded or ordered from. Open purchase orders are flagged to their buyers for review.</p>
+          <p className="mb-3 text-sm text-slate-700">Blocking sets every category of {supplier.legal_name} to Blocked: the supplier can no longer be invited, awarded or ordered from, cannot submit invoices and is not paid (its unpaid invoices get a payment block). Open purchase orders are flagged to their buyers for review.</p>
           <Field label="Reason (required)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Sanctions screening hit / repeated quality escapes" />}</Field>
           <Actions onClose={onClose}><Button variant="danger" disabled={!reason.trim()} onClick={() => setConfirming(true)}>Continue</Button></Actions>
         </>

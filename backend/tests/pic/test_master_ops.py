@@ -598,3 +598,16 @@ def test_sanctions_list_sync_replaces_only_the_provider_source(client, login, pr
 def test_without_a_provider_the_local_list_still_blocks(client, login):
     zat = client.get("/v1/suppliers/ZAT006", headers=login("supplier.manager")).json()
     assert zat["status"] == "BLOCKED" and zat["screening"]["outcome"] == "BLOCKED" and "provider" not in zat["screening"]
+
+
+def test_supplier_registration_validates_tax_ids(client, login):
+    """F8-01 applies the MDM-04 tax-ID checks: a mistyped GSTIN (wrong check character) or a PAN outside it is refused."""
+    headers = login("supplier.manager")
+    body = {"legal_name": "Typo Castings Pvt Ltd", "gstin": "33AABCT9999Q1Z0", "pan": "AABCT9999Q", "state_code": "33",
+            "contact_email": "sales@typo-castings.example", "categories": ["ALU-DIECAST"]}
+    bad = client.post("/v1/suppliers", headers=headers, json=body)
+    assert bad.status_code == 422 and bad.json()["code"] == "VALIDATION_FAILED"
+    assert any("check character" in e for e in bad.json()["errors"])
+    other_pan = client.post("/v1/suppliers", headers=headers, json={**body, "gstin": "33AABCT9999Q1Z" + master_changes.gstin_check_char("33AABCT9999Q1Z"),
+                                                                     "pan": "AABCT8888Q"})
+    assert other_pan.status_code == 422 and any("PAN must match" in e for e in other_pan.json()["errors"])

@@ -114,8 +114,37 @@ def _nodes(session: Session) -> list[TaxonomyNode]:
     return session.execute(select(TaxonomyNode).where(TaxonomyNode.level == 3)).scalars().all()
 
 
+_KEYWORD_PATTERNS: dict[str, re.Pattern] = {}
+_TAXONOMY_ORDER = {code: index for index, (code, *_rest) in enumerate(TAXONOMY)}
+# Start of the qualifier of an item description: what follows says what the item is for / of / with, not what it is.
+_QUALIFIER = re.compile(r"\s(?:for|of|with|incl\.?|including)\s")
+
+
+def _keyword_pattern(keyword: str) -> re.Pattern:
+    """A taxonomy keyword matches whole words only ("ecu" not in "security", "seal" not in "sealed", "mould" not in
+    "moulding"); words of a phrase may be separated by any whitespace, and the last word may carry a plain plural
+    (-s / -es: "bolts", "presses", "castings"). Other inflections are listed explicitly in the keyword lists
+    ("forging"/"forged", "machined"/"machining")."""
+    pattern = _KEYWORD_PATTERNS.get(keyword)
+    if pattern is None:
+        words = keyword.lower().split()
+        body = r"\s+".join(re.escape(w) for w in words) if words else re.escape(keyword.lower())
+        if words and words[-1][-1:].isalpha():
+            body += "(?:e?s)?"
+        pattern = _KEYWORD_PATTERNS[keyword] = re.compile(rf"(?<![a-z0-9]){body}(?![a-z0-9])")
+    return pattern
+
+
+def _specificity(keyword: str) -> int:
+    """Words in a keyword: a phrase ("die cast", "security guard", "cutting tool") is more specific than one word."""
+    return len([w for w in re.split(r"[\s\-/]+", keyword) if w])
+
+
 def classify_text(session: Session, description: str, supplier_id: Optional[uuid.UUID], nodes: Optional[list] = None) -> tuple[str, Decimal, list]:
-    """Keyword evidence plus the supplier's qualified categories as a prior. Returns (category, confidence, alternatives)."""
+    """Keyword evidence plus the supplier's qualified categories as a prior. Returns (category, confidence, alternatives).
+    Equal scores go, in turn, to the category whose keyword names the item rather than a "for / of / with …" qualifier
+    ("EPDM grommet for harness" is a grommet), to the more specific keyword (more words: "die cast" over "aluminium"),
+    then to the earlier taxonomy node."""
     text = f" {(description or '').lower()} "
     supplier_cats = set()
     if supplier_id:
@@ -123,13 +152,17 @@ def classify_text(session: Session, description: str, supplier_id: Optional[uuid
             SupplierCategoryStatus.supplier_id == supplier_id)).scalars())
     scored = []
     for node in nodes if nodes is not None else _nodes(session):
-        hits = [k for k in node.keywords or [] if k in text]
+        hits = [k for k in node.keywords or [] if k and _keyword_pattern(k).search(text)]
         score = len(hits) * 2 + (1.5 if node.code in supplier_cats else 0)
         if score:
             scored.append((score, node.code, hits))
     if not scored:
         return "UNCLASSIFIED", Decimal("0.300"), []
-    scored.sort(reverse=True)
+    qualifier = _QUALIFIER.search(text)
+    cut = qualifier.start() if qualifier else len(text)
+    head = {k for _, _, hits in scored for k in hits if _keyword_pattern(k).search(text[:cut])}
+    scored.sort(key=lambda x: (-x[0], -any(k in head for k in x[2]), -max((_specificity(k) for k in x[2]), default=0),
+                               _TAXONOMY_ORDER.get(x[1], len(TAXONOMY)), x[1]))
     best, runner_up = scored[0], scored[1] if len(scored) > 1 else None
     margin = best[0] - (runner_up[0] if runner_up else 0)
     confidence = min(Decimal("0.97"), Decimal("0.45") + Decimal(str(round(0.12 * best[0] + 0.05 * margin, 3))))
@@ -161,6 +194,10 @@ def classify_line(session: Session, line: SpendLine, nodes: Optional[list] = Non
                                      description=(line.description or line.material_group)[:300], proposed_category=category,
                                      confidence=confidence, alternatives=alternatives, agent_run_ref=ref, created_by=line.created_by))
     line.classification_confidence = confidence
+    if line.category != "UNCLASSIFIED" and line.category not in {n.code for n in (nodes if nodes is not None else _nodes(session))}:
+        # A free-text line's provisional category is its raw material group (e.g. SVC-TOOLING), not a taxonomy category:
+        # it stays unclassified until the steward decides, instead of turning into a taxonomy node at the next refresh.
+        line.category = "UNCLASSIFIED"
     return "REVIEW"
 
 

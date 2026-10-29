@@ -78,22 +78,31 @@ def guided_search(q: str, plant: Optional[str] = None, p: Principal = Depends(re
         return requisition.search(s, q, plant)
 
 
+class QuoteRefIn(BaseModel):
+    """One supplier quote for the quote policy (no quote-document store yet: supplier, quote reference and date)."""
+    supplier: str = Field(min_length=1, max_length=80)
+    reference: str = Field(min_length=1, max_length=80)
+    date: date
+
+
 class PrLineIn(BaseModel):
     item_type: str = Field(pattern="^(MATERIAL|FREE_TEXT|CATALOGUE|CONTRACT|SERVICE)$")
     purchase_type: str
     description: Optional[str] = None
     material: Optional[str] = None
     catalogue_item_id: Optional[str] = None
+    contract_line_id: Optional[str] = None
     material_group: Optional[str] = None
     category: Optional[str] = None
-    qty: Decimal
+    qty: Decimal = Field(gt=0)
     uom: Optional[str] = None
-    price_est_minor: Optional[int] = None
+    price_est_minor: Optional[int] = Field(default=None, ge=0)
     account_assignment_type: Optional[str] = None
     account_assignment_code: Optional[str] = None
     need_date: date
     storage_location: Optional[str] = None
-    quotes_attached: int = 0
+    quotes_attached: int = Field(default=0, ge=0)
+    quotes: list[QuoteRefIn] = []
     reusable: bool = False
     mpn: Optional[str] = None
     attributes: Optional[dict] = None
@@ -105,7 +114,7 @@ class RequisitionIn(BaseModel):
     purpose_text: Optional[str] = None
     plant: str
     company_code: str = "1000"
-    lines: list[PrLineIn]
+    lines: list[PrLineIn] = Field(min_length=1)
 
 
 @router.post("/requisitions", status_code=201, tags=["F2 Requisition"])
@@ -135,19 +144,34 @@ def submit_requisition(ref: str, body: SubmitIn = SubmitIn(), p: Principal = Dep
 
 
 class LineChange(BaseModel):
-    qty: Optional[Decimal] = None
-    price_est_minor: Optional[int] = None
+    qty: Optional[Decimal] = Field(default=None, gt=0)
+    price_est_minor: Optional[int] = Field(default=None, ge=0)
     account_assignment_type: Optional[str] = None
     account_assignment_code: Optional[str] = None
     need_date: Optional[date] = None
     description: Optional[str] = None
+    justification: Optional[str] = None  # soft budget stop when a change after approval re-books the budget
 
 
 @router.patch("/requisitions/{ref}/lines/{line_no}", tags=["F2 Requisition"])
 def change_requisition_line(ref: str, line_no: int, body: LineChange, p: Principal = Depends(require("req:create"))):
+    """The requester changes a DRAFT / RETURNED requisition; once APPROVED the requester or a buyer (re-approval rules apply)."""
     with uow(p) as s:
         pr = by_ref(s, Requisition, ref, lock=True)
         return requisition.change_line(s, pr, line_no, body.model_dump(exclude_none=True))
+
+
+class CancelIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@router.post("/requisitions/{ref}/cancel", tags=["F2 Requisition"])
+def cancel_requisition(ref: str, body: CancelIn, p: Principal = Depends(require("req:create"))):
+    """Withdraw a requisition: the requester (DRAFT, RETURNED, IN_APPROVAL, APPROVED not yet ordered) or a buyer (APPROVED)."""
+    with uow(p) as s:
+        pr = by_ref(s, Requisition, ref, lock=True)
+        requisition.cancel(s, pr, body.reason)
+        return views.requisition(s, pr)
 
 
 @router.get("/requisitions/{ref}", tags=["F2 Requisition"])
@@ -185,15 +209,15 @@ def new_material_request(body: MaterialRequestIn, p: Principal = Depends(require
 @router.post("/requisitions/{ref}/lines/{line_no}/promote-material", status_code=201, tags=["F9 MDM"])
 def promote_free_text(ref: str, line_no: int, body: MaterialRequestIn, p: Principal = Depends(require("req:create"))):
     with uow(p) as s:
-        pr = by_ref(s, Requisition, ref)
-        line = s.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line_no)).scalar_one()
-        if line.item_type != "FREE_TEXT":
-            raise Problem(422, "RULE_VIOLATION", "Only free-text lines are promoted to material requests", rule_ref="P04")
-        return views.material_request(s, mdm.create_request(s, **body.model_dump(), source_pr=line))
+        pr = by_ref(s, Requisition, ref, lock=True)
+        line = s.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line_no).with_for_update()).scalar_one_or_none()
+        if line is None:
+            raise not_found("Requisition line", f"{pr.number}/{line_no}")
+        return views.material_request(s, mdm.promote_line(s, pr, line, **body.model_dump()))
 
 
 class OverrideIn(BaseModel):
-    reason: str
+    reason: str = Field(min_length=1, max_length=500)
 
 
 @router.post("/materials/requests/{ref}/override", tags=["F9 MDM"])
@@ -244,7 +268,8 @@ class SupplierIn(BaseModel):
     state_code: str
     contact_email: str
     categories: list[str]
-    payment_terms: str = "N60"
+    # Net days (N60 or 60), optionally after an early-payment discount (2/10 N45).
+    payment_terms: str = Field(default="N60", pattern=supplier.PAYMENT_TERMS_PATTERN)
     incoterms: Optional[str] = None
     segment: Optional[str] = None
 
@@ -255,19 +280,44 @@ def register_supplier(body: SupplierIn, p: Principal = Depends(require("supplier
         return row(supplier.register(s, **body.model_dump()))
 
 
+IFSC_PATTERN = r"^[A-Z]{4}0[A-Z0-9]{6}$"
+
+
 class CertificateIn(BaseModel):
-    type: str
-    number: str
+    type: str = Field(min_length=2, max_length=40)
+    number: str = Field(min_length=2, max_length=60)
     issued_on: date
     expires_on: date
-    mandatory_for: list[str] = []
+    mandatory_for: list[str] = []  # ignored: the categories a certificate is mandatory for come from SUPPLIER-QUAL
 
 
 class ProfileIn(BaseModel):
-    bank_account: str
-    ifsc: str = Field(min_length=11, max_length=11)
-    holder_name: str
+    """F8-02: bank details (only while onboarding runs) and/or certificates (any time; a renewal is a new certificate)."""
+    bank_account: Optional[str] = Field(default=None, pattern=r"^[0-9]{9,18}$")
+    ifsc: Optional[str] = Field(default=None, pattern=IFSC_PATTERN)
+    holder_name: Optional[str] = Field(default=None, min_length=3, max_length=200)
     certificates: list[CertificateIn] = []
+
+
+@router.get("/suppliers/{code}/profile", tags=["F8 Supplier"])
+def get_profile(code: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    """F8-02 profile state for the portal: certificates, masked bank accounts, pending bank changes and whether bank details
+    can still be given through the profile (only while onboarding runs)."""
+    with uow(p) as s:
+        sup = supplier_ref(s, code)
+        if "SUPPLIER_USER" in p.roles and sup.id != p.supplier_id:
+            raise not_found("Supplier", code)
+        onboarding = workflow.find(s, "SUPPLIER", sup.id, supplier.PROCESS)
+        pending = s.execute(select(BankChangeRequest).where(BankChangeRequest.supplier_id == sup.id, BankChangeRequest.status.in_(
+            ("PENDING_CALLBACK", "PENDING_APPROVAL"))).order_by(BankChangeRequest.created_at)).scalars().all()
+        return {"supplier": sup.code, "status": sup.status,
+                "onboardingOpen": onboarding is not None and onboarding.status == "RUNNING",
+                "certificates": rows(s.execute(select(Certificate).where(Certificate.supplier_id == sup.id)
+                                               .order_by(Certificate.type, Certificate.expires_on.desc())).scalars()),
+                "bankAccounts": [{"account_masked": b.account_masked, "ifsc": b.ifsc, "holder_name": b.holder_name, "active": b.active,
+                                  "payable_from": b.payable_from} for b in s.execute(select(SupplierBankAccount).where(
+                                      SupplierBankAccount.supplier_id == sup.id)).scalars()],
+                "pendingBankChanges": [{"number": c.number, "status": c.status} for c in pending]}
 
 
 @router.post("/suppliers/{code}/profile", tags=["F8 Supplier"])
@@ -278,9 +328,9 @@ def submit_profile(code: str, body: ProfileIn, p: Principal = Depends(require_an
 
 
 class BankChangeIn(BaseModel):
-    bank_account: str
-    ifsc: str = Field(min_length=11, max_length=11)
-    holder_name: str
+    bank_account: str = Field(pattern=r"^[0-9]{9,18}$")
+    ifsc: str = Field(min_length=11, max_length=11, pattern=IFSC_PATTERN)
+    holder_name: str = Field(min_length=3, max_length=200)
 
 
 @router.post("/suppliers/{code}/bank-changes", status_code=201, tags=["F8 Supplier"])
@@ -340,7 +390,7 @@ def decide(qid: uuid.UUID, body: DecisionIn, p: Principal = Depends(require("sup
         q = s.get(Qualification, qid)
         if q is None:
             raise not_found("Qualification", qid)
-        return supplier.decide_qualification(s, q, body.decision, body.reason, body.waiver)
+        return supplier.decide_qualification(s, q, body.decision, body.reason, body.waiver)  # row-locked and state-guarded
 
 
 class BlockIn(BaseModel):
@@ -351,6 +401,42 @@ class BlockIn(BaseModel):
 def block_supplier(code: str, body: BlockIn, p: Principal = Depends(require("supplier:manage"))):
     with uow(p) as s:
         return supplier.block(s, supplier_ref(s, code), body.reason)
+
+
+@router.post("/suppliers/{code}/unblock", tags=["F8 Supplier"])
+def unblock_supplier(code: str, body: BlockIn, p: Principal = Depends(require("supplier:manage"))):
+    """Lift a block (audited): restores the previous status and the payment blocks the block set."""
+    with uow(p) as s:
+        sup = s.execute(select(Supplier).where(Supplier.id == supplier_ref(s, code).id).with_for_update()).scalar_one()
+        return supplier.unblock(s, sup, body.reason)
+
+
+class ScreeningDispositionIn(BaseModel):
+    decision: str = Field(pattern="^(CLEAR|MERGE|RESCREEN)$")
+    note: str = Field(min_length=3, max_length=1000)
+    merge_into: Optional[str] = None
+
+
+@router.post("/suppliers/{code}/screening-disposition", tags=["F8 Supplier"])
+def dispose_screening(code: str, body: ScreeningDispositionIn, p: Principal = Depends(require("supplier:manage"))):
+    """F8-03 REVIEW disposition by a supplier manager other than the requester: clear, merge into the duplicate, or re-screen."""
+    with uow(p) as s:
+        sup = s.execute(select(Supplier).where(Supplier.id == supplier_ref(s, code).id).with_for_update()).scalar_one()
+        return supplier.dispose_screening(s, sup, body.decision, body.note, body.merge_into)
+
+
+class CertificateVerifyIn(BaseModel):
+    note: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/certificates/{cid}/verify", tags=["F8 Supplier"])
+def verify_certificate(cid: uuid.UUID, body: CertificateVerifyIn, p: Principal = Depends(require_any("supplier:manage", "quality:decide"))):
+    """Explicit certificate verification by a supplier manager or quality inspector (audited, not the uploader)."""
+    with uow(p) as s:
+        cert = s.get(Certificate, cid, with_for_update=True)
+        if cert is None:
+            raise not_found("Certificate", cid)
+        return row(supplier.verify_certificate(s, cert, body.note))
 
 
 @router.get("/suppliers/{code}", tags=["F8 Supplier"])

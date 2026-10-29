@@ -13,7 +13,7 @@ type Board = { event: string; status: string; questionsCloseAt: string; open: bo
 export type AuctionSettings = { minDecrementPct: string; extensionMinutes: number; triggerMinutes: number; showRank: boolean; showBestPrice: boolean;
   paymentTermsDays?: number | null; leadTimeDays?: number | null };
 type LadderRow = { rank: number; supplier: string; name: string | null; priceMinor: number; submittedAt: string; bids: number };
-type AuctionBidRow = { id: string; supplier?: string; priceMinor: number; rankAtSubmit: number; submittedAt: string; extendedClose: boolean };
+type AuctionBidRow = { id: string; supplier?: string; priceMinor: number; rankAtSubmit?: number; submittedAt: string; extendedClose: boolean };
 export type AuctionView = {
   event: string; status: string; round: number; live: boolean; serverTime: string; startsAt: string | null; scheduledCloseAt: string | null;
   endsAt: string | null; secondsLeft: number; extensions: number; bidders: number; settings: AuctionSettings; ruleSet: string | null;

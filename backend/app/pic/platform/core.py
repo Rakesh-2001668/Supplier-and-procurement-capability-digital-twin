@@ -1,6 +1,7 @@
 """Numbering, idempotency, lineage, state machines and concurrency checks."""
 import hashlib
 import json
+import re
 import uuid
 from collections import deque
 from typing import Any, Iterable, Optional
@@ -31,6 +32,23 @@ def next_number(session: Session, object_type: str) -> str:
     prefix, next_value, padding = result
     value = next_value - 1
     return f"{prefix}{str(value).zfill(padding) if padding else value}"
+
+
+def next_numbers(session: Session, object_type: str, count: int) -> list[str]:
+    """``count`` consecutive numbers in one update: the same numbers as ``count`` calls of ``next_number`` (bulk creation)."""
+    if count <= 0:
+        return []
+    result = session.execute(
+        update(NumberRange)
+        .where(NumberRange.object_type == object_type)
+        .values(next_value=NumberRange.next_value + count)
+        .returning(NumberRange.prefix, NumberRange.next_value, NumberRange.padding)
+        .execution_options(synchronize_session=False)
+    ).first()
+    if result is None:
+        raise Problem(500, "NUMBER_RANGE_MISSING", f"No number range configured for {object_type}")
+    prefix, next_value, padding = result
+    return [f"{prefix}{str(value).zfill(padding) if padding else value}" for value in range(next_value - count, next_value)]
 
 
 # ---------------------------------------------------------------- idempotency
@@ -84,6 +102,63 @@ def link(session: Session, from_type: str, from_id: uuid.UUID, from_ref: str, to
         from_line=from_line, to_type=to_type, to_id=to_id, to_ref=to_ref, to_line=to_line, link_type=link_type,
         created_by=current_user(session),
     ))
+
+
+def link_many(session: Session, from_type: str, from_id: uuid.UUID, from_ref: str,
+              targets: Iterable[tuple[str, uuid.UUID, str]], link_type: str, batch: int = 2000) -> int:
+    """``link`` from one document to many (to_type, to_id, to_ref) targets as multi-row INSERTs (e.g. an MRP run's orders)."""
+    tenant_id, user_id = current_tenant(session), current_user(session)
+    rows = [{"id": uuid.uuid7(), "tenant_id": tenant_id, "from_type": from_type, "from_id": from_id, "from_ref": from_ref,
+             "from_line": None, "to_type": to_type, "to_id": to_id, "to_ref": to_ref, "to_line": None, "link_type": link_type,
+             "created_by": user_id} for to_type, to_id, to_ref in targets]
+    return insert_rows(session, DocumentLink.__table__, rows, batch)
+
+
+_TYPE_MODIFIERS = re.compile(r"\(.*?\)")
+
+
+def insert_rows(session: Session, table, rows: list[dict], batch: int = 5000) -> int:
+    """Bulk INSERT, one ``INSERT ... SELECT * FROM unnest(<one array per column>)`` per batch.
+
+    Stores the same values as ``session.execute(insert(table), rows)``: columns missing from the rows get their Python
+    defaults (scalar or callable, per row) or are left to the database; each value goes through the column type's bind
+    processing for this dialect. Arrays are cast to the unmodified base type (VARCHAR, NUMERIC), so the column's own
+    length/scale rules apply on assignment as for a plain INSERT. Every row must have the same keys. Bulk loads of tens of
+    thousands of rows (MRP planned orders, exceptions, links) send a few array parameters instead of one bind per value.
+    """
+    if not rows:
+        return 0
+    keys = set(rows[0])
+    if any(set(r) != keys for r in rows):
+        raise ValueError("insert_rows: every row needs the same keys")
+    dialect = session.get_bind().dialect
+    quote = dialect.identifier_preparer
+    columns = []
+    for column in table.columns:
+        if column.key in keys:
+            columns.append((column, None))
+        elif column.default is not None:
+            if not (column.default.is_scalar or column.default.is_callable):
+                raise ValueError(f"insert_rows: unsupported default on {table.name}.{column.key}")
+            columns.append((column, column.default))
+    casts = ", ".join(f"CAST(:c{i} AS {_TYPE_MODIFIERS.sub('', column.type.compile(dialect=dialect))}[])"
+                      for i, (column, _) in enumerate(columns))
+    statement = text(f"INSERT INTO {quote.format_table(table)} ({', '.join(quote.quote(c.name) for c, _ in columns)}) "
+                     f"SELECT * FROM unnest({casts})")
+    processors = [column.type.bind_processor(dialect) for column, _ in columns]
+    for start in range(0, len(rows), batch):
+        part = rows[start:start + batch]
+        params = {}
+        for i, (column, default) in enumerate(columns):
+            if default is None:
+                values = [r[column.key] for r in part]
+            elif default.is_scalar:
+                values = [default.arg] * len(part)
+            else:
+                values = [default.arg(None) for _ in part]
+            params[f"c{i}"] = [processors[i](v) for v in values] if processors[i] else values
+        session.execute(statement, params)
+    return len(rows)
 
 
 def lineage(session: Session, object_type: str, object_id: uuid.UUID, max_nodes: int = 200) -> dict:

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.pic.models import RuleSet
 from app.pic.platform import clock, rules
+from app.pic.platform.money import line_amount, pct_of
 from app.pic.platform.errors import Problem
 from app.pic.platform.rules import Rule
 
@@ -163,11 +164,15 @@ def _dmn03(rule: Rule, inputs: dict, session: Session, scope: dict) -> dict:
     qty = _dec(inputs, "invoicedQty", "0")
     available = _dec(inputs, "availableQty", str(qty))
     b = rule.body
-    price_tol = min(Decimal(po_price) * Decimal(str(b["pricePct"])) / 100, Decimal(b["priceAbsMinor"]))
+    # Same line-level reading as payables.match: variance of the line value against min(pricePct of the line value, priceAbsMinor).
+    po_value = line_amount(qty, po_price)
+    variance = line_amount(qty, inv_price) - po_value
+    price_tol = min(pct_of(po_value, Decimal(str(b["pricePct"]))), int(b["priceAbsMinor"]))
     qty_limit = available * (1 + Decimal(str(b["qtyPct"])) / 100)
     reasons = []
-    if abs(Decimal(inv_price - po_price)) > price_tol:
-        reasons.append(f"PRICE: unit price differs by {inv_price - po_price} (tolerance {price_tol:.2f} = min({b['pricePct']}%, {b['priceAbsMinor']}))")
+    if abs(variance) > price_tol:
+        reasons.append(f"PRICE: line value differs by {variance} (unit {inv_price - po_price}; tolerance {price_tol} = "
+                       f"min({b['pricePct']}% of the line, {b['priceAbsMinor']}))")
     if qty > qty_limit:
         reasons.append(f"QUANTITY: billed {qty} > available {available} + {b['qtyPct']}%")
     return {"decision": "EXCEPTION" if reasons else "MATCHED", "priceToleranceMinor": str(price_tol), "qtyLimit": str(qty_limit),

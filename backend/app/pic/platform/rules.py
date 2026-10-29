@@ -5,7 +5,7 @@ scope tuple (company code, plant, category, purchase type); the most specific
 match on the business date wins. Documents store the returned version label.
 """
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -39,7 +39,9 @@ def resolve(session: Session, key: str, on: Optional[date] = None, **scope: Opti
             or_(RuleSet.effective_to.is_(None), RuleSet.effective_to >= on),
         )
     ).scalars().all()
-    best, best_rank = None, (-1, date.min)
+    # Deterministic: most specific, then latest effective date, then (same date) the version created last, then version label.
+    never = datetime.min.replace(tzinfo=timezone.utc)
+    best, best_rank = None, (-1, date.min, never, "")
     for rs in candidates:
         specificity = 0
         matches = True
@@ -51,7 +53,7 @@ def resolve(session: Session, key: str, on: Optional[date] = None, **scope: Opti
                 matches = False
                 break
             specificity += 1
-        rank = (specificity, rs.effective_from)
+        rank = (specificity, rs.effective_from, rs.created_at or never, rs.version or "")
         if matches and rank > best_rank:
             best, best_rank = rs, rank
     if best is None:

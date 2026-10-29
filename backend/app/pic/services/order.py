@@ -55,6 +55,14 @@ SM = StateMachine("PURCHASE_ORDER", {
     ("PARTIALLY_RECEIVED", "unreceive_unconfirmed"): "TRANSMITTED",
     # Closing a fully received order with nothing left to invoice (e.g. a lot rejected in full and returned).
     ("RECEIVED", "close"): "CLOSED",
+    # A partly delivered order can still be changed (never below the received quantity) and is re-confirmed by the
+    # supplier without losing its receipt status; or it is short-closed once the received value is invoiced.
+    ("PARTIALLY_RECEIVED", "change"): "PARTIALLY_RECEIVED",
+    ("PARTIALLY_RECEIVED", "confirm"): "PARTIALLY_RECEIVED",
+    ("PARTIALLY_RECEIVED", "short_close"): "CLOSED",
+    # Withdrawn while still in approval, or after the supplier confirmed but before anything was shipped.
+    ("IN_APPROVAL", "cancel"): "CANCELLED",
+    ("CONFIRMED", "cancel"): "CANCELLED",
 })
 TYPE_RANK = {"MRP_RUN": 0, "PLANNED_ORDER": 1, "REQUISITION": 2, "SOURCING_EVENT": 3, "CONTRACT": 4}
 
@@ -424,16 +432,33 @@ def _po_posted(session: Session, message) -> None:
                      after={"erpDocument": po.erp_doc_no, "cancellationDocument": message.erp_doc_no})
         return  # the order keeps its ERP document number; the cancellation is its own ERP document
     po.erp_doc_no = message.erp_doc_no
+    if po.status == "CANCELLED":
+        # The order was cancelled while its posting was still pending or retrying: cancel it in the ERP right after.
+        from app.pic.models import OutboxEvent
+        cancelled = session.execute(select(OutboxEvent.payload).where(OutboxEvent.topic == "purchase_order.cancelled", OutboxEvent.object_id == po.id)
+                                    .order_by(OutboxEvent.occurred_at.desc())).scalars().first()
+        _enqueue_erp_cancel(session, po, (cancelled or {}).get("reason"))
 
 
 # ---------------------------------------------------------------- supplier confirmation (F5-07/08) and change orders
+def awaiting_confirmation(session: Session, po: PurchaseOrder) -> bool:
+    """The supplier owes an order response: TRANSMITTED, or a partly delivered order whose current version (a change after
+    the first receipt) is not confirmed yet."""
+    if po.status == "TRANSMITTED":
+        return True
+    if po.status != "PARTIALLY_RECEIVED" or po.version <= 1:
+        return False
+    return session.execute(select(PoConfirmation.id).where(PoConfirmation.po_id == po.id, PoConfirmation.po_version == po.version,
+                                                           PoConfirmation.status == "CONFIRMED")).first() is None
+
+
 def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[list[dict]] = None, note: Optional[str] = None,
             channel: str = "PORTAL") -> dict:
     """Supplier order response. A line may confirm dates per schedule line:
     {"line": 10, "scheduleConfirmations": [{"seq": 1, "confirmedDate": "2026-11-20"}]}; a later date than requested is a change."""
     p = principal(session)
     require_supplier_user(session, po.supplier_id)
-    if po.status != "TRANSMITTED":
+    if not awaiting_confirmation(session, po):
         raise illegal_transition("Purchase order", po.number, po.status, "confirm")
     hours = Decimal((clock.now() - po.transmitted_at).total_seconds() / 3600).quantize(Decimal("0.01"))
     instance = _instance(session, po)
@@ -473,7 +498,8 @@ def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[li
         workflow.step(session, instance, "F5-08", outcome="no: " + "; ".join(outside) + " → back to buyer")
         workflow.start_approval(session, instance, "PO_CHANGE_REVIEW", object_type="PURCHASE_ORDER", object_id=po.id,
                                 object_ref=po.number, chain=["BUYER"], step_id=None, initiator_id=None,
-                                evidence={"proposed": proposed, "outside": outside, "note": note})
+                                evidence={"proposed": proposed, "outside": outside, "note": note, "response": status.upper(),
+                                          "version": po.version})
         audit.record(session, "PURCHASE_ORDER", po.id, "SUPPLIER_CHANGE_REQUESTED", object_ref=po.number, after={"changes": proposed}, reason=note)
         return {"status": po.status, "confirmation": "CHANGE_REQUESTED", "outsideTolerance": outside}
     SM.apply(session, po, "confirm", extra_after={"hoursToConfirm": str(hours)})
@@ -490,24 +516,158 @@ def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[li
     return {"status": po.status, "confirmation": "CONFIRMED", "hoursToConfirm": str(hours)}
 
 
+@workflow.guard_task("PO_CHANGE_REVIEW")
+def _guard_change_review(session: Session, task: Task, decision: str) -> None:
+    """A supplier rejection (or a response without any line change) proposes nothing: accepting it would only re-send the
+    same order as v+1. The buyer declines the review and then changes the order or cancels it."""
+    proposed = [c for c in (task.evidence or {}).get("proposed") or [] if set(c) - {"line"}]
+    if decision == "APPROVE" and not proposed:
+        rejected = (task.evidence or {}).get("response") == "REJECTED" or "supplier rejected the order" in ((task.evidence or {}).get("outside") or [])
+        raise Problem(422, "NOTHING_TO_ACCEPT", (f"{task.object_ref}: the supplier rejected the order" if rejected else
+                                                 f"{task.object_ref}: the supplier response proposes no change")
+                      + "; decline this review, then change the order (new version) or cancel it", rule_ref="F5-08")
+
+
 @workflow.on_task("PO_CHANGE_REVIEW")
 def _change_reviewed(session: Session, task: Task, outcome: str) -> None:
     po = session.get(PurchaseOrder, task.object_id)
     if outcome == "APPROVED":
         changes = [{k: v for k, v in c.items()} for c in task.evidence.get("proposed", [])]
-        change_order(session, po, changes, reason=f"supplier proposal accepted: {task.comment or ''}".strip())
+        # A proposed price outside the contract tolerance is a P07 deviation: the buyer's comment is its justification.
+        change_order(session, po, changes, reason=f"supplier proposal accepted: {task.comment or ''}".strip(), deviation_reason=task.comment)
     else:
         audit.record(session, "PURCHASE_ORDER", po.id, "SUPPLIER_CHANGE_DECLINED", object_ref=po.number, reason=task.comment)
 
 
-def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reason: str) -> dict:
-    """Change of qty/price/date creates version n+1 and requires supplier re-confirmation (§6.1)."""
+def _band(rule, value_minor: int) -> int:
+    """Index of the PO-APPROVAL value band a value falls in (same bands as rules.band_chain)."""
+    for index, band in enumerate(rule.body["bands"]):
+        if band["upTo"] is None or value_minor < band["upTo"]:
+            return index
+    return len(rule.body["bands"])
+
+
+def _contract_price_minor(session: Session, line: PoLine, on: date) -> Optional[int]:
+    """Contract price of a contract-priced line on a date (the published validity covering it, else the one it was priced from)."""
+    from app.pic.models import PriceValidity
+    if not line.contract_line_id:
+        return None
+    validity = source.contract_price(session, line.contract_line_id, on)
+    if validity is None and line.price_validity_id:
+        validity = session.get(PriceValidity, line.price_validity_id)
+    return validity.unit_price_minor if validity is not None else None
+
+
+def _review_change(session: Session, po: PurchaseOrder, lines: dict, changes: list[dict], deviation_reason: Optional[str], rule) -> dict:
+    """Value and P07 deviation of a change before it is applied: new order value, lines whose new price is outside the contract
+    price tolerance (a deviation needs a reason) and the approval triggers (PO-APPROVAL ``changeApproval``: a price deviation
+    always; a value rising into a higher band when ``onBandIncrease`` is set)."""
+    state = {no: [l.qty, l.unit_price_minor, l.need_date] for no, l in lines.items()}
+    touched, priced = set(), set()
+    for change in changes:
+        no = int(change["line"])
+        if "qty" in change:
+            state[no][0] = D(change["qty"])
+            touched.add(no)
+        if "unit_price" in change:
+            state[no][1] = int(D(change["unit_price"]) * 100)
+            touched.add(no)
+            priced.add(no)
+        if "need_date" in change:
+            state[no][2] = date.fromisoformat(str(change["need_date"]))
+    total = sum(line_amount(state[no][0], state[no][1]) if no in touched else l.net_minor for no, l in lines.items())
+    tolerance = D(po.tolerance.get("price_pct", 0))
+    deviations = []
+    for no in sorted(priced):
+        contract_price = _contract_price_minor(session, lines[no], state[no][2])
+        if contract_price is not None and abs(Decimal(state[no][1] - contract_price)) > Decimal(contract_price) * tolerance / 100:
+            deviations.append({"line": no, "unitPriceMinor": state[no][1], "contractPriceMinor": contract_price, "tolerancePct": jsonable(tolerance)})
+    if deviations and not (deviation_reason or "").strip():
+        raise rule_violation("Price deviates from the contract beyond tolerance; a deviation reason is required", "P07", deviations=deviations)
+    settings = rule.body.get("changeApproval") or {}
+    triggers = []
+    if deviations and settings.get("onPriceDeviation", True):
+        triggers.append("PRICE_DEVIATION")
+    if settings.get("onBandIncrease", False) and _band(rule, total) > _band(rule, po.total_minor):
+        triggers.append("BAND_INCREASE")
+    return {"totalMinor": total, "deviations": deviations, "priced": priced, "triggers": triggers}
+
+
+def pending_change_approval(session: Session, po: PurchaseOrder) -> Optional[Task]:
+    return session.execute(select(Task).where(Task.object_id == po.id, Task.kind == "PO_CHANGE_APPROVAL", Task.status == "OPEN")).scalars().first()
+
+
+def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reason: str, deviation_reason: Optional[str] = None,
+                 change_request: Optional[str] = None) -> dict:
+    """Change of qty/price/date creates version n+1 and requires supplier re-confirmation (§6.1). A new price outside the
+    contract tolerance needs a deviation reason (P07) and, like a value rising into a higher PO-APPROVAL band (when the rule
+    set enables it), is approved before the new version exists: the version in force stays with the supplier, nothing is
+    transmitted until the approval chain has approved (task PO_CHANGE_APPROVAL)."""
     if not SM.can(po.status, "change"):
         raise illegal_transition("Purchase order", po.number, po.status, "change")
     lines = {l.line_no: l for l in lines_of(session, po)}
     for change in changes:
-        if int(change["line"]) not in lines:
+        line = lines.get(int(change["line"]))
+        if line is None:
             raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {change['line']}")
+        if "qty" in change and D(change["qty"]) <= 0:
+            raise Problem(422, "INVALID_QUANTITY", f"Line {line.line_no}: the quantity must be positive; cancel the order to withdraw it",
+                          rule_ref="PO-CHANGE")
+        if "qty" in change and D(change["qty"]) < line.received_qty:
+            raise Problem(422, "BELOW_RECEIVED", f"Line {line.line_no}: {jsonable(line.received_qty)} already received; the quantity "
+                          f"cannot go below it", rule_ref="PO-CHANGE", receivedQty=jsonable(line.received_qty))
+        if "unit_price" in change and D(change["unit_price"]) <= 0:
+            raise Problem(422, "INVALID_PRICE", f"Line {line.line_no}: the unit price must be positive", rule_ref="PO-CHANGE")
+    pending = pending_change_approval(session, po)
+    if pending is not None:
+        raise Problem(409, "CHANGE_PENDING_APPROVAL", f"{po.number} already has a change awaiting approval ({pending.candidate_role}); "
+                      "decide it first", rule_ref="PO-APPROVAL")
+    rule = rules.resolve(session, "PO-APPROVAL", company_code=po.company_code)
+    review = _review_change(session, po, lines, changes, deviation_reason, rule)
+    chain = rules.band_chain(rule, review["totalMinor"]) if "BAND_INCREASE" in review["triggers"] else []
+    if "PRICE_DEVIATION" in review["triggers"]:
+        chain = list(dict.fromkeys(chain + list(rule.body["deviationChain"])))
+    if not chain:
+        return _apply_change(session, po, changes, reason, deviation_reason)
+    p = principal(session)
+    evidence = {"changes": jsonable(changes), "reason": reason, "deviationReason": deviation_reason, "fromVersion": po.version,
+                "fromTotalMinor": po.total_minor, "toTotalMinor": review["totalMinor"], "triggers": review["triggers"],
+                "deviations": review["deviations"], "changeRequest": change_request}
+    workflow.start_approval(session, _instance(session, po), "PO_CHANGE_APPROVAL", object_type="PURCHASE_ORDER", object_id=po.id,
+                            object_ref=po.number, chain=chain, step_id=None, initiator_id=p.user_id, rule_set_version=rule.ref,
+                            evidence=evidence)
+    audit.record(session, "PURCHASE_ORDER", po.id, "CHANGE_APPROVAL_REQUESTED", object_ref=po.number, reason=reason,
+                 after={k: v for k, v in evidence.items() if k != "changeRequest" or v}, rule_set_version=rule.ref)
+    return {"po": po.number, "version": po.version, "status": po.status, "approval": "PENDING", "chain": chain,
+            "triggers": review["triggers"], "proposedVersion": po.version + 1, "toTotalMinor": review["totalMinor"]}
+
+
+@workflow.on_task("PO_CHANGE_APPROVAL")
+def _change_approval_decided(session: Session, task: Task, outcome: str) -> None:
+    from app.pic.models import PoChangeRequest
+    po = session.get(PurchaseOrder, task.object_id)
+    evidence = task.evidence or {}
+    pcr = (session.execute(select(PoChangeRequest).where(PoChangeRequest.number == evidence["changeRequest"])).scalar_one_or_none()
+           if evidence.get("changeRequest") else None)
+    if outcome != "APPROVED":
+        audit.record(session, "PURCHASE_ORDER", po.id, "CHANGE_APPROVAL_REJECTED", object_ref=po.number, reason=task.comment,
+                     after={"fromVersion": evidence.get("fromVersion"), "triggers": evidence.get("triggers")})
+        if pcr is not None:
+            pcr.status, pcr.decision_comment = "REJECTED", task.comment
+        return
+    if po.version != evidence.get("fromVersion") or not SM.can(po.status, "change"):
+        raise Problem(409, "CHANGE_SUPERSEDED", f"{po.number} is at version {po.version} ({po.status}); this change was raised on "
+                      f"version {evidence.get('fromVersion')}. Reject it and raise the change again", rule_ref="PO-APPROVAL")
+    result = _apply_change(session, po, evidence["changes"], evidence["reason"], evidence.get("deviationReason"))
+    if pcr is not None:
+        pcr.result_version = result["version"]
+
+
+def _apply_change(session: Session, po: PurchaseOrder, changes: list[dict], reason: str, deviation_reason: Optional[str] = None) -> dict:
+    lines = {l.line_no: l for l in lines_of(session, po)}
+    rule = rules.resolve(session, "PO-APPROVAL", company_code=po.company_code)
+    review = _review_change(session, po, lines, changes, deviation_reason, rule)
+    deviating = {d["line"]: d for d in review["deviations"]}
     changes = jsonable(changes)
     snapshot = {"header": row(po), "lines": [row(l) for l in lines.values()],
                 "schedule": [row(sl) for sl in schedule_lines(session, po)]}
@@ -522,6 +682,14 @@ def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reaso
             line.need_date = date.fromisoformat(str(change["need_date"]))
         if "unit_price" in change:
             line.unit_price_minor = int(D(change["unit_price"]) * 100)
+            # P07: the deviation flag follows the new price (back within tolerance clears it).
+            deviation = deviating.get(line.line_no)
+            line.price_deviation = deviation is not None if line.contract_line_id else line.price_deviation
+            line.deviation_reason = deviation_reason.strip() if deviation is not None else (None if line.contract_line_id else line.deviation_reason)
+            if deviation is not None:
+                po.overrides = [*(po.overrides or []), {"field": "unit_price", "line": line.line_no, "inherited": deviation["contractPriceMinor"],
+                                                        "value": line.unit_price_minor, "reason": line.deviation_reason, "outsideTolerance": True,
+                                                        "version": po.version + 1}]
         line.net_minor = line_amount(line.qty, line.unit_price_minor)
         if change.get("schedule"):
             _replace_schedule(session, po, line, _parse_schedule(line, change["schedule"]))
@@ -541,10 +709,16 @@ def change_order(session: Session, po: PurchaseOrder, changes: list[dict], reaso
     previous = po.status
     SM.apply(session, po, "change", reason=reason, extra_after={"version": po.version})
     outbox.emit(session, "purchase_order.changed", "PURCHASE_ORDER", po.id, po.number, {"version": po.version, "changes": changes})
-    if previous in ("TRANSMITTED", "CONFIRMED"):
+    if previous in ("TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED"):
         po.transmitted_at = clock.now()
         transmission.send(session, po, transmission.channels_for(session.get(Supplier, po.supplier_id)))
-        workflow.wait(session, _instance(session, po), "F5-07", outcome=f"v{po.version} sent; re-confirmation required")
+        # Every version has its own confirmation SLA; the timer of an older version is ignored when it fires.
+        sla_hours = int(rule.body["confirmationSlaHours"])
+        po.confirmation_due_at = clock.now() + timedelta(hours=sla_hours)
+        workflow.create_timer(session, "PO_CONFIRMATION_SLA", "PURCHASE_ORDER", po.id, po.confirmation_due_at, {"version": po.version})
+        workflow.wait(session, _instance(session, po), "F5-07", outcome=f"v{po.version} sent; re-confirmation required within {sla_hours} h")
+    if previous == "PARTIALLY_RECEIVED":
+        update_receipt_status(session, po)  # reduced to what was received: the order is fully received
     validate(session, po)
     return {"po": po.number, "version": po.version, "status": po.status}
 
@@ -663,12 +837,20 @@ def set_schedule(session: Session, po: PurchaseOrder, line_no: int, entries: lis
     if line is None:
         raise Problem(404, "NOT_FOUND", f"{po.number} has no line {line_no}")
     parsed = _parse_schedule(line, entries)
-    if po.status in ("DRAFT", "IN_APPROVAL", "RELEASED", "TRANSMITTED"):
+    # A transmitted order is the supplier's document: once an EDI/e-mail transmission of this version was delivered, or the
+    # supplier answered it, a schedule change is version n+1 (ORDCHG) like after confirmation. While the transmissions are
+    # still queued the edit stays in place and the queued documents (and the portal view) are regenerated before delivery.
+    transmitted_in_place = po.status == "TRANSMITTED" and not transmission.delivered_outside_portal(session, po) and not session.execute(
+        select(PoConfirmation.id).where(PoConfirmation.po_id == po.id, PoConfirmation.po_version == po.version)).first()
+    if po.status in ("DRAFT", "IN_APPROVAL", "RELEASED") or transmitted_in_place:
         before = [{"seq": sl.seq, "qty": jsonable(sl.qty), "deliveryDate": sl.delivery_date.isoformat()} for sl in schedule_lines(session, po, line)]
         _replace_schedule(session, po, line, parsed)
         after = [{"seq": seq, "qty": jsonable(q), "deliveryDate": d.isoformat()} for seq, (q, d) in enumerate(parsed, start=1)]
+        refreshed = transmission.refresh_undelivered(session, po) if transmitted_in_place else []
         audit.record(session, "PURCHASE_ORDER", po.id, "SCHEDULE_CHANGED", object_ref=po.number,
-                     before={"line": line_no, "schedule": before}, after={"line": line_no, "version": po.version, "schedule": after},
+                     before={"line": line_no, "schedule": before}, after={"line": line_no, "version": po.version, "schedule": after,
+                                                                          **({"transmissionsRefreshed": transmission.transmission_summary(refreshed)}
+                                                                             if transmitted_in_place else {})},
                      reason=reason or "Delivery schedule edited before supplier confirmation")
         return {"po": po.number, "version": po.version, "status": po.status, "mode": "IN_PLACE", "schedule": schedule_view(session, po)}
     if not SM.can(po.status, "change"):
@@ -681,8 +863,13 @@ def set_schedule(session: Session, po: PurchaseOrder, line_no: int, entries: lis
 @workflow.on_timer("PO_CONFIRMATION_SLA")
 def _confirmation_overdue(session: Session, timer) -> None:
     po = session.get(PurchaseOrder, timer.object_id)
-    if po is None or po.status != "TRANSMITTED":
+    if po is None or not awaiting_confirmation(session, po):
         return
+    if int((timer.payload or {}).get("version", po.version)) != po.version:
+        return  # the SLA of a superseded version; the current version has its own timer
+    if session.execute(select(PoConfirmation.id).where(PoConfirmation.po_id == po.id, PoConfirmation.po_version == po.version,
+                                                       PoConfirmation.status.in_(("REJECTED", "CHANGE_REQUESTED")))).first():
+        return  # the supplier answered this version (rejection / change request): the buyer's review task is open instead
     ai_ref = agents.log_run(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
                             inputs={"dueAt": po.confirmation_due_at.isoformat()}, evidence=[po.number],
                             output={"draft": f"Please confirm {po.number} v{po.version} today."}, confidence=0.7, action_taken="DRAFTED")
@@ -710,7 +897,7 @@ def update_receipt_status(session: Session, po: PurchaseOrder) -> None:
         SM.apply(session, po, command)
 
 
-def receipt_reversed(session: Session, po: PurchaseOrder, gr_number: str) -> None:
+def receipt_reversed(session: Session, po: PurchaseOrder, gr_number: str, reason: Optional[str] = None) -> None:
     """After a goods-receipt reversal (movement 102) the order is open again for the quantity taken back: RECEIVED goes
     back to PARTIALLY_RECEIVED, or to CONFIRMED (TRANSMITTED if the current version was never confirmed) when nothing
     received remains, so the correct receipt can be posted."""
@@ -727,19 +914,20 @@ def receipt_reversed(session: Session, po: PurchaseOrder, gr_number: str) -> Non
                                                                     PoConfirmation.status == "CONFIRMED")).first()
         command = "unreceive" if confirmed else "unreceive_unconfirmed"
     if SM.can(po.status, command):
-        SM.apply(session, po, command, reason=f"goods receipt {gr_number} reversed")
+        SM.apply(session, po, command, reason=reason or f"goods receipt {gr_number} reversed")
 
 
 # ---------------------------------------------------------------- cancellation and closure (§6.1 PO states)
-def _release_requisition(session: Session, po: PurchaseOrder, line: PoLine) -> None:
-    """Give a cancelled line's quantity back to its requisition line so the buyer can re-order it."""
+def _release_requisition(session: Session, po: PurchaseOrder, line: PoLine, qty: Optional[Decimal] = None) -> None:
+    """Give a cancelled line's quantity (or the open quantity of a short-closed line) back to its requisition line so the
+    buyer can re-order it."""
     if not line.requisition_id:
         return
     pr = session.get(Requisition, line.requisition_id)
     pr_line = session.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line.pr_line_no)).scalar_one_or_none()
     if pr_line is None:
         return
-    pr_line.ordered_qty = max(pr_line.ordered_qty - line.qty, Decimal(0))
+    pr_line.ordered_qty = max(pr_line.ordered_qty - (line.qty if qty is None else qty), Decimal(0))
     if pr_line.sourcing_status == "ORDERED":
         pr_line.sourcing_status = "SOURCED"
     remaining = [l.ordered_qty for l in req_svc._lines(session, pr)]
@@ -752,9 +940,9 @@ def _release_requisition(session: Session, po: PurchaseOrder, line: PoLine) -> N
 
 def cancel(session: Session, po: PurchaseOrder, reason: str) -> dict:
     """Cancel an order that nothing has been shipped, received or invoiced against (e.g. the supplier rejected it). Open
-    tasks and the confirmation timer close, the requisition quantity is released for re-ordering, contract consumption
-    booked at release is reversed, and ``purchase_order.cancelled`` informs the ERP and the supplier portal."""
-    from app.pic.models import OutboxEvent, ProcessedEvent, Timer
+    tasks and the confirmation timer close, the requisition quantity is released for re-ordering, and
+    ``purchase_order.cancelled`` informs the ERP, the supplier portal and contract consumption."""
+    from app.pic.models import Timer
 
     if not (reason or "").strip():
         raise Problem(422, "REASON_REQUIRED", "Give the reason for the cancellation", rule_ref="PO-CANCEL")
@@ -763,6 +951,13 @@ def cancel(session: Session, po: PurchaseOrder, reason: str) -> dict:
     lines = lines_of(session, po)
     if any(l.shipped_qty > 0 or l.received_qty > 0 or l.invoiced_qty > 0 or l.ses_approved_minor > 0 for l in lines):
         raise rule_violation(f"{po.number} has shipments, receipts or invoices; it cannot be cancelled", "PO-CANCEL")
+    from app.pic.models import ServiceEntry
+    open_entries = session.execute(select(ServiceEntry.number).where(ServiceEntry.po_id == po.id, ServiceEntry.status.in_(("DRAFT", "SUBMITTED")))
+                                   .order_by(ServiceEntry.number)).scalars().all()
+    if open_entries:
+        # A service entry still in approval would otherwise stay approvable against a cancelled order.
+        raise Problem(409, "SERVICE_ENTRIES_OPEN", f"{po.number} has service entr{'y' if len(open_entries) == 1 else 'ies'} "
+                      f"{', '.join(open_entries)} awaiting approval; have them rejected first", rule_ref="PO-CANCEL", serviceEntries=open_entries)
     before = po.status
     SM.apply(session, po, "cancel", reason=reason.strip(), extra_after={"version": po.version})
     for task in session.execute(select(Task).where(Task.object_id == po.id, Task.status == "OPEN")).scalars():
@@ -772,18 +967,19 @@ def cancel(session: Session, po: PurchaseOrder, reason: str) -> dict:
     for timer in session.execute(select(Timer).where(Timer.object_id == po.id, Timer.kind == "PO_CONFIRMATION_SLA",
                                                      Timer.fired_at.is_(None))).scalars():
         timer.fired_at, timer.payload = clock.now(), {**(timer.payload or {}), "cancelled": True}
-    released = session.execute(select(OutboxEvent.id).where(OutboxEvent.topic == "purchase_order.released",
-                                                            OutboxEvent.object_id == po.id)).scalars().all()
-    consumed = bool(released) and session.execute(select(ProcessedEvent.event_id).where(
-        ProcessedEvent.consumer == "contract-consumption", ProcessedEvent.event_id.in_(released))).first() is not None
+    # Contract consumption is recomputed from the live PO lines by the consumer of purchase_order.cancelled
+    # (contract.recompute_consumption); it is not adjusted here.
     for line in lines:
         _release_requisition(session, po, line)
-        if consumed and line.contract_line_id:
-            contract_line = session.get(ContractLine, line.contract_line_id)
-            contract_line.released_qty -= line.qty
-            contract_line.released_value_minor -= line.net_minor
+    # F5-06: an order the supplier already received is cancelled over the same channels (portal, EDI ORDCHG, e-mail);
+    # EDI and e-mail are delivered by the po-transmission-delivery consumer of purchase_order.cancelled.
+    from app.pic.models import PoTransmission
+    sent = []
+    if session.execute(select(PoTransmission.id).where(PoTransmission.po_id == po.id).limit(1)).first():
+        sent = transmission.send_cancellation(session, po, reason.strip())
     outbox.emit(session, "purchase_order.cancelled", "PURCHASE_ORDER", po.id, po.number,
-                {"version": po.version, "from": before, "reason": reason.strip(), "supplier": session.get(Supplier, po.supplier_id).code})
+                {"version": po.version, "from": before, "reason": reason.strip(), "supplier": session.get(Supplier, po.supplier_id).code,
+                 "transmissions": transmission.transmission_summary(sent)})
     instance = _instance(session, po)
     if instance is not None and instance.status == "RUNNING":
         workflow.end(session, instance, instance.current_step or "F5-07", outcome=f"cancelled: {reason.strip()}", status="CANCELLED")
@@ -792,14 +988,26 @@ def cancel(session: Session, po: PurchaseOrder, reason: str) -> dict:
 
 @outbox.consumer("purchase_order.cancelled", "erp-po-posting")
 def _post_po_cancellation(session: Session, event) -> None:
+    from app.pic.models import IntegrationMessage
     po = session.get(PurchaseOrder, event.object_id)
     if not po.erp_doc_no:
-        return  # never reached the ERP
+        pending = session.execute(select(IntegrationMessage.idempotency_key).where(
+            IntegrationMessage.object_id == po.id, IntegrationMessage.message_type == "PURCHASE_ORDER",
+            IntegrationMessage.status.in_(("PENDING", "RETRY")))).scalars().all()
+        if pending:
+            # The order posting is still being retried: the cancellation follows as soon as it posts (_po_posted).
+            audit.record(session, "PURCHASE_ORDER", po.id, "ERP_CANCEL_DEFERRED", object_ref=po.number,
+                         after={"waitingFor": pending}, reason=event.payload.get("reason"))
+        return  # otherwise it never reached the ERP
+    _enqueue_erp_cancel(session, po, event.payload.get("reason"))
+
+
+def _enqueue_erp_cancel(session: Session, po: PurchaseOrder, reason: Optional[str]) -> None:
     message = integration.enqueue(session, target_system=integration.target_system(session, po.company_code), message_type="PURCHASE_ORDER",
                                   idempotency_key=f"{po.company_code}|PO|{po.number}|CANCEL", object_type="PURCHASE_ORDER",
                                   object_id=po.id, object_ref=po.number,
                                   payload={"po": po.number, "version": po.version, "action": "CANCEL", "erpDocument": po.erp_doc_no,
-                                           "companyCode": po.company_code, "reason": event.payload.get("reason")})
+                                           "companyCode": po.company_code, "reason": reason})
     integration.process(session, message)
 
 
@@ -831,6 +1039,124 @@ def close(session: Session, po: PurchaseOrder, reason: Optional[str] = None) -> 
             req_svc.SM.apply(session, pr, "close", reason=f"all orders closed ({po.number} last)")
             closed_requisitions.append(pr.number)
     return {"po": po.number, "status": po.status, "from": before, "closedRequisitions": closed_requisitions}
+
+
+def short_close(session: Session, po: PurchaseOrder, reason: str) -> dict:
+    """Short-close a partly delivered order: the rest will not be delivered. Allowed once every received (accepted) quantity
+    is invoiced, with no lot still in inspection, no ASN in transit and no invoice or service entry still in process. The
+    open quantity goes back to the requisition, open tasks and the confirmation timer close, and ``purchase_order.closed`` (shortClose: true) carries the
+    released quantity and value per line (contract consumption is recomputed by its consumer; the line quantity stays as
+    ordered, the received quantity is what was consumed)."""
+    from app.pic.models import Asn, GoodsReceipt, InspectionLot, Invoice, InvoiceLine, ServiceEntry, Timer
+
+    if len((reason or "").strip()) < 3:
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for the short-close", rule_ref="PO-CLOSE")
+    if not SM.can(po.status, "short_close"):
+        raise illegal_transition("Purchase order", po.number, po.status, "short-close")
+    lines = lines_of(session, po)
+    blockers = []
+    uninvoiced = [l.line_no for l in lines if l.accepted_qty > l.invoiced_qty or (l.ses_required and l.ses_approved_minor > l.invoiced_minor)]
+    if uninvoiced:
+        blockers.append(f"lines {uninvoiced} still have received value to invoice")
+    in_transit = session.execute(select(Asn.number).where(Asn.po_id == po.id, Asn.status == "IN_TRANSIT").order_by(Asn.number)).scalars().all()
+    if in_transit:
+        blockers.append(f"ASN {', '.join(in_transit)} in transit (receive it first)")
+    lots = session.execute(select(InspectionLot.number).join(GoodsReceipt, GoodsReceipt.id == InspectionLot.gr_id).where(
+        GoodsReceipt.po_id == po.id, InspectionLot.status == "OPEN")).scalars().all()
+    if lots:
+        blockers.append(f"inspection lot {', '.join(lots)} awaiting the usage decision")
+    pending = session.execute(select(Invoice.number).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id).where(
+        InvoiceLine.po_line_id.in_([l.id for l in lines]), Invoice.status.not_in(("POSTED", "PAID", "REJECTED")))).scalars().first()
+    if pending:
+        blockers.append(f"invoice {pending} is still in process")
+    entries = session.execute(select(ServiceEntry.number).where(ServiceEntry.po_id == po.id, ServiceEntry.status.in_(("DRAFT", "SUBMITTED")))).scalars().all()
+    if entries:
+        blockers.append(f"service entr{'y' if len(entries) == 1 else 'ies'} {', '.join(entries)} awaiting approval")
+    if blockers:
+        raise rule_violation(f"{po.number} cannot be short-closed: " + "; ".join(blockers), "PO-CLOSE", blockers=blockers)
+    before = po.status
+    SM.apply(session, po, "short_close", reason=reason.strip())
+    released = []
+    for line in lines:
+        open_qty = max(line.qty - line.received_qty, Decimal(0))
+        if open_qty <= 0:
+            continue
+        _release_requisition(session, po, line, open_qty)
+        released.append({"line": line.line_no, "releasedQty": jsonable(open_qty), "releasedValueMinor": line_amount(open_qty, line.unit_price_minor),
+                         "contractLineId": str(line.contract_line_id) if line.contract_line_id else None,
+                         "requisitionId": str(line.requisition_id) if line.requisition_id else None, "prLine": line.pr_line_no})
+    for task in session.execute(select(Task).where(Task.object_id == po.id, Task.status == "OPEN")).scalars():
+        task.status = "CANCELLED"
+        for timer in session.execute(select(Timer).where(Timer.object_id == task.id, Timer.fired_at.is_(None))).scalars():
+            timer.fired_at, timer.payload = clock.now(), {**(timer.payload or {}), "cancelled": True}
+    for timer in session.execute(select(Timer).where(Timer.object_id == po.id, Timer.kind == "PO_CONFIRMATION_SLA", Timer.fired_at.is_(None))).scalars():
+        timer.fired_at, timer.payload = clock.now(), {**(timer.payload or {}), "cancelled": True}
+    audit.record(session, "PURCHASE_ORDER", po.id, "SHORT_CLOSED", object_ref=po.number, reason=reason.strip(),
+                 after={"from": before, "version": po.version, "released": released})
+    outbox.emit(session, "purchase_order.closed", "PURCHASE_ORDER", po.id, po.number,
+                {"from": before, "reason": reason.strip(), "shortClose": True, "version": po.version, "lines": released,
+                 "releasedValueMinor": sum(r["releasedValueMinor"] for r in released)})
+    instance = _instance(session, po)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.end(session, instance, instance.current_step or "F5-10", outcome=f"short-closed: {reason.strip()}")
+    return {"po": po.number, "status": po.status, "from": before, "released": released}
+
+
+def resubmit(session: Session, po: PurchaseOrder, reason: str, changes: Optional[list[dict]] = None,
+             deviation_reason: Optional[str] = None) -> dict:
+    """An order returned by its approver (IN_APPROVAL → DRAFT) is corrected in place — it was never sent — and routed
+    again: line quantity (within the requisition), unit price (P07 deviation against the contract needs a reason) and need
+    date; then validation (F5-03) and the approval strategy (F5-04/05) run as for a new order."""
+    if po.status != "DRAFT":
+        raise illegal_transition("Purchase order", po.number, po.status, "re-submit")
+    if len((reason or "").strip()) < 3:
+        raise Problem(422, "REASON_REQUIRED", "Say what was corrected for the approver", rule_ref="PO-APPROVAL")
+    lines = {l.line_no: l for l in lines_of(session, po)}
+    tolerance = D(po.tolerance.get("price_pct", 0))
+    applied = []
+    for change in changes or []:
+        line = lines.get(int(change["line"]))
+        if line is None:
+            raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {change['line']}")
+        old_need = line.need_date
+        if "qty" in change:
+            qty = D(change["qty"])
+            if qty <= 0:
+                raise Problem(422, "INVALID_QUANTITY", f"Line {line.line_no}: the quantity must be positive", rule_ref="PO-APPROVAL")
+            delta = qty - line.qty
+            if delta and line.requisition_id:
+                pr = session.get(Requisition, line.requisition_id)
+                pr_line = session.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line.pr_line_no)).scalar_one()
+                if delta > 0:
+                    if pr_line.qty - pr_line.ordered_qty < delta:
+                        raise rule_violation(f"Line {line.line_no}: {jsonable(qty)} exceeds what {pr.number}/{pr_line.line_no} still has open "
+                                             f"({jsonable(pr_line.qty - pr_line.ordered_qty + line.qty)})", "P07")
+                    req_svc.mark_ordered(session, pr, pr_line, delta)
+                else:
+                    _release_requisition(session, po, line, -delta)
+            line.qty = qty
+        if "need_date" in change:
+            line.need_date = date.fromisoformat(str(change["need_date"]))
+        if "unit_price" in change:
+            price = int(D(change["unit_price"]) * 100)
+            if price <= 0:
+                raise Problem(422, "INVALID_PRICE", f"Line {line.line_no}: the unit price must be positive", rule_ref="PO-APPROVAL")
+            line.unit_price_minor = price
+            contract_price = _contract_price_minor(session, line, line.need_date)
+            if contract_price is not None:
+                deviation = abs(Decimal(price - contract_price)) > Decimal(contract_price) * tolerance / 100
+                if deviation and not (deviation_reason or "").strip():
+                    raise rule_violation("Price deviates from the contract beyond tolerance; a deviation reason is required", "P07")
+                line.price_deviation, line.deviation_reason = deviation, deviation_reason.strip() if deviation else None
+        line.net_minor = line_amount(line.qty, line.unit_price_minor)
+        _fit_schedule(session, po, line, old_need)
+        applied.append(jsonable(change))
+    po.total_minor = sum(l.net_minor for l in lines.values())
+    audit.record(session, "PURCHASE_ORDER", po.id, "RESUBMITTED", object_ref=po.number, reason=reason.strip(),
+                 after={"changes": applied, "totalMinor": po.total_minor, "deviationReason": deviation_reason})
+    validate(session, po)
+    route(session, po)
+    return {"po": po.number, "version": po.version, "status": po.status, "totalMinor": po.total_minor}
 
 
 # ---------------------------------------------------------------- PO-03 change requests after confirmation
@@ -874,8 +1200,9 @@ def _change_request_decided(session: Session, task: Task, outcome: str) -> None:
     po = session.get(PurchaseOrder, pcr.po_id)
     pcr.decided_by, pcr.decided_at, pcr.decision_comment = principal(session).user_id, clock.now(), task.comment
     if outcome == "APPROVED":
-        result = change_order(session, po, pcr.lines, reason=f"{pcr.number} ({pcr.origin.lower()}): {pcr.reason}")
-        pcr.status, pcr.result_version = "ACCEPTED", result["version"]
+        result = change_order(session, po, pcr.lines, reason=f"{pcr.number} ({pcr.origin.lower()}): {pcr.reason}", change_request=pcr.number)
+        # A change that needs PO approval first (higher value band) gets its version once approved (_change_approval_decided).
+        pcr.status, pcr.result_version = "ACCEPTED", None if result.get("approval") == "PENDING" else result["version"]
     else:
         pcr.status = "REJECTED"
         audit.record(session, "PURCHASE_ORDER", po.id, "CHANGE_REJECTED", object_ref=po.number, after={"request": pcr.number}, reason=task.comment)

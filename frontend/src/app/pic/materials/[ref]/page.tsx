@@ -9,16 +9,20 @@ import { api } from '@/lib/pic/api';
 import { dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 
-type Candidate = { id: string; material: string; score: number; parts: Record<string, number> };
+/** A duplicate candidate: an active material, or a material request still in flight (no material yet). */
+type Candidate = {
+  id: string; kind?: 'MATERIAL' | 'MATERIAL_REQUEST'; material: string | null; materialRequest?: string; status?: string;
+  score: number; parts: Record<string, number>;
+};
 type MaterialRequest = {
   id: string; number: string; status: string; description: string; type: string; material_group: string; category: string; base_uom: string;
   valuation_class: string | null; hsn_code: string | null; mpn: string | null; attributes: Record<string, unknown>;
   source_pr_id: string | null; source_pr_line: number | null; duplicate_score: string | null; duplicate_candidates: Candidate[] | null;
   override_reason: string | null; material_id: string | null; merged_into_material_id: string | null; rule_set_version: string | null;
-  created_at: string; updated_at: string | null;
+  requested_by: string; created_at: string; updated_at: string | null;
 };
 type Task = { id: string; name: string; kind: string; object_ref: string; status?: string; due_at: string | null };
-type Me = { roles: string[] };
+type Me = { userId: string; roles: string[] };
 type Material = { id: string; number: string; description: string };
 
 const PART_LABEL: Record<string, string> = { description: 'Description', classification: 'Classification', mpn: 'MPN', attributes: 'Attributes' };
@@ -38,7 +42,9 @@ export default function MaterialRequestPage() {
 
   const stewardTask = (tasks.data ?? []).find((t) => t.kind === 'MDM_STEWARD' && t.object_ref === mr.number);
   const isSteward = !!me.data?.roles.includes('MDM_STEWARD');
-  const canMerge = ['DUPLICATE_BLOCKED', 'IN_STEWARDSHIP'].includes(mr.status);
+  // The API lets the requester or a steward merge a blocked request, and only a steward merge one in stewardship.
+  const isRequester = !!me.data && me.data.userId === mr.requested_by;
+  const canMerge = (mr.status === 'DUPLICATE_BLOCKED' && (isSteward || isRequester)) || (mr.status === 'IN_STEWARDSHIP' && isSteward);
   const materialNo = (id: string | null) => (id ? materials.data?.items.find((m) => m.id === id)?.number ?? '…' : null);
   const candidates = mr.duplicate_candidates ?? [];
 
@@ -57,7 +63,7 @@ export default function MaterialRequestPage() {
 
       {mr.status === 'DUPLICATE_BLOCKED' && (
         <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <p className="font-semibold">Blocked as a likely duplicate ({pct(mr.duplicate_score)} match with {candidates[0]?.material ?? 'an existing material'}).</p>
+          <p className="font-semibold">Blocked as a likely duplicate ({pct(mr.duplicate_score)} match with {candidates[0] ? candidateLabel(candidates[0]) : 'an existing material'}).</p>
           <p>Merge it into the existing material below, or a data steward can override the block with a reason and send it to stewardship.</p>
         </div>
       )}
@@ -106,17 +112,25 @@ export default function MaterialRequestPage() {
   );
 }
 
+function candidateLabel(c: Candidate) {
+  return c.material ?? `request ${c.materialRequest ?? ''}`;
+}
+
 function CandidateRow({ mr, candidate, canMerge }: { mr: MaterialRequest; candidate: Candidate; canMerge: boolean }) {
   const merge = useCommand(() => api.post(`/materials/requests/${mr.number}/merge`, { material: candidate.material }),
     { success: `${mr.number} merged into ${candidate.material}` });
+  const inFlight = candidate.kind === 'MATERIAL_REQUEST';
   return (
     <li className="rounded-lg border border-slate-200 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="font-semibold">{candidate.material}</span>
+          {inFlight ? (
+            <Link className="font-semibold text-[#1A56DB] hover:underline" href={`/pic/materials/${candidate.materialRequest}`}>Request {candidate.materialRequest}</Link>
+          ) : <span className="font-semibold">{candidate.material}</span>}
           <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold tabular-nums">{pct(candidate.score)} match</span>
+          {inFlight && <span className="text-xs text-slate-500">in flight ({label(candidate.status ?? '')}) — no material yet; merge once it is live</span>}
         </div>
-        {canMerge && <Button busy={merge.isPending} onClick={() => merge.mutate()}>Merge into {candidate.material}</Button>}
+        {canMerge && !inFlight && candidate.material && <Button busy={merge.isPending} onClick={() => merge.mutate()}>Merge into {candidate.material}</Button>}
       </div>
       <div className="mt-2 grid gap-2 sm:grid-cols-2 md:grid-cols-4">
         {Object.entries(candidate.parts).map(([part, score]) => (

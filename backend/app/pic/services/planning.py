@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from decimal import ROUND_CEILING, Decimal
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
@@ -14,7 +14,7 @@ from app.pic.models import (
     Asn, AsnLine, DemandElement, Material, MrpException, MrpRun, Plant, PlannedOrder, PoLine, PurchaseOrder, Stock,
 )
 from app.pic.platform import agents, audit, clock, outbox, workflow
-from app.pic.platform.core import link, next_number
+from app.pic.platform.core import insert_rows, link, link_many, next_number, next_numbers
 from app.pic.platform.errors import Problem, illegal_transition
 from app.pic.services import source
 from app.pic.services.common import principal
@@ -46,29 +46,22 @@ def lot_size(material: Material, net: Decimal, period_net: Optional[Decimal] = N
 
 
 # ---------------------------------------------------------------- supply and demand
-def _supply(session: Session, material: Material, plant: str) -> dict:
-    on_hand = session.execute(select(func.coalesce(func.sum(Stock.qty), 0)).where(
-        Stock.material_id == material.id, Stock.plant == plant, Stock.stock_type == "UNRESTRICTED")).scalar()
+def _assemble_supply(on_hand, po_rows, asn_rows, firmed: list) -> dict:
+    """Receipts and totals from the open supply of one material and plant (rows as selected in ``_supply``)."""
     receipts: list[tuple[date, Decimal, str, str]] = []  # (date, qty, kind, ref)
-    po_lines = session.execute(select(PoLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
-        PoLine.material_id == material.id, PoLine.plant == plant, PurchaseOrder.status.in_(OPEN_PO_STATUSES))).all()
     open_po = Decimal(0)
-    for line, po in po_lines:
+    for qty, shipped_qty, received_qty, need_date, line_no, po_number in po_rows:
         # Quantity not yet shipped (shipped quantities are counted as in-transit or received).
-        remaining = max(line.qty - max(line.shipped_qty, line.received_qty), Decimal(0))
+        remaining = max(qty - max(shipped_qty, received_qty), Decimal(0))
         if remaining > 0:
-            receipts.append((line.need_date, remaining, "OPEN_PO", f"{po.number}/{line.line_no}"))
+            receipts.append((need_date, remaining, "OPEN_PO", f"{po_number}/{line_no}"))
             open_po += remaining
     in_transit = Decimal(0)
-    asn_lines = session.execute(select(AsnLine, Asn, PoLine).join(Asn, Asn.id == AsnLine.asn_id).join(PoLine, PoLine.id == AsnLine.po_line_id)
-                                .where(PoLine.material_id == material.id, PoLine.plant == plant, Asn.status == "IN_TRANSIT")).all()
-    for asn_line, asn, _ in asn_lines:
-        remaining = asn_line.qty - asn_line.received_qty
+    for qty, received_qty, expected_date, asn_number in asn_rows:
+        remaining = qty - received_qty
         if remaining > 0:
-            receipts.append((asn.expected_date, remaining, "IN_TRANSIT", asn.number))
+            receipts.append((expected_date, remaining, "IN_TRANSIT", asn_number))
             in_transit += remaining
-    firmed = session.execute(select(PlannedOrder).where(PlannedOrder.material_id == material.id, PlannedOrder.plant == plant,
-                                                        PlannedOrder.status == "FIRMED")).scalars().all()
     firm_receipts = Decimal(0)
     for order in firmed:
         receipts.append((order.need_date, order.qty, "FIRM_PLANNED", order.number))
@@ -77,9 +70,109 @@ def _supply(session: Session, material: Material, plant: str) -> dict:
             "receipts": receipts, "firmed": firmed}
 
 
+_PO_COLUMNS = (PoLine.qty, PoLine.shipped_qty, PoLine.received_qty, PoLine.need_date, PoLine.line_no, PurchaseOrder.number)
+_ASN_COLUMNS = (AsnLine.qty, AsnLine.received_qty, Asn.expected_date, Asn.number)
+
+
+def _supply(session: Session, material: Material, plant: str) -> dict:
+    on_hand = session.execute(select(func.coalesce(func.sum(Stock.qty), 0)).where(
+        Stock.material_id == material.id, Stock.plant == plant, Stock.stock_type == "UNRESTRICTED")).scalar()
+    po_rows = session.execute(select(*_PO_COLUMNS).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
+        PoLine.material_id == material.id, PoLine.plant == plant, PurchaseOrder.status.in_(OPEN_PO_STATUSES))).all()
+    asn_rows = session.execute(select(*_ASN_COLUMNS).join(Asn, Asn.id == AsnLine.asn_id).join(PoLine, PoLine.id == AsnLine.po_line_id)
+                               .where(PoLine.material_id == material.id, PoLine.plant == plant, Asn.status == "IN_TRANSIT")).all()
+    firmed = session.execute(select(PlannedOrder).where(PlannedOrder.material_id == material.id, PlannedOrder.plant == plant,
+                                                        PlannedOrder.status == "FIRMED")).scalars().all()
+    return _assemble_supply(on_hand, po_rows, asn_rows, firmed)
+
+
 def _calendar(session: Session, plant: str) -> tuple[list[int], list[date]]:
     row = session.execute(select(Plant).where(Plant.code == plant)).scalar_one()
     return list(row.working_days or [0, 1, 2, 3, 4, 5]), list(row.holidays or [])
+
+
+class _Reads:
+    """Demand, supply and calendar of one plant, one query per material (single-material callers)."""
+
+    def __init__(self, session: Session, plant: str):
+        self.session, self.plant = session, plant
+        self._calendar = None
+        self._releases: dict = {}
+
+    def release_date(self, need_date: date, lead: int) -> date:
+        """``lead`` working days before the need date on the plant calendar (memoised: the calendar is fixed for a run)."""
+        key = (need_date, lead)
+        found = self._releases.get(key)
+        if found is None:
+            working_days, holidays = self.calendar()
+            found = self._releases[key] = clock.subtract_working_days(need_date, lead, working_days, holidays)
+        return found
+
+    def demand(self, material: Material) -> list:
+        return self.session.execute(select(DemandElement.req_date, DemandElement.qty).where(
+            DemandElement.material_id == material.id, DemandElement.plant == self.plant).order_by(DemandElement.req_date)).all()
+
+    def supply(self, material: Material) -> dict:
+        return _supply(self.session, material, self.plant)
+
+    def calendar(self) -> tuple[list[int], list[date]]:
+        if self._calendar is None:
+            self._calendar = _calendar(self.session, self.plant)
+        return self._calendar
+
+
+class _BulkReads(_Reads):
+    """The same reads for a whole run, loaded with one query per table (TD §15: 50,000 materials in < 10 minutes).
+
+    ``material_ids`` limits the load to those materials; None loads the plant (callers pass None for large scopes, the
+    rows of materials outside the run are simply never read). Row order per material is the database order of the
+    per-material queries; netting only sums demand and receipts, firmed orders keep their database order.
+    """
+
+    def __init__(self, session: Session, plant: str, material_ids: Optional[list] = None):
+        super().__init__(session, plant)
+        self.scope = None if material_ids is None else set(material_ids)
+
+        def scoped(query, column):
+            if material_ids is None:
+                yield from session.execute(query)
+            else:
+                for start in range(0, len(material_ids), source.IN_CHUNK):
+                    yield from session.execute(query.where(column.in_(material_ids[start:start + source.IN_CHUNK])))
+
+        self._demand = defaultdict(list)
+        for material_id, req_date, qty in scoped(select(DemandElement.material_id, DemandElement.req_date, DemandElement.qty)
+                                                 .where(DemandElement.plant == plant).order_by(DemandElement.req_date),
+                                                 DemandElement.material_id):
+            self._demand[material_id].append((req_date, qty))
+        self._on_hand = {material_id: qty for material_id, qty in scoped(
+            select(Stock.material_id, func.sum(Stock.qty)).where(Stock.plant == plant, Stock.stock_type == "UNRESTRICTED")
+            .group_by(Stock.material_id), Stock.material_id)}
+        self._po = defaultdict(list)
+        for row in scoped(select(PoLine.material_id, *_PO_COLUMNS).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
+                PoLine.plant == plant, PurchaseOrder.status.in_(OPEN_PO_STATUSES)), PoLine.material_id):
+            self._po[row[0]].append(tuple(row[1:]))
+        self._asn = defaultdict(list)
+        for row in scoped(select(PoLine.material_id, *_ASN_COLUMNS).join(Asn, Asn.id == AsnLine.asn_id)
+                          .join(PoLine, PoLine.id == AsnLine.po_line_id).where(PoLine.plant == plant, Asn.status == "IN_TRANSIT"),
+                          PoLine.material_id):
+            self._asn[row[0]].append(tuple(row[1:]))
+        self._firmed = defaultdict(list)
+        for (order,) in scoped(select(PlannedOrder).where(PlannedOrder.plant == plant, PlannedOrder.status == "FIRMED"),
+                               PlannedOrder.material_id):
+            self._firmed[order.material_id].append(order)
+
+    def _covers(self, material: Material) -> bool:
+        return self.scope is None or material.id in self.scope
+
+    def demand(self, material: Material) -> list:
+        return self._demand.get(material.id, []) if self._covers(material) else super().demand(material)
+
+    def supply(self, material: Material) -> dict:
+        if not self._covers(material):
+            return super().supply(material)
+        return _assemble_supply(self._on_hand.get(material.id, 0), self._po.get(material.id, ()), self._asn.get(material.id, ()),
+                                self._firmed.get(material.id, []))
 
 
 def _needed_on(on_hand: Decimal, gross_by_day: dict, receipt_by_day: dict, order: PlannedOrder, safety: Decimal) -> Optional[date]:
@@ -93,18 +186,18 @@ def _needed_on(on_hand: Decimal, gross_by_day: dict, receipt_by_day: dict, order
     return None
 
 
-def net_material(session: Session, material: Material, plant: str, run_date: date) -> dict:
+def net_material(session: Session, material: Material, plant: str, run_date: date, reads: Optional[_Reads] = None) -> dict:
     """Bucket-by-bucket netting. Returns the planned receipts needed and exceptions, without writing."""
-    demand = session.execute(select(DemandElement).where(DemandElement.material_id == material.id,
-                                                         DemandElement.plant == plant).order_by(DemandElement.req_date)).scalars().all()
-    supply = _supply(session, material, plant)
+    reads = reads or _Reads(session, plant)
+    demand = reads.demand(material)
+    supply = reads.supply(material)
     gross_by_day: dict[date, Decimal] = defaultdict(Decimal)
-    for d in demand:
-        gross_by_day[d.req_date] += d.qty
+    for req_date, qty in demand:
+        gross_by_day[req_date] += qty
     receipt_by_day: dict[date, Decimal] = defaultdict(Decimal)
     for day, qty, _, _ in supply["receipts"]:
         receipt_by_day[day] += qty
-    working_days, holidays = _calendar(session, plant)
+    reads.calendar()  # the plant must exist (scalar_one), as before
     safety = material.safety_stock or Decimal(0)
     projected = supply["on_hand"]
     proposals, exceptions = [], []
@@ -118,7 +211,7 @@ def net_material(session: Session, material: Material, plant: str, run_date: dat
             net = safety - projected
             qty = lot_size(material, net, projected=projected)
             lead = material.planned_delivery_days + material.gr_processing_days
-            release = clock.subtract_working_days(day, lead, working_days, holidays)
+            release = reads.release_date(day, lead)
             proposals.append({"need_date": day, "release_date": release, "qty": qty, "net": net})
             if release < run_date:
                 exceptions.append({"code": "PAST_DUE", "message": f"Release date {release} is before run date {run_date}",
@@ -151,6 +244,25 @@ def net_material(session: Session, material: Material, plant: str, run_date: dat
 
 
 # ---------------------------------------------------------------- run
+BULK_SCOPE_LIMIT = 2000  # up to this many materials the run loads by material id, beyond it the whole plant
+WRITE_BATCH = 2000  # planned orders per replacement UPDATE
+
+
+def _batches(rows: list) -> list:
+    return [rows[start:start + WRITE_BATCH] for start in range(0, len(rows), WRITE_BATCH)]
+
+
+def _replace_unfirmed(session: Session, plant: str, material_ids: set) -> None:
+    """Unfirmed planned orders from earlier runs are replaced by this run (status DELETED, version bumped as the ORM does)."""
+    ids = [order_id for order_id, material_id in session.execute(select(PlannedOrder.id, PlannedOrder.material_id).where(
+        PlannedOrder.plant == plant, PlannedOrder.status == "CREATED")) if material_id in material_ids]
+    now = clock.now()
+    for part in _batches(ids):
+        session.execute(update(PlannedOrder).where(PlannedOrder.id.in_(part))
+                        .values(status="DELETED", row_version=PlannedOrder.row_version + 1, updated_at=now)
+                        .execution_options(synchronize_session="fetch"))
+
+
 def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Optional[list[str]] = None,
         run_date: Optional[date] = None) -> MrpRun:
     p = principal(session)
@@ -158,7 +270,8 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
     if mode not in ("NET_CHANGE", "REGENERATIVE", "SIMULATION"):
         raise Problem(422, "INVALID_MODE", "mode must be NET_CHANGE, REGENERATIVE or SIMULATION")
     run_date = run_date or clock.today()
-    mrp_run = MrpRun(tenant_id=current_tenant(session), number=next_number(session, "MRP_RUN"), mode=mode, plant=plant,
+    tenant_id = current_tenant(session)
+    mrp_run = MrpRun(tenant_id=tenant_id, number=next_number(session, "MRP_RUN"), mode=mode, plant=plant,
                      scope={"materials": materials} if materials else {}, run_date=run_date, status="RUNNING",
                      started_by=p.user_id, created_by=p.user_id)
     session.add(mrp_run)
@@ -179,39 +292,44 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
             candidates = [m for m in candidates if m.id in changed]
     workflow.step(session, instance, "F1-03", outcome=f"{len(candidates)} material(s) in scope")
 
-    results, created, exception_count = [], 0, 0
+    # Every read of the run is bulk-loaded once (demand, stock, open supply, firmed orders, sources of supply).
+    scope = [m.id for m in candidates] if len(candidates) <= BULK_SCOPE_LIMIT else None
+    reads = _BulkReads(session, plant, scope) if candidates else None
+    lookup = source.Preloaded(session, plant, scope) if candidates and mode != "SIMULATION" else None
+
+    results, orders, exceptions = [], [], []
     for material in candidates:
-        result = net_material(session, material, plant, run_date)
+        result = net_material(session, material, plant, run_date, reads)
         results.append({k: (str(v) if isinstance(v, Decimal) else v) for k, v in result.items()
                         if k not in ("proposals", "exceptions")}
                        | {"proposals": [{k: str(v) for k, v in pr.items()} for pr in result["proposals"]],
                           "exceptions": result["exceptions"]})
         if mode == "SIMULATION":
             continue
-        # Unfirmed planned orders from earlier runs are replaced by this run.
-        for old in session.execute(select(PlannedOrder).where(PlannedOrder.material_id == material.id,
-                                                              PlannedOrder.plant == plant,
-                                                              PlannedOrder.status == "CREATED")).scalars():
-            old.status = "DELETED"
+        past_due = [e["code"] for e in result["exceptions"] if e["code"] == "PAST_DUE"]
         for proposal in result["proposals"]:
-            determination = source.determine(session, material, plant, proposal["need_date"], proposal["qty"])
-            order = PlannedOrder(
-                tenant_id=current_tenant(session), number=next_number(session, "PLANNED_ORDER"), mrp_run_id=mrp_run.id,
-                material_id=material.id, plant=plant, storage_location="0001", qty=proposal["qty"],
-                need_date=proposal["need_date"], release_date=proposal["release_date"], status="CREATED",
-                source=determination.as_dict(),
-                exception_codes=[e["code"] for e in result["exceptions"] if e["code"] == "PAST_DUE"], created_by=p.user_id,
-            )
-            session.add(order)
-            session.flush()
-            link(session, "MRP_RUN", mrp_run.id, mrp_run.number, "PLANNED_ORDER", order.id, order.number, "planned_by")
-            created += 1
+            determination = source.determine(session, material, plant, proposal["need_date"], proposal["qty"], lookup=lookup)
+            orders.append({"id": uuid.uuid7(), "tenant_id": tenant_id, "mrp_run_id": mrp_run.id, "material_id": material.id,
+                           "plant": plant, "storage_location": "0001", "qty": proposal["qty"], "need_date": proposal["need_date"],
+                           "release_date": proposal["release_date"], "status": "CREATED", "source": determination.as_dict(),
+                           "exception_codes": list(past_due), "created_by": p.user_id})
+        value = int(Decimal(material.standard_price_minor or 0) * result["net"])
         for exc in result["exceptions"]:
-            value = int(Decimal(material.standard_price_minor or 0) * result["net"])
-            session.add(MrpException(tenant_id=current_tenant(session), mrp_run_id=mrp_run.id, material_id=material.id,
-                                     code=exc["code"], message=exc["message"], value_at_risk_minor=value,
-                                     recommended_action=exc["action"], status="OPEN", created_by=p.user_id))
-            exception_count += 1
+            exceptions.append({"id": uuid.uuid7(), "tenant_id": tenant_id, "mrp_run_id": mrp_run.id, "material_id": material.id,
+                               "code": exc["code"], "message": exc["message"], "value_at_risk_minor": value,
+                               "recommended_action": exc["action"], "status": "OPEN", "created_by": p.user_id})
+
+    if mode != "SIMULATION" and candidates:
+        # Writes in bulk: one UPDATE per batch of replaced orders, one number-range update, array INSERTs.
+        session.flush()
+        _replace_unfirmed(session, plant, {m.id for m in candidates})
+        for order, number in zip(orders, next_numbers(session, "PLANNED_ORDER", len(orders))):
+            order["number"] = number
+        insert_rows(session, PlannedOrder.__table__, orders)
+        link_many(session, "MRP_RUN", mrp_run.id, mrp_run.number, [("PLANNED_ORDER", o["id"], o["number"]) for o in orders],
+                  "planned_by")
+        insert_rows(session, MrpException.__table__, exceptions)
+    created, exception_count = len(orders), len(exceptions)
 
     workflow.step(session, instance, "F1-04", outcome="; ".join(
         f"{r['material']}: {r['gross']} − ({r['on_hand']} + {r['open_po']} + {r['in_transit']} + {r['firm_receipts']}) + {r['safety_stock']} = {r['net']}"

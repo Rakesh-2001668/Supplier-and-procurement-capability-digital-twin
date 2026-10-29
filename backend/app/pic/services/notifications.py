@@ -5,7 +5,9 @@ Consumers turn domain events into one notification per recipient:
   domain, category, plant) and four-eyes exclusions, using ``workflow.can_work``;
 - agent recommendations (L1/L2 output, platform/agents.py): users holding the recommendation's candidate role;
 - sourcing.clarification.answered, contract.amended / contract.terminated, purchase_order.transmitted, invoice.exception.raised,
-  supplier.master.changed: the internal owners and the supplier's portal users.
+  supplier.master.changed: the internal owners and the supplier's portal users;
+- sourcing.event.awarded: every invited supplier (awarded / not awarded); contract.consumption.threshold: the contract owner and
+  the contract managers.
 Each recipient gets a notification once per ``dedup_key``. E-mail is sent when rule NOTIFICATIONS.email is true, the kind is listed
 in NOTIFICATIONS.kinds and SMTP is configured (platform/mailer.py); otherwise ``email_status`` is DISABLED (or NOT_SENT for kinds
 not subscribed to e-mail). PIC_WEB_URL (optional) makes the e-mail link absolute.
@@ -139,9 +141,21 @@ def _task_escalated(session: Session, event: OutboxEvent) -> None:
     if task is None:
         return
     level = event.payload.get("level", task.escalation_level)
-    notify(session, task_workers(session, task), kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
+    link = link_for(task.object_type, task.object_ref, task.object_id)
+    # Rule ESCALATION added a manager role as candidate (workflow._escalate): its eligible holders are told first (four-eyes
+    # exclusions and scope apply through can_work); every notification below shares the dedup key, so nobody gets two.
+    target = event.payload.get("escalatedTo")
+    if target:
+        managers = [u for u in users_with_role(session, target) if workflow.can_work(_principal(u), task) is None]
+        notify(session, managers, kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
+               title=f"Escalated to you: {task.object_ref}",
+               body=f"{task.name} passed its SLA (escalation {level}); as {target.replace('_', ' ').lower()} you can now decide it.",
+               link=link, object_type=task.object_type, object_ref=task.object_ref)
+    escalated = [e.get("role") for e in (task.candidate_scope or {}).get(workflow.ESCALATION_KEY) or []]
+    others = [u for role in escalated for u in users_with_role(session, role) if workflow.can_work(_principal(u), task) is None]
+    notify(session, task_workers(session, task) + others, kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
            title=f"Overdue (escalation {level}): {task.object_ref}", body=f"{task.name} has passed its SLA and was escalated.",
-           link=link_for(task.object_type, task.object_ref, task.object_id), object_type=task.object_type, object_ref=task.object_ref)
+           link=link, object_type=task.object_type, object_ref=task.object_ref)
 
 
 # ---------------------------------------------------------------- agent recommendations
@@ -241,6 +255,74 @@ def _po_transmitted(session: Session, event: OutboxEvent) -> None:
     notify(session, _user(session, po.created_by), kind="PO_TRANSMITTED", dedup_key=key, title=f"{po.number} transmitted",
            body=f"{po.number} version {version} was sent to the supplier{f' via {channel}' if channel else ''}.",
            link=link_for("PURCHASE_ORDER", po.number), object_type="PURCHASE_ORDER", object_ref=po.number)
+
+
+@outbox.consumer("purchase_order.cancelled", "notify-po-cancelled")
+def _po_cancelled(session: Session, event: OutboxEvent) -> None:
+    po = _object(session, event, PurchaseOrder, "PURCHASE_ORDER", "po")
+    if po is None or not event.payload.get("transmissions"):
+        return  # never transmitted: the supplier never saw the order
+    reason = event.payload.get("reason") or "not given"
+    notify(session, supplier_users(session, po.supplier_id), kind="PO_CANCELLED", dedup_key=f"PO_CANCELLED:{po.id}",
+           title=f"Purchase order {po.number} cancelled", body=f"Purchase order {po.number} (version {event.payload.get('version', po.version)}) "
+           f"was cancelled by the buyer. Reason: {reason}. Please do not ship against it.", link="/pic/portal",
+           object_type="PURCHASE_ORDER", object_ref=po.number)
+
+
+@outbox.consumer("sourcing.event.cancelled", "notify-sourcing-cancelled")
+def _sourcing_cancelled(session: Session, event: OutboxEvent) -> None:
+    sourcing = _object(session, event, SourcingEvent, "SOURCING_EVENT", "eventId")
+    if sourcing is None:
+        return
+    users = [u for sid in event.payload.get("inviteeSupplierIds") or [] for u in supplier_users(session, uuid.UUID(sid))]
+    notify(session, users, kind="SOURCING_CANCELLED", dedup_key=f"SOURCING_CANCELLED:{sourcing.id}",
+           title=f"Sourcing event cancelled: {sourcing.number}",
+           body=f"{sourcing.number} ({sourcing.title}) was cancelled by the buyer. Reason: {event.payload.get('reason') or 'not given'}. "
+           "No award will be made from this event.", link="/pic/portal", object_type="SOURCING_EVENT", object_ref=sourcing.number)
+
+
+@outbox.consumer("sourcing.event.awarded", "notify-sourcing-awarded")
+def _sourcing_awarded(session: Session, event: OutboxEvent) -> None:
+    """F3-09: every invited supplier hears the outcome. Awarded suppliers get their share and price; the others only that the
+    event was awarded elsewhere (no competitor names, prices or ranks)."""
+    sourcing = _object(session, event, SourcingEvent, "SOURCING_EVENT", "eventId")
+    if sourcing is None:
+        return
+    allocations = {str(a["supplierId"]): a for a in event.payload.get("allocations") or []}
+    invited = event.payload.get("inviteeSupplierIds")
+    if invited is None:  # events awarded before the payload carried the invitees
+        invited = [str(i) for i in session.execute(select(Invitee.supplier_id).where(Invitee.event_id == sourcing.id)).scalars()]
+    for supplier_id in dict.fromkeys([*allocations, *invited]):
+        users = supplier_users(session, uuid.UUID(supplier_id))
+        allocation = allocations.get(supplier_id)
+        if allocation is not None:
+            share = f"{float(allocation.get('share') or 0) * 100:.0f}%"
+            notify(session, users, kind="SOURCING_AWARDED", dedup_key=f"SOURCING_AWARDED:{sourcing.id}:{supplier_id}",
+                   title=f"Awarded: {sourcing.number}",
+                   body=f"{sourcing.number} ({sourcing.title}) was awarded to you: {share} of the volume "
+                        f"({allocation.get('annualQty')} {event.payload.get('uom') or ''}/year) at ₹{int(allocation.get('priceMinor') or 0) / 100:,.2f} "
+                        "per unit. The contract follows for review and signature.",
+                   link="/pic/portal", object_type="SOURCING_EVENT", object_ref=sourcing.number)
+        else:
+            notify(session, users, kind="SOURCING_NOT_AWARDED", dedup_key=f"SOURCING_NOT_AWARDED:{sourcing.id}:{supplier_id}",
+                   title=f"Not awarded: {sourcing.number}",
+                   body=f"Thank you for taking part in {sourcing.number} ({sourcing.title}). The event has been awarded to another "
+                        "supplier; your bid was not successful this time.",
+                   link="/pic/portal", object_type="SOURCING_EVENT", object_ref=sourcing.number)
+
+
+@outbox.consumer("contract.consumption.threshold", "notify-contract-consumption")
+def _contract_consumption(session: Session, event: OutboxEvent) -> None:
+    contract = _object(session, event, Contract, "CONTRACT", "contractId")
+    if contract is None:
+        return
+    threshold = event.payload.get("threshold")
+    internal = _user(session, contract.owner_id) + [u for u in users_with_role(session, "CONTRACT_MANAGER") if u.supplier_id is None]
+    notify(session, internal, kind="CONTRACT_CONSUMPTION", dedup_key=f"CONTRACT_CONSUMPTION:{contract.id}:{threshold}",
+           title=f"Contract {contract.number} {threshold}% consumed",
+           body=f"{contract.number} ({contract.title}) has reached {event.payload.get('consumedPct') or threshold}% of its target "
+                f"quantity (alert at {threshold}%). Plan the renewal, a variation or a new sourcing event.",
+           link=link_for("CONTRACT", contract.number), object_type="CONTRACT", object_ref=contract.number)
 
 
 @outbox.consumer("invoice.exception.raised", "notify-invoice-exception")

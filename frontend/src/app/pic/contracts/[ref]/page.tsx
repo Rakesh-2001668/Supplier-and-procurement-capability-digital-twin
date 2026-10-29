@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import { ObjectPage } from '@/components/pic/object';
-import { Button, DataTable, Dialog, Empty, Facts, Field, Input, Loading, ProblemBox, StatusChip, Textarea } from '@/components/pic/ui';
+import { Button, DataTable, Dialog, Empty, Facts, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, readSessionUser, SessionUser } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
@@ -16,6 +16,8 @@ type PriceValidity = { id: string; contract_line_id: string; valid_from: string;
   reason: string; published: boolean };
 type Clause = { id: string; code: string; title: string; text: string; position: string; risk_score: number };
 type Signature = { id: string; party: string; signer_name: string; signed_at: string; envelope_ref: string };
+type PendingRedline = { clause: string; proposedText: string | null; proposedPosition: string | null; originalText: string | null;
+  originalPosition: string | null; by: string; at: string };
 type IndexRef = { index: string; base: string; band_pct: string; reset?: string };
 type Contract = {
   id: string; number: string; type: string; title: string; status: string; supplier: { id: string; code: string; name: string };
@@ -23,7 +25,7 @@ type Contract = {
   under_tolerance_pct: string; price_tolerance_pct: string; target_value_minor: number; index_ref: IndexRef | null; source_event_id: string | null;
   thresholds_hit: number[] | null; rule_set_version: string; activated_at: string | null; version: number;
   terminated_at: string | null; termination_reason: string | null;
-  lines: ContractLine[]; priceValidity: PriceValidity[]; clauses: Clause[]; signatures: Signature[];
+  lines: ContractLine[]; priceValidity: PriceValidity[]; clauses: Clause[]; signatures: Signature[]; pendingRedlines?: PendingRedline[];
 };
 type Review = { risk: number; findings: { clause: string; position: string; risk: number; fallback: string | null }[]; aiRef: string };
 type Consumption = { contract: string; status: string; thresholdsHit: number[] | null;
@@ -46,6 +48,7 @@ export default function ContractPage() {
   const user = useMemo<SessionUser | null>(() => (cookie === null ? null : readSessionUser()), [cookie]);
   const manager = ready && (!user || user.roles.includes('CONTRACT_MANAGER'));
   const [dialog, setDialog] = useState<'sign' | 'index' | null>(null);
+  const [reviewing, setReviewing] = useState<PendingRedline | null>(null);
   const [amend, setAmend] = useState<AmendKind | null>(null);
   const amendRule = useAmendmentRule(c && AMENDABLE.includes(c.status) ? c.number : undefined);
   const [review, setReview] = useState<Review | null>(null);
@@ -60,6 +63,7 @@ export default function ContractPage() {
 
   const parties = new Set(c?.signatures.map((s) => s.party));
   const nonStandard = c?.clauses.filter((x) => x.position !== 'STANDARD').length ?? 0;
+  const pending = c?.pendingRedlines ?? [];
 
   return (
     <>
@@ -70,7 +74,10 @@ export default function ContractPage() {
         actions={c && manager && (
           <>
             {REVIEWABLE.includes(c.status) && <Button busy={runReview.isPending} onClick={() => runReview.mutate()}>AI review</Button>}
-            {c.status === 'IN_NEGOTIATION' && <Button variant="primary" busy={submit.isPending} onClick={() => submit.mutate()}>Submit for approval</Button>}
+            {c.status === 'IN_NEGOTIATION' && (
+              <Button variant="primary" busy={submit.isPending} disabled={pending.length > 0} onClick={() => submit.mutate()}
+                title={pending.length ? `Review the supplier redline(s) on ${pending.map((r) => r.clause).join(', ')} first` : undefined}>Submit for approval</Button>
+            )}
             {c.status === 'OUT_FOR_SIGNATURE' && !parties.has('BUYER') && <Button variant="primary" onClick={() => setDialog('sign')}>Sign as buyer</Button>}
             {c.status === 'OUT_FOR_SIGNATURE' && !(parties.has('BUYER') && parties.has('SUPPLIER')) && (
               <Button busy={envelope.isPending} onClick={() => envelope.mutate()} title="Uses the configured e-signature provider (DocuSign, Adobe Sign, Leegality or eMudhra)">Send via e-sign provider</Button>
@@ -105,6 +112,12 @@ export default function ContractPage() {
             ]} />
             {AMENDABLE.includes(c.status) && <AmendmentSummary contractNumber={c.number} />}
             {review && <ReviewPanel review={review} />}
+            {pending.length > 0 && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                {pending.length} supplier redline(s) wait for your review ({pending.map((r) => r.clause).join(', ')}): accept with a playbook position or
+                restore the original text in the Clauses tab. Until then the clause counts as non-standard and the contract cannot be submitted.
+              </p>
+            )}
             {c.status === 'OUT_FOR_SIGNATURE' && (
               <p className="text-sm text-slate-600">Signatures: buyer {parties.has('BUYER') ? '✓ signed' : '– pending'} · supplier {parties.has('SUPPLIER') ? '✓ signed' : '– pending (signs in the supplier portal)'}.</p>
             )}
@@ -113,19 +126,29 @@ export default function ContractPage() {
         lines={c && <LinesWithValidity contract={c} />}
         extraTabs={c ? [
           {
-            id: 'clauses', label: `Clauses (${c.clauses.length}${nonStandard ? `, ${nonStandard} deviating` : ''})`, content: (
+            id: 'clauses', label: `Clauses (${c.clauses.length}${nonStandard ? `, ${nonStandard} deviating` : ''}${pending.length ? `, ${pending.length} to review` : ''})`, content: (
               <ul className="space-y-3">
-                {c.clauses.length ? c.clauses.map((x) => (
-                  <li key={x.id} className="rounded-lg border border-slate-200 p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-slate-500">{x.code}</span>
-                      <span className="text-sm font-semibold">{x.title}</span>
-                      <PositionChip position={x.position} />
-                      <span className="text-xs text-slate-600">risk {x.risk_score}</span>
-                    </div>
-                    <p className="mt-1 text-sm text-slate-700">{x.text}</p>
-                  </li>
-                )) : <Empty title="No clauses" />}
+                {c.clauses.length ? c.clauses.map((x) => {
+                  const redline = pending.find((r) => r.clause === x.code);
+                  return (
+                    <li key={x.id} className={`rounded-lg border p-3 ${redline ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200'}`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs text-slate-500">{x.code}</span>
+                        <span className="text-sm font-semibold">{x.title}</span>
+                        <PositionChip position={x.position} />
+                        <span className="text-xs text-slate-600">risk {x.risk_score}</span>
+                        {redline && <span className="text-xs font-semibold text-amber-800">supplier redline · {redline.by} · {dateTime(redline.at)}</span>}
+                        {redline && manager && c.status === 'IN_NEGOTIATION' && (
+                          <Button className="ml-auto" onClick={() => setReviewing(redline)}>Review redline</Button>
+                        )}
+                      </div>
+                      <p className="mt-1 text-sm text-slate-700">{x.text}</p>
+                      {redline && redline.originalText && (
+                        <p className="mt-2 rounded bg-white p-2 text-xs text-slate-600"><span className="font-semibold uppercase text-slate-500">Replaced text</span><br />{redline.originalText}</p>
+                      )}
+                    </li>
+                  );
+                }) : <Empty title="No clauses" />}
               </ul>
             ),
           },
@@ -145,8 +168,57 @@ export default function ContractPage() {
       />
       {c && dialog === 'sign' && <SignDialog contract={c} defaultName={user ? `${user.name}` : ''} onClose={() => setDialog(null)} />}
       {c && dialog === 'index' && c.index_ref && <IndexResetDialog contract={c} indexRef={c.index_ref} onClose={() => setDialog(null)} />}
+      {c && reviewing && <RedlineReviewDialog contract={c} redline={reviewing} onClose={() => setReviewing(null)} />}
       {c && amend && <AmendmentDialog contract={c} initialKind={amend} noticeDays={amendRule?.noticeDays} onClose={() => setAmend(null)} />}
     </>
+  );
+}
+
+const POSITIONS = ['STANDARD', 'FALLBACK', 'NON_STANDARD'];
+
+/** CLM-REDLINE: the contract manager classifies the supplier's text (NON_STANDARD routes the approval through LEGAL) or restores the text it replaced. */
+function RedlineReviewDialog({ contract, redline, onClose }: { contract: Contract; redline: PendingRedline; onClose: () => void }) {
+  const clause = contract.clauses.find((x) => x.code === redline.clause);
+  const [decision, setDecision] = useState<'ACCEPT' | 'RESTORE'>('ACCEPT');
+  const [position, setPosition] = useState('NON_STANDARD');
+  const [comment, setComment] = useState('');
+  const go = useCommand(() => api.post<{ code: string; position: string }>(
+    `/contracts/${encodeURIComponent(contract.number)}/redlines/${encodeURIComponent(redline.clause)}/review`,
+    { decision, position: decision === 'ACCEPT' ? position : undefined, comment: comment.trim() || undefined }), {
+    success: (r) => (decision === 'ACCEPT' ? `Redline on ${r.code} accepted as ${label(r.position)}` : `Original text of ${r.code} restored`), onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`Review supplier redline · ${redline.clause}`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="rounded-lg bg-slate-50 p-3">
+          <p className="text-xs font-semibold uppercase text-slate-500">Supplier text ({redline.by}, {dateTime(redline.at)})</p>
+          <p className="mt-1 text-slate-800">{clause?.text ?? redline.proposedText}</p>
+        </div>
+        <div className="rounded-lg border border-slate-200 p-3">
+          <p className="text-xs font-semibold uppercase text-slate-500">Text it replaced ({label(redline.originalPosition ?? 'STANDARD')})</p>
+          <p className="mt-1 text-slate-700">{redline.originalText ?? '–'}</p>
+        </div>
+        <fieldset className="space-y-1">
+          <legend className="text-xs font-semibold uppercase text-slate-500">Decision</legend>
+          <label className="flex items-center gap-2"><input type="radio" name="decision" checked={decision === 'ACCEPT'} onChange={() => setDecision('ACCEPT')} />
+            Accept the supplier text</label>
+          <label className="flex items-center gap-2"><input type="radio" name="decision" checked={decision === 'RESTORE'} onChange={() => setDecision('RESTORE')} />
+            Restore the replaced text</label>
+        </fieldset>
+        {decision === 'ACCEPT' && (
+          <Field label="Position against the playbook" hint="Non-standard routes the contract approval through Legal">
+            {(id) => (
+              <Select id={id} value={position} onChange={(e) => setPosition(e.target.value)} options={POSITIONS.map((p) => ({ value: p, label: label(p) }))} />
+            )}
+          </Field>
+        )}
+        <Field label="Comment (recorded in the audit trail)">{(id) => <Textarea id={id} value={comment} onChange={(e) => setComment(e.target.value)} />}</Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={go.isPending} onClick={() => go.mutate()}>{decision === 'ACCEPT' ? 'Accept redline' : 'Restore text'}</Button>
+      </div>
+    </Dialog>
   );
 }
 

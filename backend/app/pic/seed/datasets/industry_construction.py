@@ -196,6 +196,9 @@ def apply(tenant_code: str, password: str) -> dict:
                              "is withheld from every bill and released in full on the completion certificate against a performance bank "
                              "guarantee of 5% of the contract value valid for the 12-month defect-liability period.", "FALLBACK")
     with sc.act("contract.manager", at(date(2026, 10, 16), 15)) as s:
+        # The supplier's redline waits for the contract manager: retention against a PBG is the playbook fallback position.
+        contract_svc.review_redline(s, s.get(Contract, sc118_id), "PAYMENT", "ACCEPT", "FALLBACK",
+                                    "Retention released against a 5% PBG is the approved fallback for subcontracts")
         chain = contract_svc.submit(s, s.get(Contract, sc118_id))["chain"]
     sc.approve_all(sc118_id, at(date(2026, 10, 19), 11), "Subcontract terms, retention and PBG approved")
     with sc.act("contract.manager", at(date(2026, 10, 20), 10)) as s:

@@ -443,8 +443,8 @@ def test_irn_local_verification(client, login):
     with tenant_tx(_axn()) as s:
         _as(s, "ap.clerk@axion.example")
         tf = s.execute(select(Supplier).where(Supplier.code == "TF001")).scalar_one()
-        irn = payables.expected_irn("33AABCT1234K1Z5", "2026-27", "INV", "TF-QR-1")
-        data = {"SellerGstin": "33AABCT1234K1Z5", "BuyerGstin": "33AAACA4321F1Z9", "DocNo": "TF-QR-1", "DocTyp": "INV", "DocDt": "14/11/2026",
+        irn = payables.expected_irn("33AABCT1234K1ZM", "2026-27", "INV", "TF-QR-1")
+        data = {"SellerGstin": "33AABCT1234K1ZM", "BuyerGstin": "33AAACA4321F1ZF", "DocNo": "TF-QR-1", "DocTyp": "INV", "DocDt": "14/11/2026",
                 "TotInvVal": 1180.0, "ItemCnt": 1, "MainHsnCode": "87089900", "Irn": irn}
         common = dict(supplier=tf, company_code="1000", supplier_invoice_no="TF-QR-1", invoice_date=date(2026, 11, 14), gross_minor=118000)
         ok = einvoice.verify(s, irn=irn, signed_qr=_qr(data), **common)
@@ -464,3 +464,37 @@ def test_document_capture_needs_an_ocr_engine(client, login):
     r = client.post("/v1/invoices/documents", files=files, headers=login("ap.clerk"))
     assert r.status_code == 503 and r.json()["code"] == "OCR_NOT_CONFIGURED"
     assert client.post("/v1/invoices/documents", files=files, headers=login("buyer")).status_code == 403
+
+
+def test_payment_run_can_be_limited_to_suppliers_and_invoices():
+    """F7-07: a run narrowed to suppliers or invoices pays nothing else; unknown codes are refused (rolled back)."""
+    from app.pic.models import Invoice
+    from app.pic.platform.errors import Problem
+
+    run_date = date(2027, 12, 31)
+    try:
+        with tenant_tx(_axn()) as s:
+            _as(s, "finance.controller@axion.example")
+            with pytest.raises(Problem) as unknown:
+                payables.payment_run(s, run_date, supplier_codes=["NO-SUCH-SUPPLIER"])
+            assert unknown.value.code == "SUPPLIER_NOT_FOUND"
+            with pytest.raises(Problem) as missing:
+                payables.payment_run(s, run_date, invoice_numbers=["NO-SUCH-INVOICE"])
+            assert missing.value.code == "INVOICE_NOT_FOUND"
+
+            tf001 = s.execute(select(Supplier.id).where(Supplier.code == "TF001")).scalar_one()
+            unpaid = select(Invoice).where(Invoice.status == "POSTED", Invoice.payment_status == "UNPAID", Invoice.payment_block.is_(False))
+            others_before = {i.number for i in s.execute(unpaid.where(Invoice.supplier_id != tf001)).scalars()}
+            run = payables.payment_run(s, run_date, supplier_codes=["TF001"])
+            assert run["selection"] == {"suppliers": ["TF001"]}
+            paid = {p["invoice"] for p in run["paid"]}
+            assert all(s.execute(select(Invoice.supplier_id).where(Invoice.number == n)).scalar_one() == tf001 for n in paid)
+            assert {i.number for i in s.execute(unpaid.where(Invoice.supplier_id != tf001)).scalars()} == others_before
+
+            if others_before:
+                one = sorted(others_before)[0]
+                single = payables.payment_run(s, run_date, invoice_numbers=[one])
+                assert {p["invoice"] for p in single["paid"]} | {k["invoice"] for k in single["skipped"]} <= {one}
+            raise _Rollback
+    except _Rollback:
+        pass

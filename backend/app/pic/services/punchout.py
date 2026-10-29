@@ -13,7 +13,9 @@ Flow (blueprint M04 "cXML/OCI punch-out; returned carts become catalogue PR line
 3. The supplier posts the cart back through the browser to ``receive`` (cXML PunchOutOrderMessage in ``cxml-urlencoded``
    / ``cxml-base64``, or OCI ``NEW_ITEM-*`` fields). The session must be OPEN and not expired.
 4. ``convert`` turns the normalised cart into CATALOGUE requisition lines (supplier part number, preferred supplier,
-   returned price) through the requisition service, so policy, budget and DMN-01 apply on submit as usual.
+   returned price) through the requisition service, so policy, budget and DMN-01 apply on submit as usual. A returned price
+   more than the tolerance (rule PUNCHOUT ``priceTolerancePct``, default 2%) above the hosted catalogue price is refused;
+   items not in the hosted catalogue become FREE_TEXT lines (quote policy; the cart counts as the supplier's quote).
 
 A built-in test supplier (``punchout.url == "builtin"``) answers the setup request in-process, serves a small catalogue
 page from the supplier's ``catalogue_item`` rows and posts a real PunchOutOrderMessage / OCI form back, so the whole
@@ -48,6 +50,7 @@ MAX_DOCUMENT = 1_000_000
 USER_AGENT = "AlphaHelion PIC punch-out 1.0"
 UOM_ALIASES = {"C62": "EA", "H87": "EA", "PCE": "EA", "PC": "EA", "EACH": "EA", "ST": "EA", "NOS": "EA", "NO": "EA"}
 MASKED_SECRET = "********"
+DEFAULT_PRICE_TOLERANCE_PCT = "2"
 
 
 # ---------------------------------------------------------------- helpers
@@ -419,12 +422,21 @@ def convert(session: Session, ps: PunchoutSession, *, requisition: Optional[str]
         default = next(iter(p.attr("cost_objects") or []), None)
         if default and ":" in default:
             account_assignment_type, account_assignment_code = default.split(":", 1)
+    # A matched item's returned price may exceed the hosted catalogue price by at most this tolerance (rule PUNCHOUT
+    # priceTolerancePct when the tenant sets it; default 2%, the "price > contract + 2%" deviation band of BP Table 24).
+    tolerance = Decimal(str(rules.resolve(session, RULE).body.get("priceTolerancePct", DEFAULT_PRICE_TOLERANCE_PCT)))
     lines, problems = [], []
     for item in ps.cart or []:
         if (item.get("currency") or "INR") != "INR":
             problems.append(f"item {item['lineNo']}: currency {item['currency']} differs from the requisition currency INR")
             continue
         match = catalogue.get(item.get("supplierPartNo") or "")
+        if match is not None and match.price_minor is not None:
+            ceiling = Decimal(match.price_minor) * (1 + tolerance / 100)
+            if Decimal(int(item["unitPriceMinor"])) > ceiling:
+                problems.append(f"item {item['lineNo']} ({item.get('supplierPartNo')}): returned price {int(item['unitPriceMinor'])} paise is more "
+                                f"than {tolerance}% above the catalogue price {match.price_minor} paise")
+                continue
         group = (match.material_group if match else None) or item.get("materialGroup") or \
             (item.get("classification") or {}).get("MaterialGroup") or material_group or \
             (supplier_categories[0] if len(supplier_categories) == 1 else None)
@@ -433,8 +445,13 @@ def convert(session: Session, ps: PunchoutSession, *, requisition: Optional[str]
             problems.append(f"item {item['lineNo']} ({item.get('supplierPartNo')}): no material group; give materialGroup")
             continue
         kind = (purchase_type or ("SERVICE" if "SERVICE" in (cat or "") else "NON_STOCK")).upper()
+        # An item that is not in the supplier's hosted catalogue has no agreed price: it becomes a free-text line and the
+        # quote policy applies on submit; the returned cart itself counts as that supplier's quote.
+        unmatched = {} if match else {"quotes": [{"supplier": supplier.code, "reference": f"punch-out {number or ps.protocol}",
+                                                  "date": clock.today()}]}
         lines.append({
-            "item_type": "CATALOGUE", "purchase_type": kind, "catalogue_item_id": str(match.id) if match else None,
+            **unmatched,
+            "item_type": "CATALOGUE" if match else "FREE_TEXT", "purchase_type": kind, "catalogue_item_id": str(match.id) if match else None,
             "description": (item.get("description") or (match.description if match else None) or item.get("supplierPartNo") or "")[:200],
             "material_group": group[:30], "category": (cat or group)[:40], "qty": item["qty"], "uom": item["uom"],
             "price_est_minor": int(item["unitPriceMinor"]), "need_date": due, "preferred_supplier_id": supplier.id,

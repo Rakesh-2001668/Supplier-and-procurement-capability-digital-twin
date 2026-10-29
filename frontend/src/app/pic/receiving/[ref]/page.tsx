@@ -10,8 +10,9 @@ import { date, dateTime, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, PoDetail, useSessionUser } from '../../invoices/_components';
 import { GrWarning, GrWarnings, InspectionLot, UsageDecisionDialog } from '../_components';
+import { lotHref, useMaterials } from '../_special';
 
-type GrLine = { id: string; line_no: number; po_line_id: string; qty: string; accepted_qty: string; rejected_qty: string; batch: string;
+type GrLine = { id: string; line_no: number; po_line_id: string; material_id: string | null; qty: string; accepted_qty: string; rejected_qty: string; batch: string;
   serials: string[]; expiry: string | null; stock_type: string; storage_location: string; movement_type: string };
 type ReturnDelivery = { id: string; number: string; po_line_id: string; qty: string; reason: string; replacement_required: boolean;
   credit_note_expected: boolean; status: string; created_at: string };
@@ -31,8 +32,12 @@ export default function GoodsReceiptPage() {
   const asnNumber = gr?.asn_id ? gr.lineage.nodes.find((n) => n.type === 'ASN' && n.id === gr.asn_id)?.ref : undefined;
   const { data: po } = useApi<PoDetail>(poNumber ? `/purchase-orders/${encodeURIComponent(poNumber)}` : null);
   const poLine = (id: string) => po?.lines.find((l) => l.id === id);
+  // GR lines carry the material id; the lot trace is addressed by material number.
+  const materials = useMaterials();
+  const materialNo = (id: string | null) => (id ? materials.data?.items.find((m) => m.id === id)?.number : undefined);
   const [dialog, setDialog] = useState<'reverse' | null>(null);
   const [lot, setLot] = useState<InspectionLot | null>(null);
+  const [replacing, setReplacing] = useState<ReturnDelivery | null>(null);
   const canReverse = hasRole(user, 'RECEIVER') && !!gr && REVERSIBLE.includes(gr.status);
   const canDecide = hasRole(user, 'QUALITY_INSPECTOR');
 
@@ -67,7 +72,11 @@ export default function GoodsReceiptPage() {
             { key: 'accepted_qty', header: 'Accepted', align: 'right', render: (l) => qty(l.accepted_qty) },
             { key: 'rejected_qty', header: 'Rejected', align: 'right', render: (l) => Number(l.rejected_qty)
               ? <span className="font-semibold text-red-700">{qty(l.rejected_qty)}</span> : qty(l.rejected_qty) },
-            { key: 'batch', header: 'Batch', render: (l) => l.batch || '–' },
+            { key: 'batch', header: 'Batch', render: (l) => {
+              const material = materialNo(l.material_id);
+              return l.batch && material
+                ? <Link className="text-[#1A56DB] hover:underline" href={lotHref(material, l.batch)} title="Trace this lot">{l.batch}</Link> : l.batch || '–';
+            } },
             { key: 'expiry', header: 'Expiry', render: (l) => l.expiry || '–' },
             { key: 'serials', header: 'Serials', render: (l) => l.serials?.length ? <span className="font-mono text-xs">{l.serials.join(', ')}</span> : '–' },
             { key: 'storage_location', header: 'Sloc' },
@@ -100,12 +109,15 @@ export default function GoodsReceiptPage() {
                 .filter(Boolean).join(', ') || '–' },
               { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status} /> },
               { key: 'created_at', header: 'Created', render: (r) => date(r.created_at) },
+              { key: 'action', header: '', render: (r) => canDecide && r.status === 'CREATED' && r.credit_note_expected
+                ? <Button onClick={() => setReplacing(r)}>Request replacement</Button> : null },
             ]} />
           ) },
         ] : []}
       />
       {gr && dialog === 'reverse' && <ReverseDialog gr={gr} onClose={() => setDialog(null)} />}
       {lot && <UsageDecisionDialog lot={lot} onClose={() => setLot(null)} />}
+      {replacing && <ReplacementDialog rd={replacing} onClose={() => setReplacing(null)} />}
     </>
   );
 }
@@ -120,7 +132,9 @@ function ReverseDialog({ gr, onClose }: { gr: Gr; onClose: () => void }) {
     <Dialog open title={`Reverse ${gr.number}`} onClose={onClose}>
       <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">
         Reversal (movement 102) takes the received quantity back out of stock and reduces the PO&apos;s received and accepted quantities.
-        Receipts that are already invoiced and posted cannot be reversed — use a return delivery instead.
+        A receipt cannot be reversed while an invoice on its order lines is captured, in matching or posted (reject the invoice first, or use a
+        return delivery for goods already invoiced), nor once one of its lots was rejected and returned. Each line is taken back from its own stock:
+        quality stock while its lot is open, released stock after the usage decision.
       </div>
       <div className="mt-3">
         <Field label="Reason (required)">
@@ -134,6 +148,29 @@ function ReverseDialog({ gr, onClose }: { gr: Gr; onClose: () => void }) {
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="danger" disabled={!reason.trim() || !confirmed} busy={reverse.isPending} onClick={() => reverse.mutate()}>Reverse receipt</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function ReplacementDialog({ rd, onClose }: { rd: ReturnDelivery; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const request = useCommand(() => api.post<{ number: string; status: string }>(`/return-deliveries/${encodeURIComponent(rd.number)}/replacement`,
+    { reason: reason.trim() || undefined }), {
+    success: (r) => `${r.number}: replacement requested; ${qty(rd.qty)} open again on the order`, onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`Request replacement · ${rd.number}`} onClose={onClose}>
+      <p className="text-sm text-slate-700">
+        The supplier re-delivers the returned {qty(rd.qty)} instead of issuing a credit note: the quantity is open again on the purchase order for a new
+        ASN and goods receipt.
+      </p>
+      <div className="mt-3">
+        <Field label="Note (optional, audited)">{(id) => <Textarea id={id} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={request.isPending} onClick={() => request.mutate()}>Request replacement</Button>
       </div>
     </Dialog>
   );

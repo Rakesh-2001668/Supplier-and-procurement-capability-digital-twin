@@ -8,7 +8,9 @@ import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, qty } from '@/lib/pic/format';
 import { useCommand, useList } from '@/lib/pic/hooks';
 import { hasRole, PoRow, useSessionUser } from '../invoices/_components';
+import { SETTLE_ROLES } from '../invoices/_ops';
 import { EwayCell, GoodsReceiptDialog, InspectionLot, UsageDecisionDialog } from './_components';
+import { ConsignmentTab, LotSearch, WITHDRAW_ROLES } from './_special';
 
 type Asn = { id: string; number: string; po: string; supplier_code: string; status: string; ship_date: string; expected_date: string;
   eway_bill_no: string | null; eway_bill_valid_until: string | null; vehicle_no: string | null; documents: string[] };
@@ -31,6 +33,8 @@ export default function Receiving() {
           { id: 'quality', label: 'Quality', content: <Quality canDecide={hasRole(user, 'QUALITY_INSPECTOR')} /> },
           { id: 'services', label: 'Service entries', content: <ServiceEntries canApprove={hasRole(user, 'SERVICE_OWNER')} /> },
           { id: 'receipts', label: 'Goods receipts', content: <GoodsReceipts /> },
+          { id: 'consignment', label: 'Consignment', content: <ConsignmentTab canWithdraw={hasRole(user, ...WITHDRAW_ROLES)} canSettle={hasRole(user, ...SETTLE_ROLES)} /> },
+          { id: 'lots', label: 'Lot trace', content: <LotSearch /> },
         ]} />
       </Card>
     </div>

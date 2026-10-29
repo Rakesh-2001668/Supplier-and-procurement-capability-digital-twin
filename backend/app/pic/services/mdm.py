@@ -16,6 +16,11 @@ from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.services.common import principal
 
 PROCESS = "pic.material-request"
+IN_FLIGHT = ("DUPLICATE_CHECK", "IN_STEWARDSHIP", "APPROVED")  # open requests the duplicate check also scores
+
+
+def _candidate_ref(candidate: dict) -> str:
+    return candidate.get("material") or f"request {candidate.get('materialRequest')}"
 
 
 def _tokens(text: str) -> set[str]:
@@ -65,6 +70,26 @@ def create_request(session: Session, *, description: str, type: str, material_gr
     return request
 
 
+PROMOTABLE_PR = ("DRAFT", "RETURNED", "SUBMITTED", "IN_APPROVAL", "APPROVED", "PARTIALLY_ORDERED", "ORDERED")
+
+
+def promote_line(session: Session, pr: Requisition, line: PrLine, **fields) -> MaterialRequest:
+    """F9 from a requisition line (P04): the requester promotes a free-text or free-service line (no material, catalogue
+    item or contract line) of a live requisition, once per line."""
+    if principal(session).user_id != pr.requester_id:
+        raise Problem(403, "FORBIDDEN", "Only the requester can promote a line of this requisition to a material request", rule_ref="P04")
+    if pr.status not in PROMOTABLE_PR:
+        raise illegal_transition("Requisition", pr.number, pr.status, "promote a line to a material request")
+    if line.material_id or line.catalogue_item_id or line.contract_line_id:
+        raise rule_violation("Only free-text and service lines without a material, catalogue item or contract are promoted "
+                             "to material requests", "P04")
+    if line.mdm_request_id is not None:
+        existing = session.get(MaterialRequest, line.mdm_request_id)
+        raise Problem(409, "ALREADY_PROMOTED", f"Line {line.line_no} already has material request {existing.number if existing else ''}".strip(),
+                      rule_ref="P04")
+    return create_request(session, **fields, source_pr=line)
+
+
 def _check_duplicates(session: Session, request: MaterialRequest, instance) -> None:
     rule = rules.resolve(session, "MDM-DUP", category=request.category)
     request.rule_set_version = rule.ref
@@ -73,22 +98,30 @@ def _check_duplicates(session: Session, request: MaterialRequest, instance) -> N
     for material in session.execute(select(Material).where(Material.status == "ACTIVE")).scalars():
         score, parts = duplicate_score(rule.body["weights"], request, material)
         if score >= Decimal(str(rule.body["warnAt"])) - Decimal("0.25"):
-            candidates.append({"material": material.number, "id": str(material.id), "score": float(score), "parts": parts})
+            candidates.append({"kind": "MATERIAL", "material": material.number, "id": str(material.id), "score": float(score), "parts": parts})
+    # Requests still in flight (no material yet) are scored too, so two people asking for the same new item in parallel
+    # are caught; once such a request's material is live the requester can merge into it.
+    for other in session.execute(select(MaterialRequest).where(
+            MaterialRequest.status.in_(IN_FLIGHT), MaterialRequest.material_id.is_(None), MaterialRequest.id != request.id)).scalars():
+        score, parts = duplicate_score(rule.body["weights"], request, other)
+        if score >= Decimal(str(rule.body["warnAt"])) - Decimal("0.25"):
+            candidates.append({"kind": "MATERIAL_REQUEST", "material": None, "materialRequest": other.number, "id": str(other.id),
+                               "status": other.status, "score": float(score), "parts": parts})
     candidates.sort(key=lambda c: c["score"], reverse=True)
     top = Decimal(str(candidates[0]["score"])) if candidates else Decimal("0")
     request.duplicate_score = top
     request.duplicate_candidates = candidates[:5]
     ai_ref = agents.log_run(session, "MATERIAL_DEDUP", object_type="MATERIAL_REQUEST", object_id=request.id,
                             object_ref=request.number, inputs={"description": request.description, "mpn": request.mpn},
-                            evidence=[c["material"] for c in candidates[:5]], output={"topScore": float(top)},
+                            evidence=[_candidate_ref(c) for c in candidates[:5]], output={"topScore": float(top)},
                             confidence=0.9, action_taken="DRAFTED")
     workflow.step(session, instance, "F9-03", outcome=f"top duplicate score {top}")
     block_at = Decimal(str(rule.body["blockAt"]))
     if top >= block_at:
         request.status = "DUPLICATE_BLOCKED"
-        workflow.wait(session, instance, "F9-04", outcome=f"score {top} ≥ {block_at}: redirect to {candidates[0]['material']} or steward override")
+        workflow.wait(session, instance, "F9-04", outcome=f"score {top} ≥ {block_at}: redirect to {_candidate_ref(candidates[0])} or steward override")
         audit.record(session, "MATERIAL_REQUEST", request.id, "DUPLICATE_BLOCKED", object_ref=request.number,
-                     after={"score": str(top), "candidate": candidates[0]["material"]}, rule_set_version=rule.ref, ai_ref=ai_ref)
+                     after={"score": str(top), "candidate": _candidate_ref(candidates[0])}, rule_set_version=rule.ref, ai_ref=ai_ref)
         return
     warn = top >= Decimal(str(rule.body["warnAt"]))
     workflow.step(session, instance, "F9-04", outcome=f"score {top} < {block_at}" + (" (warning)" if warn else ""))
@@ -122,6 +155,9 @@ def steward_override(session: Session, request: MaterialRequest, reason: str) ->
     p = principal(session)
     if "MDM_STEWARD" not in p.roles:
         raise Problem(403, "FORBIDDEN", "Only a data steward can override a duplicate block", rule_ref="MDM-DUP")
+    reason = (reason or "").strip()
+    if not reason:
+        raise rule_violation("A reason is required to override a duplicate block", "MDM-DUP")
     sod.guard(session, "MATERIAL_STEWARD_APPROVE", {"material_request_id": request.id})
     request.override_reason = reason
     rule = rules.resolve(session, "MDM-DUP", category=request.category)
@@ -134,8 +170,27 @@ def steward_override(session: Session, request: MaterialRequest, reason: str) ->
 
 
 def merge_into_existing(session: Session, request: MaterialRequest, material: Material) -> MaterialRequest:
+    """Redirect a request to an existing material: the requester or a data steward while DUPLICATE_BLOCKED, only a steward
+    while IN_STEWARDSHIP, and only into an ACTIVE material listed as a duplicate candidate (or the live material of a
+    candidate request that was in flight at the check)."""
     if request.status not in ("DUPLICATE_BLOCKED", "IN_STEWARDSHIP"):
         raise illegal_transition("Material request", request.number, request.status, "merge")
+    p = principal(session)
+    steward = "MDM_STEWARD" in p.roles
+    if request.status == "IN_STEWARDSHIP" and not steward:
+        raise Problem(403, "FORBIDDEN", "Only a data steward can merge a request that is in stewardship", rule_ref="MDM-DUP")
+    if not steward and p.user_id != request.requested_by:
+        raise Problem(403, "FORBIDDEN", "Only the requester or a data steward can merge this request", rule_ref="MDM-DUP")
+    if material.status != "ACTIVE":
+        raise rule_violation(f"{material.number} is {material.status}; merge only into an active material", "MDM-DUP")
+    listed = {c.get("id") for c in request.duplicate_candidates or [] if c.get("kind", "MATERIAL") == "MATERIAL"}
+    request_ids = [uuid.UUID(c["id"]) for c in request.duplicate_candidates or [] if c.get("kind") == "MATERIAL_REQUEST"]
+    if request_ids:
+        listed |= {str(r.material_id) for r in session.execute(select(MaterialRequest).where(
+            MaterialRequest.id.in_(request_ids), MaterialRequest.material_id.is_not(None))).scalars()}
+    if str(material.id) not in listed:
+        raise rule_violation(f"{material.number} is not a duplicate candidate of {request.number}; merge only into a listed candidate",
+                             "MDM-DUP")
     request.status = "MERGED"
     request.merged_into_material_id = material.id
     for task in session.execute(select(Task).where(Task.object_id == request.id, Task.status == "OPEN")).scalars():
@@ -155,10 +210,15 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
     instance = workflow.find(session, "MATERIAL_REQUEST", request.id, PROCESS)
     if outcome != "APPROVED":
         request.status = "REJECTED"
+        audit.record(session, "MATERIAL_REQUEST", request.id, "REJECTED", object_ref=request.number, reason=task.comment,
+                     before={"status": "IN_STEWARDSHIP"}, after={"status": "REJECTED", "domain": (task.candidate_scope or {}).get("steward_domain")},
+                     rule_set_version=request.rule_set_version)
         workflow.end(session, instance, "F9-08", outcome=f"rejected by steward: {task.comment}", status="COMPLETED")
         return
     sod.record(session, "MATERIAL_STEWARD_APPROVE", {"material_request_id": request.id})
     request.status = "APPROVED"
+    audit.record(session, "MATERIAL_REQUEST", request.id, "APPROVED", object_ref=request.number,
+                 before={"status": "IN_STEWARDSHIP"}, after={"status": "APPROVED"}, rule_set_version=request.rule_set_version)
     material = Material(
         tenant_id=current_tenant(session), number=next_number(session, "MATERIAL"), description=request.description,
         type=request.type, material_group=request.material_group, category=request.category, base_uom=request.base_uom,
@@ -168,6 +228,9 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
     session.add(material)
     session.flush()
     request.material_id = material.id
+    audit.record(session, "MATERIAL", material.id, "CREATED", object_ref=material.number,
+                 after={"description": material.description, "group": material.material_group, "category": material.category,
+                        "uom": material.base_uom, "fromRequest": request.number}, rule_set_version=request.rule_set_version)
     link(session, "MATERIAL_REQUEST", request.id, request.number, "MATERIAL", material.id, material.number, "created_material")
     outbox.emit(session, "material_request.approved", "MATERIAL_REQUEST", request.id, request.number,
                 {"material": material.number, "materialId": str(material.id)})
@@ -186,6 +249,8 @@ def _material_synced(session: Session, message) -> None:
     material = session.get(Material, request.material_id)
     material.erp_synced = True
     request.status = "SYNCED_TO_ERP"
+    audit.record(session, "MATERIAL_REQUEST", request.id, "SYNCED_TO_ERP", object_ref=request.number,
+                 before={"status": "APPROVED"}, after={"status": "SYNCED_TO_ERP", "material": material.number, "erpDocument": message.erp_doc_no})
     instance = workflow.find(session, "MATERIAL_REQUEST", request.id, PROCESS)
     workflow.step(session, instance, "F9-06", outcome=f"ERP material {message.erp_doc_no}")
     _link_pr_line(session, request, material)

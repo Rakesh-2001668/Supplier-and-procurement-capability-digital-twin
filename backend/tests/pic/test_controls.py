@@ -34,7 +34,7 @@ def _axn_id():
 @pytest.fixture(scope="module")
 def beta_tenant():
     tenant_id = reference.create_tenant("BETA", "Beta Logistics Pvt Ltd", "LOGISTICS")
-    reference.bootstrap(tenant_id, company=("2000", "Beta Logistics Pvt Ltd", "29AAACB1111C1Z1"), plants=[("B100", "Bengaluru", "29")],
+    reference.bootstrap(tenant_id, company=("2000", "Beta Logistics Pvt Ltd", "29AAACB1111C1ZJ"), plants=[("B100", "Bengaluru", "29")],
                         cost_objects=[("COST_CENTER", "9100", "Fleet")])
     with tenant_tx(tenant_id) as s:
         if not s.execute(select(AppUser.id)).first():
@@ -218,7 +218,7 @@ def test_four_eyes_requester_cannot_approve_own_requisition(client, login):
     body = {"origin": "MANUAL", "purpose_code": "IT", "plant": "P100", "lines": [
         {"item_type": "FREE_TEXT", "purchase_type": "EXPENSE", "description": "Label printer", "material_group": "IT-HW", "qty": "1",
          "uom": "EA", "price_est_minor": 4_500_000, "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100",
-         "need_date": "2027-02-01", "quotes_attached": 1}]}
+         "need_date": "2027-02-01", "quotes": [{"supplier": "Zebra reseller Chennai", "reference": "ZRC-Q-0928", "date": "2026-09-28"}]}]}
     pr = client.post("/v1/requisitions", json=body, headers=login("requester"))
     assert pr.status_code == 201, pr.text
     number = pr.json()["number"]

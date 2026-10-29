@@ -400,7 +400,7 @@ export function AmendmentDialog({ contract, initialKind, noticeDays, onClose }: 
               <p>
                 Value change {delta(plan.valueDeltaMinor)} · version v{plan.fromVersion} → v{plan.fromVersion + 1} · approval{' '}
                 <span className="font-semibold">{plan.approvalChain.map(label).join(' → ')}</span>{' '}
-                <span className="text-slate-500">({plan.band === 'termination' ? 'termination route' : `${plan.band} ${inr(plan.thresholdMinor)}`})</span>
+                <span className="text-slate-500">({plan.band === 'termination' ? 'termination route' : plan.band === 'non_standard' ? 'non-standard clause: Legal review' : `${plan.band} ${inr(plan.thresholdMinor)}`})</span>
               </p>
               {plan.kind === 'TERMINATION' && (
                 <>

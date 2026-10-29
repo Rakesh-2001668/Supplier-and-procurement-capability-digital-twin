@@ -66,14 +66,16 @@ def token(body: TokenRequest, request: Request):
         if user is None or not verify_password(body.password, user.password_hash):
             http.record_login_failure(request)
             raise Problem(401, "INVALID_CREDENTIALS", "Unknown tenant, email or password")
-        http.clear_login_failures(request)
-        # §14 MFA: a confirmed authenticator means a second step; enforced roles without one must enrol first.
+        # §14 MFA: a confirmed authenticator means a second step; enforced roles without one must enrol first. The per-IP
+        # failure window is cleared only once the sign-in is complete (here, or after the second factor in POST /v1/auth/mfa),
+        # so a known password cannot reset the brute-force budget for the code.
         if mfa.confirmed_factor(s, user.id) is not None:
             return {"mfaRequired": True, "challenge": user_challenge(MFA_CHALLENGE, user, tenant), "expiresIn": 300,
                     "methods": ["TOTP"], "tenant": tenant.code}
         if mfa.required_for(s, user):
             raise Problem(403, "MFA_ENROLMENT_REQUIRED", "Your role requires multi-factor authentication. Register an authenticator app to continue.",
                           rule_ref="MFA", enrolmentChallenge=user_challenge(MFA_ENROLMENT, user, tenant, ttl_seconds=900))
+        http.clear_login_failures(request)
         return token_response(user, tenant)
 
 
@@ -172,6 +174,8 @@ class RuleSetIn(BaseModel):
     purchase_type: Optional[str] = None
     body: dict
     description: Optional[str] = None
+    supersedes: Optional[str] = Field(default=None, description="Version label this one replaces when both have the same scope and "
+                                                                "effective date (otherwise such a version is refused with 409)")
 
 
 @router.get("/admin/rules", tags=["Administration"])
@@ -182,9 +186,22 @@ def list_rules(p: Principal = Depends(require(READ))):
 
 @router.post("/admin/rules", status_code=201, tags=["Administration"])
 def new_rule_version(body: RuleSetIn, p: Principal = Depends(require("admin:rules"))):
-    """Rule changes are new effective-dated versions; existing versions are never edited (P14)."""
+    """Rule changes are new effective-dated versions; existing versions are never edited (P14). A version label is used once
+    per key; a second version with the same scope and effective date must name the version it supersedes (it then wins)."""
     with uow(p) as s:
-        rule = RuleSet(tenant_id=p.tenant_id, created_by=p.user_id, **body.model_dump())
+        same_key = s.execute(select(RuleSet).where(RuleSet.key == body.key)).scalars().all()
+        if any(r.version == body.version for r in same_key):
+            raise Problem(409, "RULE_VERSION_EXISTS", f"{body.key}@{body.version} already exists; give the new version its own label",
+                          rule_ref="P14")
+        scope = (body.company_code, body.plant, body.category, body.purchase_type)
+        clash = [r for r in same_key if r.effective_from == body.effective_from
+                 and (r.company_code, r.plant, r.category, r.purchase_type) == scope]
+        if clash and body.supersedes not in {r.version for r in clash}:
+            raise Problem(409, "RULE_VERSION_CONFLICT",
+                          f"{body.key} already has version {', '.join(r.version for r in clash)} for this scope effective "
+                          f"{body.effective_from.isoformat()}; use a later effective date or set supersedes to that version",
+                          rule_ref="P14", conflicting=[r.version for r in clash])
+        rule = RuleSet(tenant_id=p.tenant_id, created_by=p.user_id, **body.model_dump(exclude={"supersedes"}))
         s.add(rule)
         s.flush()
         audit.record(s, "RULE_SET", rule.id, "VERSION_CREATED", object_ref=f"{rule.key}@{rule.version}", after=body.model_dump(mode="json"))
@@ -231,6 +248,8 @@ def kill_switch(code: str, body: KillSwitch, p: Principal = Depends(require("age
 # ---------------------------------------------------------------- operations
 @router.post("/admin/ops/tick", tags=["Administration"])
 def ops_tick(p: Principal = Depends(require("admin:ops"))):
-    """Run the background worker once: outbox relay, due timers, ERP retries."""
+    """Run the background worker once for the admin's own tenant: outbox relay, due timers, ERP retries."""
     from app.pic.worker import tick
-    return tick()
+    with uow(p):
+        pass  # session-revocation check (deactivated user, changed roles) as on every other admin call
+    return tick(tenant_id=p.tenant_id)

@@ -8,7 +8,7 @@ import { api } from '@/lib/pic/api';
 import { date, inr, qty } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { BlockChip, CaptureInvoiceDialog, hasRole, InvoiceRow, MatchChip, today, useSessionUser } from './_components';
-import { PaymentFilesCard } from './_ops';
+import { ConsignmentSettlementDialog, PaymentFilesCard, SETTLE_ROLES } from './_ops';
 
 const STATUSES = ['', 'CAPTURED', 'DUPLICATE_CHECK', 'MATCHING', 'EXCEPTION', 'MATCHED', 'APPROVED', 'POSTED', 'PAID', 'REJECTED'];
 
@@ -20,7 +20,7 @@ export default function Invoices() {
   const router = useRouter();
   const user = useSessionUser();
   const [status, setStatus] = useState('');
-  const [dialog, setDialog] = useState<'capture' | 'run' | null>(null);
+  const [dialog, setDialog] = useState<'capture' | 'run' | 'settle' | null>(null);
   const list = useList<InvoiceRow>(`/invoices${status ? `?status=${status}` : ''}`);
   const canCapture = hasRole(user, 'AP_CLERK');
   const canRun = hasRole(user, 'FINANCE_CONTROLLER');
@@ -32,6 +32,7 @@ export default function Invoices() {
         actions={<>
           {canCapture && <Button variant="primary" onClick={() => setDialog('capture')}>Capture invoice</Button>}
           {canRun && <Button onClick={() => setDialog('run')}>Payment run</Button>}
+          {hasRole(user, ...SETTLE_ROLES) && <Button onClick={() => setDialog('settle')}>Consignment settlement</Button>}
           <LinkButton href="/pic/invoices/reconciliation">Posting & reconciliation</LinkButton>
           <LinkButton href="/pic/invoices/insights">Payables insights</LinkButton>
         </>} />
@@ -66,6 +67,7 @@ export default function Invoices() {
 
       {dialog === 'capture' && <CaptureInvoiceDialog onClose={() => setDialog(null)} onCaptured={(inv) => router.push(`/pic/invoices/${inv.id}`)} />}
       {dialog === 'run' && <PaymentRunDialog onClose={() => setDialog(null)} />}
+      {dialog === 'settle' && <ConsignmentSettlementDialog onClose={() => setDialog(null)} />}
     </div>
   );
 }

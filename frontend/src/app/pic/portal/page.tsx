@@ -7,7 +7,7 @@ import { api, SessionUser } from '@/lib/pic/api';
 import { date, dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { BlockChip, CaptureInvoiceDialog, InvoiceRow, PoDetail, PoRow, useSessionUser } from '../invoices/_components';
-import { AsnDialog, BidDialog, CapaPanel, CreditNoteDialog, ProposeChangeDialog, RedlineDialog, RequestChangeDialog, ServiceSheetDialog, SignDialog } from './_components';
+import { AsnDialog, BidDialog, CapaPanel, CreditNoteDialog, ProfilePanel, ProposeChangeDialog, RedlineDialog, RequestChangeDialog, ServiceSheetDialog, SignDialog } from './_components';
 import { AuctionDialog, EventQaDialog } from './_sourcing';
 import { ScheduleConfirmDialog } from '../purchase-orders/[ref]/_ops';
 import { MasterDataCard, SupplierLite } from '../suppliers/[code]/master-data';
@@ -52,7 +52,12 @@ function CompanyDetails() {
   const profile = useApi<SupplierLite>('/portal/profile');
   if (profile.isLoading) return <Loading />;
   if (!profile.data) return <Empty title="Your company details could not be loaded" />;
-  return <MasterDataCard supplier={profile.data} manager portal />;
+  return (
+    <div className="space-y-4">
+      <MasterDataCard supplier={profile.data} manager portal />
+      <ProfilePanel supplierCode={profile.data.code} />
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- orders
@@ -83,9 +88,11 @@ function OrderActions({ number }: { number: string }) {
   const services = po.lines.some((l) => l.ses_required);
   const goods = po.lines.some((l) => l.gr_required && !l.ses_required);
   const delivering = ['CONFIRMED', 'PARTIALLY_RECEIVED'].includes(po.status);
+  // A partly delivered order changed to a new version is re-confirmed while deliveries continue.
+  const awaiting = po.status === 'TRANSMITTED' || !!(po as PoDetail & { awaitingConfirmation?: boolean }).awaitingConfirmation;
   return (
     <div className="flex flex-wrap gap-2">
-      {po.status === 'TRANSMITTED' && (
+      {awaiting && (
         <>
           <Button variant="primary" busy={confirm.isPending} onClick={() => confirm.mutate()}>Confirm</Button>
           <Button onClick={() => setDialog('dates')}>Confirm dates</Button>

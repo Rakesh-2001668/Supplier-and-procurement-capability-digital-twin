@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.pic import views
 from app.pic.api.deps import idempotency_key, idempotent, uow
-from app.pic.models import Asn, GoodsReceipt, InspectionLot, Invoice, PurchaseOrder, ServiceEntry
+from app.pic.models import Asn, GoodsReceipt, InspectionLot, Invoice, PurchaseOrder, ReturnDelivery, ServiceEntry
 from app.pic.platform import workflow
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.core import check_if_match, etag
@@ -71,7 +71,11 @@ def get_po(ref: str, response: Response, p: Principal = Depends(require_any(READ
         if "SUPPLIER_USER" in p.roles and po.supplier_id != p.supplier_id:
             raise not_found("Purchase order", ref)
         response.headers["ETag"] = etag(po)
-        return views.purchase_order(s, po)
+        # awaitingConfirmation: the supplier owes a response (also a partly received order changed to a new version);
+        # pendingChangeApproval: a change order waiting for PO approval before it becomes version n+1.
+        pending = None if "SUPPLIER_USER" in p.roles else order.pending_change_approval(s, po)  # internal: never shown to the supplier
+        return {**views.purchase_order(s, po), "awaitingConfirmation": order.awaiting_confirmation(s, po),
+                "pendingChangeApproval": {"role": pending.candidate_role, "evidence": pending.evidence} if pending is not None else None}
 
 
 @router.post("/purchase-orders/{ref}/validate", tags=["F5 Purchase Order"])
@@ -93,8 +97,9 @@ def confirm_po(ref: str, body: ConfirmationIn, p: Principal = Depends(require("p
 
 
 class ChangeIn(BaseModel):
-    changes: list[dict]
+    changes: list[dict] = Field(min_length=1)
     reason: str
+    deviationReason: Optional[str] = Field(default=None, max_length=500)
 
 
 @router.post("/purchase-orders/{ref}/versions", tags=["F5 Purchase Order"])
@@ -103,7 +108,24 @@ def change_po(ref: str, body: ChangeIn, p: Principal = Depends(require("po:chang
     with uow(p) as s:
         po = by_ref(s, PurchaseOrder, ref, lock=True)
         check_if_match(po, if_match)
-        return order.change_order(s, po, body.changes, body.reason)
+        return order.change_order(s, po, body.changes, body.reason, deviation_reason=body.deviationReason)
+
+
+class ResubmitIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    changes: list[dict] = []
+    deviationReason: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/purchase-orders/{ref}/resubmit", tags=["F5 Purchase Order"])
+def resubmit_po(ref: str, body: ResubmitIn, p: Principal = Depends(require("po:change")),
+                if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    """Re-submit an order returned by its approver (DRAFT): optional line corrections (qty, unit_price, need_date), then
+    validation and the approval strategy run again."""
+    with uow(p) as s:
+        po = by_ref(s, PurchaseOrder, ref, lock=True)
+        check_if_match(po, if_match)
+        return order.resubmit(s, po, body.reason, body.changes, deviation_reason=body.deviationReason)
 
 
 class PoReasonIn(BaseModel):
@@ -124,16 +146,23 @@ def close_po(ref: str, body: PoReasonIn, p: Principal = Depends(require("po:chan
         return order.close(s, by_ref(s, PurchaseOrder, ref, lock=True), body.reason)
 
 
+@router.post("/purchase-orders/{ref}/short-close", tags=["F5 Purchase Order"])
+def short_close_po(ref: str, body: PoReasonIn, p: Principal = Depends(require("po:change"))):
+    """Short-close a partly received order once its received value is invoiced; the open quantity goes back to the requisition."""
+    with uow(p) as s:
+        return order.short_close(s, by_ref(s, PurchaseOrder, ref, lock=True), body.reason)
+
+
 # ---------------------------------------------------------------- F6 receiving
 class AsnLineIn(BaseModel):
     line: int
-    qty: Decimal
+    qty: Decimal = Field(gt=0)
     batches: list[dict] = []
 
 
 class AsnIn(BaseModel):
     po: str
-    lines: list[AsnLineIn]
+    lines: list[AsnLineIn] = Field(min_length=1)
     ship_date: date
     expected_date: date
     eway_bill_no: Optional[str] = None
@@ -144,18 +173,21 @@ class AsnIn(BaseModel):
 
 
 @router.post("/asns", status_code=201, tags=["F6 Receiving"])
-def create_asn(body: AsnIn, p: Principal = Depends(require("asn:create"))):
+def create_asn(body: AsnIn, p: Principal = Depends(require("asn:create")), key: Optional[str] = Depends(idempotency_key)):
     with uow(p) as s:
+        idem = idempotent(s, "POST /v1/asns", key, body)
+        if idem.replay:
+            return idem.replay
         po = by_ref(s, PurchaseOrder, body.po, lock=True)
         asn = receiving.create_asn(s, po, lines=[l.model_dump(mode="json") for l in body.lines], ship_date=body.ship_date,
                                    expected_date=body.expected_date, eway_bill_no=body.eway_bill_no, documents=body.documents,
                                    eway_bill_valid_until=body.eway_bill_valid_until, vehicle_no=body.vehicle_no, distance_km=body.distance_km)
-        return views.asn(s, asn)
+        return idem.store(views.asn(s, asn), 201)
 
 
 class GrLineIn(BaseModel):
     line: int
-    qty: Decimal
+    qty: Decimal = Field(gt=0)
     batch: str = ""
     storage_location: Optional[str] = None
     expiry: Optional[str] = None
@@ -167,7 +199,7 @@ class GrIn(BaseModel):
     asn: Optional[str] = None
     delivery_note: Optional[str] = None
     posting_date: Optional[date] = None
-    lines: list[GrLineIn]
+    lines: list[GrLineIn] = Field(min_length=1)
 
 
 @router.post("/goods-receipts", status_code=201, tags=["F6 Receiving"])
@@ -191,10 +223,11 @@ def get_gr(ref: str, p: Principal = Depends(require(READ))):
 
 
 class UsageDecisionIn(BaseModel):
-    accepted: Decimal
-    rejected: Decimal = Decimal(0)
+    accepted: Decimal = Field(ge=0)
+    rejected: Decimal = Field(default=Decimal(0), ge=0)
     defect_code: Optional[str] = None
     reason: Optional[str] = None
+    replacement: bool = False  # rejected quantity returned for replacement (re-opened on the PO) instead of a credit note
 
 
 @router.post("/inspection-lots/{ref}/usage-decision", tags=["F6 Receiving"])
@@ -214,11 +247,22 @@ def reverse(ref: str, body: ReverseIn, p: Principal = Depends(require("gr:post")
         return row(receiving.reverse_gr(s, by_ref(s, GoodsReceipt, ref, lock=True), body.reason))
 
 
+class ReplacementIn(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/return-deliveries/{ref}/replacement", tags=["F6 Receiving"])
+def request_replacement(ref: str, body: ReplacementIn, p: Principal = Depends(require("quality:decide"))):
+    """The supplier re-delivers instead of crediting: the returned quantity is open again on the PO for a new ASN and receipt."""
+    with uow(p) as s:
+        return row(receiving.request_replacement(s, by_ref(s, ReturnDelivery, ref, lock=True), body.reason))
+
+
 class SesLineIn(BaseModel):
     line: int
     description: Optional[str] = None
-    qty: Decimal
-    unit_rate: Optional[Decimal] = None
+    qty: Decimal = Field(gt=0)
+    unit_rate: Optional[Decimal] = Field(default=None, gt=0)
 
 
 class SesIn(BaseModel):
@@ -226,17 +270,20 @@ class SesIn(BaseModel):
     method: str = Field(pattern="^(MILESTONE|TIME_MATERIAL|UNIT_RATE|PROGRESS)$")
     period_from: date
     period_to: date
-    lines: list[SesLineIn]
+    lines: list[SesLineIn] = Field(min_length=1)
 
 
 @router.post("/service-entries", status_code=201, tags=["F6 Receiving"])
-def create_ses(body: SesIn, p: Principal = Depends(require("ses:create"))):
+def create_ses(body: SesIn, p: Principal = Depends(require("ses:create")), key: Optional[str] = Depends(idempotency_key)):
     with uow(p) as s:
-        po = by_ref(s, PurchaseOrder, body.po)
+        idem = idempotent(s, "POST /v1/service-entries", key, body)
+        if idem.replay:
+            return idem.replay
+        po = by_ref(s, PurchaseOrder, body.po, lock=True)
         ses = receiving.create_ses(s, po, method=body.method, period_from=body.period_from, period_to=body.period_to,
                                    lines=[l.model_dump(mode="json", exclude_none=True) for l in body.lines])
         receiving.submit_ses(s, ses)
-        return views.service_entry(s, ses)
+        return idem.store(views.service_entry(s, ses), 201)
 
 
 @router.post("/service-entries/{ref}/approve", tags=["F6 Receiving"])
@@ -254,8 +301,8 @@ def approve_ses(ref: str, p: Principal = Depends(require("ses:approve"))):
 class InvoiceLineIn(BaseModel):
     po: str
     po_line: int
-    qty: Decimal
-    unit_price: Decimal
+    qty: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(gt=0)
     gst_rate: Optional[Decimal] = None
     hsn: Optional[str] = None
     tax_minor: Optional[int] = None
@@ -304,17 +351,29 @@ def rematch(ref: str, p: Principal = Depends(require("invoice:resolve"))):
         return payables.match(s, by_ref(s, Invoice, ref, lock=True))
 
 
+class CreditNoteLineIn(BaseModel):
+    invoice_line: int
+    qty: Decimal = Field(gt=0)
+    # Value credit (price difference): paise credited per unit; omit for a quantity credit at the invoice price.
+    unit_credit_minor: Optional[int] = Field(default=None, gt=0)
+
+
 class CreditNoteIn(BaseModel):
-    supplier_credit_note_no: str
+    supplier_credit_note_no: str = Field(min_length=1, max_length=30)
     note_date: date
-    reason: str
-    lines: list[dict]
+    reason: str = Field(min_length=3)
+    lines: list[CreditNoteLineIn] = Field(min_length=1)
 
 
 @router.post("/invoices/{ref}/credit-notes", status_code=201, tags=["F7 Invoice"])
 def credit_note(ref: str, body: CreditNoteIn, p: Principal = Depends(require_any("invoice:submit", "invoice:capture"))):
     with uow(p) as s:
-        return row(payables.submit_credit_note(s, by_ref(s, Invoice, ref, lock=True), **body.model_dump()))
+        invoice = by_ref(s, Invoice, ref, lock=True)
+        if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
+            raise not_found("Invoice", ref)
+        data = body.model_dump()
+        data["lines"] = [{k: v for k, v in line.items() if v is not None} for line in data["lines"]]
+        return row(payables.submit_credit_note(s, invoice, **data))
 
 
 class ResolveIn(BaseModel):
@@ -362,6 +421,8 @@ def post_invoice(ref: str, p: Principal = Depends(require("invoice:post")),
 class PaymentRunIn(BaseModel):
     run_date: date
     include_not_due: bool = False
+    supplier_codes: Optional[list[str]] = Field(None, max_length=200)
+    invoice_numbers: Optional[list[str]] = Field(None, max_length=500)
 
 
 @router.post("/payments/runs", tags=["F7 Invoice"])
@@ -370,7 +431,7 @@ def payment_run(body: PaymentRunIn, p: Principal = Depends(require("payment:run"
         idem = idempotent(s, "POST /v1/payments/runs", key, body)
         if idem.replay:
             return idem.replay
-        return idem.store(payables.payment_run(s, body.run_date, body.include_not_due))
+        return idem.store(payables.payment_run(s, body.run_date, body.include_not_due, body.supplier_codes, body.invoice_numbers))
 
 
 @router.get("/purchase-orders/{ref}/retention", tags=["F7 Invoice"])

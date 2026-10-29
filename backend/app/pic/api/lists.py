@@ -73,10 +73,12 @@ def sourcing_events(status: Optional[str] = None, page: Page = Depends(), p: Pri
             q = q.where(SourcingEvent.status == status.upper())
         if _is_supplier(p):
             q = q.where(SourcingEvent.id.in_(select(Invitee.event_id).where(Invitee.supplier_id == p.supplier_id)),
-                        SourcingEvent.status != "DRAFT")
-        return paginate(s, q, SourcingEvent, page, lambda e: row(e, only=[
-            "id", "number", "type", "title", "category", "status", "round", "close_at", "published_at", "baseline_price_minor",
-            "created_at"]))
+                        SourcingEvent.status != "DRAFT", SourcingEvent.published_at.is_not(None))
+        fields = ["id", "number", "type", "title", "category", "status", "round", "close_at", "published_at", "baseline_price_minor",
+                  "created_at"]
+        if _is_supplier(p):
+            fields.remove("baseline_price_minor")  # the buyer's baseline (target) price is never shown to bidders
+        return paginate(s, q, SourcingEvent, page, lambda e: row(e, only=fields))
 
 
 @router.get("/contracts")
@@ -269,8 +271,20 @@ def audit_explorer(object_type: Optional[str] = None, action: Optional[str] = No
 
 @router.get("/reference")
 def reference_data(p: Principal = Depends(PORTAL)):
-    """Values for form pickers: plants, cost objects, materials, suppliers, catalogue."""
+    """Values for form pickers: plants, cost objects, materials, suppliers, catalogue. Supplier users get only what a portal
+    form can use: plants, materials without internal standard prices, and their own active catalogue items."""
     with uow(p) as s:
+        if _is_supplier(p):
+            own = select(CatalogueItem).where(CatalogueItem.active.is_(True), CatalogueItem.supplier_id == p.supplier_id)
+            return {
+                "plants": [{"code": x.code, "name": x.name} for x in s.execute(select(Plant).order_by(Plant.code)).scalars()],
+                "costObjects": [],
+                "materials": [{"number": m.number, "description": m.description, "uom": m.base_uom, "type": m.type, "category": m.category}
+                              for m in s.execute(select(Material).order_by(Material.number)).scalars()],
+                "suppliers": [],
+                "catalogue": [{"id": str(c.id), "description": c.description, "priceMinor": c.price_minor, "uom": c.uom,
+                               "category": c.category} for c in s.execute(own).scalars()],
+            }
         return {
             "plants": [{"code": x.code, "name": x.name} for x in s.execute(select(Plant).order_by(Plant.code)).scalars()],
             "costObjects": [{"type": x.type, "code": x.code, "name": x.name} for x in s.execute(select(CostObject).order_by(CostObject.code)).scalars()],

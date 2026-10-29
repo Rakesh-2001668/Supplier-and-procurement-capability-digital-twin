@@ -57,6 +57,7 @@ from app.pic.models import (
 from app.pic.platform import audit, clock, integration, outbox, workflow
 from app.pic.platform.auth import hash_password
 from app.pic.seed.axion import ROLE_USER, Scenario, at, email
+from app.pic.seed.datasets._tenant_kit import AXN_BUDGETS_2027_28
 
 KEY = "axn-branch-cases"
 VERSION = "1"
@@ -65,6 +66,8 @@ TENANTS = ('AXN',)
 CREATED_BY = "integration:SAP_S4"  # actor of the ERP inbound loads
 CREATES_TENANT = False
 READY = True
+from app.pic.seed.axion import SIGNATURE_KEY, SIGNATURE_VERSION  # noqa: E402
+REQUIRES = {SIGNATURE_KEY: SIGNATURE_VERSION}  # the current signature case (users, documents, identifiers)
 
 L = 100_000 * 100
 MATERIAL = "DC-345"
@@ -197,7 +200,7 @@ def _masters(sc: Scenario) -> None:
     clock.set_pinned(at(date(2027, 4, 1), 8, 30))
     with tenant_tx(sc.tenant_id) as s:
         budgets = []
-        for obj_type, code, control, lakh in (("COST_CENTER", "4100", "SOFT", 60), ("COST_CENTER", "4200", "SOFT", 30), ("WBS", "C-2207", "HARD", 200)):
+        for obj_type, code, control, lakh in AXN_BUDGETS_2027_28:
             exists = s.execute(select(Budget.id).where(Budget.cost_object_type == obj_type, Budget.cost_object_code == code,
                                                        Budget.fiscal_year == FY)).first()
             if exists is None:
@@ -290,6 +293,7 @@ def _qualify(sc: Scenario, ids: dict) -> None:
     for offset, code in enumerate(SUPPLIERS):
         scores = SUPPLIERS[code][8]
         with sc.act("supplier.manager", at(date(2027, 4, 2), 17, offset * 10)) as s:
+            svc.verify_certificates(s, s.get(Supplier, ids[code]), "IATF 16949 and ISO 14001 checked against the IATF database and the CB register")
             q = svc.start_qualification(s, s.get(Supplier, ids[code]), CATEGORY)
             svc.record_assessment(s, q, questionnaire={"capacity": "400 t and 800 t HPDC cells verified", "ppap": "level 3"},
                                   questionnaire_score=Decimal(scores[0]), audit_score=Decimal(scores[1]), sample_approval="PPAP_APPROVED")
@@ -345,28 +349,32 @@ def apply(tenant_code: str, password: str) -> dict:
         pr = requisition.create(s, origin="MANUAL", purpose_code="PRODUCTION_CONSUMABLES", purpose_text=PR_COOLANT, plant="P100", lines=[{
             "item_type": "FREE_TEXT", "purchase_type": "NON_STOCK", "description": "Water-based die-release agent for HPDC, 200 L drums",
             "material_group": "CHEM-DIE-RELEASE", "category": "MRO-CHEMICALS", "qty": "1200", "uom": "L", "price_est_minor": 24_500,
-            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-20", "quotes_attached": 3}])
+            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-20",
+            "quotes": [{"supplier": "SPD201", "reference": "SPD/Q/27-28/0009", "date": "2027-03-29"}, {"supplier": "AAC202", "reference": "AAC-QTN-2703-114", "date": "2027-03-30"}, {"supplier": "Hosur Die Chem Pvt Ltd", "reference": "HDC/Q/0331", "date": "2027-03-31"}]}])
         coolant_chain = requisition.submit(s, pr)["chain"]
         coolant_id = pr.id
     with sc.act("requester", at(d1, 12)) as s:
         pr = requisition.create(s, origin="MANUAL", purpose_code="OFFICE_FACILITIES", purpose_text=PR_DESKS, plant="P100", lines=[{
             "item_type": "FREE_TEXT", "purchase_type": "NON_STOCK", "description": "Electric sit-stand workstation 1600 x 800 mm",
             "material_group": "FURN-OFFICE", "category": "FACILITIES", "qty": "6", "uom": "EA", "price_est_minor": 3_850_000,
-            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-30", "quotes_attached": 3}])
+            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-30",
+            "quotes": [{"supplier": "Featherlite Workspace Pvt Ltd", "reference": "FWS-Q-27-0412", "date": "2027-03-26"}, {"supplier": "Godrej Interio dealer Hosur", "reference": "GIH/QTN/2703/88", "date": "2027-03-29"}, {"supplier": "Krishna Office Systems", "reference": "KOS-271", "date": "2027-03-30"}]}])
         requisition.submit(s, pr)
         desks_id = pr.id
     with sc.act("requester", at(d1, 12, 30)) as s:
         pr = requisition.create(s, origin="MANUAL", purpose_code="NEW_PART_LAUNCH", purpose_text=PR_PPAP, plant="P100", lines=[{
             "item_type": "FREE_TEXT", "purchase_type": "NON_STOCK", "description": "PPAP sample castings DC-345, 50 pcs off the production tool",
             "material_group": "41-PPAP-SAMPLES", "category": CATEGORY, "qty": "50", "uom": "EA", "price_est_minor": 115_000,
-            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-20", "quotes_attached": 1}])
+            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-20",
+            "quotes": [{"supplier": "AAC202", "reference": "AAC-QTN-2703-121", "date": "2027-03-31"}]}])
         requisition.submit(s, pr)
         ppap_id, ppap_no = pr.id, pr.number
     with sc.act("requester", at(d1, 13)) as s:
         pr = requisition.create(s, origin="MANUAL", purpose_code="MAINTENANCE", purpose_text=PR_THERMAL, plant="P100", lines=[{
             "item_type": "FREE_TEXT", "purchase_type": "SERVICE", "description": "Thermal imaging survey of HPDC cell 3 dies, ladle and shot sleeve",
             "material_group": "SVC-TOOLING", "category": "TOOLING-SERVICES", "qty": "1", "uom": "EA", "price_est_minor": 4_200_000,
-            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-16", "quotes_attached": 1}])
+            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100", "need_date": "2027-04-16",
+            "quotes": [{"supplier": "HTS004", "reference": "HTS/Q/27-28/0003", "date": "2027-03-31"}]}])
         requisition.submit(s, pr)
         thermal_id, thermal_no = pr.id, pr.number
     with sc.act("contract.manager", at(d1, 14)) as s:
@@ -437,6 +445,9 @@ def apply(tenant_code: str, password: str) -> dict:
     _decide(sc, "ops.head", at(d3, 11), desks_id, "REQ_APPROVAL", "REJECT",
             "Not in the FY 2027-28 facilities plan; office furniture is bought by Administration (CC 4200) in the Q2 wave")
     with sc.act("contract.manager", at(d3, 11, 30)) as s:
+        # A supplier redline is non-standard until the contract manager reviews it: the drawing reference is accepted as standard.
+        contract_svc.review_redline(s, s.get(Contract, bridge_id), "QUALITY", "ACCEPT", "STANDARD",
+                                    "Drawing revision and PPAP reference match the playbook quality clause")
         contract_svc.ai_review(s, s.get(Contract, bridge_id))
         contract_svc.submit(s, s.get(Contract, bridge_id))
     with sc.act("category.manager", at(d3, 12)) as s:

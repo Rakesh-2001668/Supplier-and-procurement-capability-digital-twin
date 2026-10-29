@@ -117,7 +117,7 @@ def run(sc: Scenario, password: str) -> None:
     with sc.act("tf.sales", at(date(2027, 2, 13), 10)) as s:
         from app.pic.services.payables import expected_irn
         tf_inv = payables.capture(s, supplier="TF001", supplier_invoice_no="INV-TF-9031", invoice_date=date(2027, 2, 13), channel="E_INVOICE",
-                                  irn=expected_irn("33AABCT1234K1Z5", "2026-27", "INV", "INV-TF-9031"),
+                                  irn=expected_irn("33AABCT1234K1ZM", "2026-27", "INV", "INV-TF-9031"),
                                   lines=[{"po": pos["TF001"][1], "po_line": 10, "qty": "5400", "unit_price": "398", "gst_rate": "18", "hsn": "87089900"}]).id
     with sc.act("kd.sales", at(date(2027, 2, 13), 11)) as s:
         kd_inv = payables.capture(s, supplier="KD002", supplier_invoice_no="KD/2702-118", invoice_date=date(2027, 2, 13), channel="PORTAL",
@@ -128,6 +128,9 @@ def run(sc: Scenario, password: str) -> None:
         exc = s.execute(select(InvoiceException).where(InvoiceException.invoice_id == kd_inv, InvoiceException.status == "OPEN")).scalar_one()
         payables.resolve_exception(s, s.get(Invoice, kd_inv), exc.id, "PRICE_ACCEPTED",
                                    "Kovai alloy surcharge ₹5/pc accepted by buyer lead for February (email 14 Feb); tracked as savings leakage")
+    # DMN-03: an accepted price variance is the buyer's decision (PRICE_VARIANCE task), which re-prices the PO line.
+    sc.approve_all(kd_inv, at(date(2027, 2, 15), 10, 30), "Alloy surcharge ₹5/pc agreed for February deliveries (email 14 Feb)")
+    with sc.act("ap.clerk", at(date(2027, 2, 15), 10, 45)) as s:
         payables.approve(s, s.get(Invoice, kd_inv))
         payables.post(s, s.get(Invoice, kd_inv), "AXN|1000|KD002|KD/2702-118")
     sc.relay(at(date(2027, 2, 15), 11))
@@ -170,7 +173,7 @@ def run(sc: Scenario, password: str) -> None:
 
     # ------------------------------------------------------------ 6. sanctions hit at registration
     with sc.act("supplier.manager", at(date(2027, 3, 1), 10)) as s:
-        zat = supplier_svc.register(s, code="ZAT006", legal_name="Zenith Alloy Trading FZE", gstin="33AABCZ4321R1Z6", pan="AABCZ4321R",
+        zat = supplier_svc.register(s, code="ZAT006", legal_name="Zenith Alloy Trading FZE", gstin="33AABCZ4321R1Z0", pan="AABCZ4321R",
                                     state_code="33", contact_email="sales@zat006.example", categories=["ALU-DIECAST"], payment_terms="N30")
         screening = supplier_svc.screen(s, zat)
         zat_status = zat.status
@@ -193,6 +196,10 @@ def run(sc: Scenario, password: str) -> None:
     with sc.act("buyer", at(date(2027, 3, 8), 11)) as s:
         changed = order.change_order(s, s.get(PurchaseOrder, cover_id), [{"line": 10, "qty": "2400", "need_date": "2027-03-18"}],
                                      reason="OEM pull-in SO-88415: +400 covers, needed by 18 Mar")
+    if changed.get("approval") == "PENDING":  # ₹4.24 L → ₹5.09 L crosses the ₹5 L PO-APPROVAL band: procurement head approves first
+        sc.approve_all(cover_id, at(date(2027, 3, 8), 13), "Pull-in for SO-88415 approved; within the DC-331 plan")
+        with sc.act("buyer", at(date(2027, 3, 8), 13, 30)) as s:
+            changed = {"version": s.get(PurchaseOrder, cover_id).version}
     with sc.act("tf.sales", at(date(2027, 3, 8), 16)) as s:
         order.confirm(s, s.get(PurchaseOrder, cover_id), "CONFIRMED", note="v2 accepted; dispatch 15 Mar")
     sc.relay(at(date(2027, 3, 8), 17))

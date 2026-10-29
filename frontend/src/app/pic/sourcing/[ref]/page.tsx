@@ -9,7 +9,8 @@ import { api, readSessionUser } from '@/lib/pic/api';
 import { dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import {
-  AwardDialog, BidsPanel, Criterion, EventLine, Invitee, MatrixRow, normaliseScenario, RoundDialog, ScenariosPanel, ScoreDialog, SourcingEvent,
+  AwardDialog, BidsPanel, CANCELLABLE, CancelEventDialog, Criterion, EventLine, Invitee, MatrixRow, normaliseScenario, RoundDialog, ScenariosPanel,
+  ScoreDialog, SourcingEvent,
 } from './_parts';
 import { AuctionPanel, ClarificationsPanel } from './_ops';
 
@@ -33,11 +34,14 @@ export default function SourcingEventPage() {
   const can = (allowed: string[]) => !!roles && (roles.length === 0 || roles.some((r) => allowed.includes(r)));
   const canManage = can(MANAGE);
   const canScore = can(EVALUATE);
+  // POST …/cancel: the event owner or a category manager (the server also checks the manager's categories).
+  const canCancel = !!ev && CANCELLABLE.includes(ev.status) && !!roles
+    && (roles.length === 0 || roles.includes('CATEGORY_MANAGER') || (!!ev.owner_id && readSessionUser()?.id === ev.owner_id));
 
   const sealed = !ev || PRE_CLOSE.includes(ev.status) || !ev.unsealed_at;
   const [peek, setPeek] = useState(false);
   const bids = useApi<MatrixRow[]>(ev && (!sealed || peek) ? `${path}/bids` : null);
-  const [dialog, setDialog] = useState<'score' | 'round' | 'award' | null>(null);
+  const [dialog, setDialog] = useState<'score' | 'round' | 'award' | 'cancel' | null>(null);
   const [awardScenario, setAwardScenario] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -87,6 +91,7 @@ export default function SourcingEventPage() {
             {canManage && evaluating && scenarios.some((s) => s.feasible) && (
               <Button variant="primary" onClick={() => { setAwardScenario(null); setDialog('award'); }}>Award</Button>
             )}
+            {canCancel && <Button variant="danger" onClick={() => setDialog('cancel')}>Cancel event</Button>}
           </>
         )}
         facts={ev && (
@@ -183,6 +188,7 @@ export default function SourcingEventPage() {
       {ev && dialog === 'score' && <ScoreDialog event={ev} matrix={bids.data ?? []} onClose={() => setDialog(null)} />}
       {ev && dialog === 'round' && <RoundDialog event={ev} onClose={() => setDialog(null)} />}
       {ev && dialog === 'award' && <AwardDialog event={ev} scenarios={scenarios} matrix={bids.data} initial={awardScenario} onClose={() => setDialog(null)} />}
+      {ev && dialog === 'cancel' && <CancelEventDialog event={ev} onClose={() => setDialog(null)} />}
     </>
   );
 }

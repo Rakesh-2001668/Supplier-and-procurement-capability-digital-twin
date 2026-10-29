@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,6 +15,10 @@ QTY = Numeric(18, 3)
 
 class DemandElement(TenantScoped, Base):
     __tablename__ = "demand_element"
+    __table_args__ = (
+        Index("ix_demand_element_material_plant", "tenant_id", "material_id", "plant", "req_date"),
+        Index("ix_demand_element_plant_changed", "tenant_id", "plant", "changed_at"),  # net-change scope
+    )
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     type: Mapped[str] = mapped_column(String(20), nullable=False)  # FORECAST | SALES_ORDER | RESERVATION | WBS_DEMAND
@@ -26,7 +30,7 @@ class DemandElement(TenantScoped, Base):
 
 class MrpRun(TenantScoped, Base):
     __tablename__ = "mrp_run"
-    __table_args__ = (UniqueConstraint("tenant_id", "number"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "number"), Index("ix_mrp_run_plant_created", "tenant_id", "plant", "created_at"))
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     mode: Mapped[str] = mapped_column(String(15), nullable=False)  # NET_CHANGE | REGENERATIVE | SIMULATION
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
@@ -43,7 +47,12 @@ class MrpRun(TenantScoped, Base):
 
 class PlannedOrder(TenantScoped, Base):
     __tablename__ = "planned_order"
-    __table_args__ = (UniqueConstraint("tenant_id", "number"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "number"),
+        Index("ix_planned_order_plant_status_material", "tenant_id", "plant", "status", "material_id"),
+        Index("ix_planned_order_run", "tenant_id", "mrp_run_id"),
+        Index("ix_planned_order_requisition", "tenant_id", "requisition_id"),
+    )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     mrp_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.mrp_run.id"), nullable=False)
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
@@ -62,6 +71,7 @@ class PlannedOrder(TenantScoped, Base):
 
 class MrpException(TenantScoped, Base):
     __tablename__ = "mrp_exception"
+    __table_args__ = (Index("ix_mrp_exception_run", "tenant_id", "mrp_run_id"),)
     mrp_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.mrp_run.id"), nullable=False)
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     planned_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))

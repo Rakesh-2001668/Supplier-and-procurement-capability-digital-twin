@@ -82,5 +82,12 @@ def user_by_email(session: Session, email: str) -> AppUser:
 
 
 def days_from_terms(terms: str) -> int:
-    digits = "".join(ch for ch in terms if ch.isdigit())
-    return int(digits) if digits else 0
+    """Net payment days of a terms key: 'N60' → 60, '60' → 60, '2/10 N45' → 45 (the discount part '2/10' is not the net
+    period). Unreadable terms give 0 (due on the invoice date) rather than a made-up number."""
+    import re
+    text = (terms or "").strip().upper()
+    net = re.search(r"N\s*(\d+)", text)
+    if net:
+        return int(net.group(1))
+    plain = re.fullmatch(r"(\d+)", text)
+    return int(plain.group(1)) if plain else 0

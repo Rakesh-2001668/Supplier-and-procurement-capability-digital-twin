@@ -1,6 +1,7 @@
 """F8 Supplier onboarding & qualification, bank changes (MDM-04), status and performance (M06)."""
 import difflib
 import os
+import re
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -11,16 +12,26 @@ from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
 from app.pic.models import (
-    BankChangeRequest, Certificate, GoodsReceipt, GrLine, Invoice, PoLine, PurchaseOrder, Qualification,
-    SanctionEntry, Scorecard, Supplier, SupplierBankAccount, SupplierCategoryStatus, Task, TwinFeedback, TwinSnapshot,
+    AuditEvent, BankChangeRequest, Certificate, GoodsReceipt, GrLine, Invoice, InvoiceException, PoLine, PoScheduleLine, PurchaseOrder,
+    Qualification, SanctionEntry, Scorecard, Supplier, SupplierBankAccount, SupplierCategoryStatus, Task, Timer, TwinFeedback, TwinSnapshot,
 )
 from app.pic.platform import audit, clock, crypto, integration, outbox, rules, sod, workflow
 from app.pic.platform.core import next_number
 from app.pic.platform.errors import Problem, illegal_transition, not_found, rule_violation
+from app.pic.services import master_changes
 from app.pic.services.common import principal, require_supplier_user, supplier_ref
 
 PROCESS = "pic.supplier-onboarding"
 ACTIVE_CATEGORY_STATUSES = ("QUALIFIED", "PREFERRED")
+IN_ONBOARDING_STATUSES = ("REGISTERED", "UNDER_QUALIFICATION")  # categories still being qualified (F8-05)
+# Payment terms key: net days ('N60' or '60'), optionally after an early-payment discount ('2/10 N45' = 2% within 10 days, net 45).
+PAYMENT_TERMS_PATTERN = r"^(?:\d{1,2}(?:\.\d{1,2})?/\d{1,3} )?N?\d{1,3}$"
+
+
+def payment_terms_errors(terms: Optional[str]) -> list[str]:
+    if not re.fullmatch(PAYMENT_TERMS_PATTERN, (terms or "").strip().upper()):
+        return [f"payment terms '{terms}' are not a terms key: use net days (N60 or 60) or discount + net days (2/10 N45)"]
+    return []
 
 
 def _instance(session: Session, supplier: Supplier):
@@ -57,6 +68,12 @@ def register(session: Session, *, code: Optional[str], legal_name: str, gstin: s
              segment: Optional[str] = None, address: Optional[dict] = None, channel: str = "SUPPLIER_MANAGER") -> Supplier:
     p = principal(session)
     tenant_id = current_tenant(session)
+    # F8-01: the same tax-ID checks as an MDM-04 change (format, state code, check character, PAN inside the GSTIN).
+    if errors := master_changes.gstin_errors(gstin, pan, state_code) + master_changes.pan_errors(pan):
+        raise master_changes.validation_problem(errors)
+    if terms_errors := payment_terms_errors(payment_terms):
+        raise Problem(422, "VALIDATION_FAILED", "; ".join(terms_errors), rule_ref="F8-01", errors=terms_errors)
+    payment_terms = payment_terms.strip().upper()
     supplier = Supplier(
         tenant_id=tenant_id, code=code or next_number(session, "SUPPLIER"), legal_name=legal_name, status="REGISTERED",
         gstin_enc=crypto.encrypt(tenant_id, "gstin", gstin), gstin_masked=crypto.mask(gstin), gstin_hash=crypto.blind_index(tenant_id, gstin),
@@ -76,23 +93,105 @@ def register(session: Session, *, code: Optional[str], legal_name: str, gstin: s
     return supplier
 
 
-def submit_profile(session: Session, supplier: Supplier, *, bank_account: str, ifsc: str, holder_name: str,
-                   certificates: list[dict]) -> dict:
-    require_supplier_user(session, supplier.id)
-    tenant_id = current_tenant(session)
+def mandatory_categories(session: Session, supplier: Supplier, cert_type: str) -> list[str]:
+    """The supplier's categories for which SUPPLIER-QUAL (category version where one exists) makes this certificate type
+    mandatory. Derived from the rule, never from what the supplier declares."""
+    categories = []
+    for row in session.execute(select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)
+                               .order_by(SupplierCategoryStatus.category)).scalars():
+        try:
+            body = rules.resolve(session, "SUPPLIER-QUAL", category=row.category).body
+        except Problem:
+            continue
+        if cert_type in (body.get("mandatoryCertificates") or {}).get(row.category, []):
+            categories.append(row.category)
+    return categories
+
+
+def _arm_expiry(session: Session, cert: Certificate) -> None:
+    """(Re-)arm the expiry timer of a certificate: one pending CERTIFICATE_EXPIRY timer per certificate, due the day after
+    its last valid day."""
+    for timer in session.execute(select(Timer).where(Timer.kind == "CERTIFICATE_EXPIRY", Timer.object_id == cert.id,
+                                                     Timer.fired_at.is_(None))).scalars():
+        timer.fired_at = clock.now()
+        timer.payload = {**(timer.payload or {}), "cancelled": True}
+    workflow.create_timer(session, "CERTIFICATE_EXPIRY", "CERTIFICATE", cert.id, _expiry_due(cert))
+
+
+def _ensure_expiry_timer(session: Session, cert: Certificate) -> None:
+    pending = session.execute(select(Timer.id).where(Timer.kind == "CERTIFICATE_EXPIRY", Timer.object_id == cert.id,
+                                                     Timer.fired_at.is_(None))).first()
+    if pending is None and cert.status == "VALID":
+        workflow.create_timer(session, "CERTIFICATE_EXPIRY", "CERTIFICATE", cert.id, _expiry_due(cert))
+
+
+def add_certificates(session: Session, supplier: Supplier, certificates: list[dict]) -> list[Certificate]:
+    """Store certificates (a new one of a type already on file is a renewal) unverified, with the categories they are
+    mandatory for derived from SUPPLIER-QUAL, and arm each expiry timer at once (F8-08)."""
     p = principal(session)
+    created = []
     for cert in certificates:
-        session.add(Certificate(
-            tenant_id=tenant_id, supplier_id=supplier.id, type=cert["type"], number=cert["number"],
-            issued_on=date.fromisoformat(str(cert["issued_on"])), expires_on=date.fromisoformat(str(cert["expires_on"])),
-            mandatory_for=cert.get("mandatory_for", []), verified=False, status="VALID", created_by=p.user_id,
-        ))
+        try:
+            cert_type, number = str(cert["type"]).strip().upper(), str(cert["number"]).strip()
+            issued_on = cert["issued_on"] if isinstance(cert["issued_on"], date) else date.fromisoformat(str(cert["issued_on"]))
+            expires_on = cert["expires_on"] if isinstance(cert["expires_on"], date) else date.fromisoformat(str(cert["expires_on"]))
+        except (KeyError, TypeError, ValueError):
+            raise Problem(422, "VALIDATION_FAILED", "Each certificate needs type, number, issued_on and expires_on (YYYY-MM-DD)", rule_ref="F8-02")
+        if not cert_type or not number:
+            raise Problem(422, "VALIDATION_FAILED", "Certificate type and number are required", rule_ref="F8-02")
+        if expires_on <= issued_on:
+            raise Problem(422, "VALIDATION_FAILED", f"Certificate {cert_type} {number} expires before it is issued", rule_ref="F8-02")
+        if expires_on < clock.today():
+            raise Problem(422, "VALIDATION_FAILED", f"Certificate {cert_type} {number} expired on {expires_on.isoformat()}", rule_ref="F8-02")
+        row = Certificate(tenant_id=current_tenant(session), supplier_id=supplier.id, type=cert_type, number=number, issued_on=issued_on,
+                          expires_on=expires_on, mandatory_for=mandatory_categories(session, supplier, cert_type), verified=False,
+                          status="VALID", created_by=p.user_id)
+        session.add(row)
+        session.flush()
+        _arm_expiry(session, row)
+        created.append(row)
+    if created:
+        audit.record(session, "SUPPLIER", supplier.id, "CERTIFICATES_SUBMITTED", object_ref=supplier.code,
+                     after={"certificates": [{"type": c.type, "number": c.number, "expiresOn": c.expires_on.isoformat(),
+                                              "mandatoryFor": list(c.mandatory_for or [])} for c in created]})
+    return created
+
+
+def submit_profile(session: Session, supplier: Supplier, *, bank_account: Optional[str] = None, ifsc: Optional[str] = None,
+                   holder_name: Optional[str] = None, certificates: Optional[list[dict]] = None) -> dict:
+    """F8-02 supplier profile: certificates at any time; bank details only while onboarding is still running. After
+    onboarding a bank change goes through POST /v1/suppliers/{code}/bank-changes (its own BANK_CHANGE process: call-back,
+    dual finance approval, cooling-off)."""
+    require_supplier_user(session, supplier.id)
+    certificates = list(certificates or [])
+    bank = [v for v in (bank_account, ifsc, holder_name) if v and str(v).strip()]
+    if bank and len(bank) < 3:
+        raise Problem(422, "VALIDATION_FAILED", "Bank details need account number, IFSC and account holder", rule_ref="F8-02")
+    if not bank and not certificates:
+        raise Problem(422, "VALIDATION_FAILED", "Submit bank details or at least one certificate", rule_ref="F8-02")
+    instance = _instance(session, supplier)
+    onboarding = instance is not None and instance.status == "RUNNING"
+    if bank:
+        if supplier.status == "BLOCKED":
+            raise Problem(409, "SUPPLIER_BLOCKED", f"{supplier.code} is blocked; bank details cannot be changed", rule_ref="MDM-04")
+        if not onboarding:
+            raise Problem(409, "BANK_CHANGE_PROCESS_REQUIRED",
+                          f"Onboarding of {supplier.code} has ended: bank details change only through POST /v1/suppliers/{supplier.code}/bank-changes "
+                          "(call-back and dual finance approval)", rule_ref="MDM-04", endpoint=f"/v1/suppliers/{supplier.code}/bank-changes")
+        pending = session.execute(select(BankChangeRequest.number).where(
+            BankChangeRequest.supplier_id == supplier.id, BankChangeRequest.status.in_(("PENDING_CALLBACK", "PENDING_APPROVAL")))).scalar()
+        if pending:
+            raise Problem(409, "BANK_CHANGE_PENDING", f"Bank change {pending} is still being verified; wait for its decision", rule_ref="MDM-04")
+    created = add_certificates(session, supplier, certificates)
+    result = {"certificates": [{"id": str(c.id), "type": c.type, "number": c.number, "mandatoryFor": list(c.mandatory_for or [])}
+                               for c in created]}
+    if not bank:
+        return result
     change = request_bank_change(session, supplier, bank_account=bank_account, ifsc=ifsc, holder_name=holder_name,
                                  in_onboarding=True)
-    instance = _instance(session, supplier)
     workflow.step(session, instance, "F8-02", outcome=f"profile submitted with {len(certificates)} certificates")
     screening = screen(session, supplier)
-    return {"screening": screening, "bankChange": change.number}
+    return {**result, "screening": screening, "bankChange": change.number}
 
 
 # ---------------------------------------------------------------- F8-03 licensed sanctions / watch-list feed
@@ -216,14 +315,34 @@ def sync_sanctions(session: Session) -> dict:
 
 
 # ---------------------------------------------------------------- F8-03 screening
+DUPLICATE_NAME_RATIO = 0.9
+_LEGAL_FORM_WORDS = re.compile(r"\b(?:the|messrs|pvt|private|ltd|limited|llp|inc|llc|plc|co|company|corp|corporation)\b")
+
+
+def normalise_legal_name(name: str) -> str:
+    """Legal name for duplicate matching: case, punctuation and dots ("K.P.R." = "KPR", "L.L.P." = "LLP"), '&' = 'and',
+    an "M/s" prefix and the legal form (Pvt Ltd / Private Limited / Ltd / Limited / LLP, "The") do not distinguish
+    entities. Mirrors the SPD-03 duplicate-cluster normalisation (spend._norm_name) plus '&', dots and M/s."""
+    text = (name or "").lower().replace("&", " and ")
+    text = re.sub(r"^\s*m\s*/\s*s\b\.?", " ", text)
+    text = text.replace(".", "")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", _LEGAL_FORM_WORDS.sub(" ", text)).strip()
+
+
 def screen(session: Session, supplier: Supplier, record_step: bool = True) -> dict:
-    """F8-03 duplicate (GSTIN blind index, similar name) and sanctions screening. ``record_step`` is False when
-    screening re-runs after a master change, so the completed onboarding instance is not touched."""
+    """F8-03 duplicate (GSTIN and PAN blind index, similar normalised name) and sanctions screening. A GSTIN of the same
+    PAN in another state (or a second registration in the same state) is the same legal entity. ``record_step`` is False
+    when screening re-runs after a master change, so the completed onboarding instance is not touched."""
     duplicates = []
+    name = normalise_legal_name(supplier.legal_name)
     for other in session.execute(select(Supplier).where(Supplier.id != supplier.id)).scalars():
         if other.gstin_hash and other.gstin_hash == supplier.gstin_hash:
             duplicates.append({"code": other.code, "reason": "same GSTIN"})
-        elif difflib.SequenceMatcher(None, other.legal_name.lower(), supplier.legal_name.lower()).ratio() > 0.9:
+        elif other.pan_hash and other.pan_hash == supplier.pan_hash:
+            duplicates.append({"code": other.code, "reason": "same PAN (another GST registration of the same legal entity)"})
+        elif (other_name := normalise_legal_name(other.legal_name)) and name and \
+                difflib.SequenceMatcher(None, other_name, name).ratio() > DUPLICATE_NAME_RATIO:
             duplicates.append({"code": other.code, "reason": "similar legal name"})
     sanctions = [s.source for s in session.execute(select(SanctionEntry)).scalars()
                  if difflib.SequenceMatcher(None, s.name.lower(), supplier.legal_name.lower()).ratio() > SANCTIONS_MATCH_RATIO]
@@ -248,6 +367,84 @@ def screen(session: Session, supplier: Supplier, record_step: bool = True) -> di
     if sanctions:
         block(session, supplier, f"Sanctions match: {', '.join(sanctions)}")
     return result
+
+
+SCREENING_DECISIONS = ("CLEAR", "MERGE", "RESCREEN")
+
+
+def screening_gate(session: Session, supplier: Supplier) -> dict:
+    """F8-03 → F8-05: a supplier is qualified (QUALIFIED / CONDITIONAL) and created in the ERP only on a CLEAR screening,
+    or on a REVIEW screening (possible duplicate, sanctions provider unreachable) that a supplier manager other than the
+    requester has cleared. A supplier never screened is screened now."""
+    screening = supplier.screening or {}
+    if not screening.get("outcome"):
+        instance = _instance(session, supplier)
+        screening = screen(session, supplier, record_step=instance is not None and instance.status == "RUNNING")
+    outcome = screening.get("outcome")
+    if outcome == "BLOCKED":
+        raise rule_violation(f"{supplier.code} has a sanctions match ({', '.join(screening.get('sanctionsHits') or [])})", "F8-03")
+    if outcome == "REVIEW":
+        disposition = screening.get("disposition") or {}
+        if disposition.get("decision") != "CLEARED" or disposition.get("screenedAt") != screening.get("screenedAt"):
+            reasons = [f"{d['code']}: {d['reason']}" for d in screening.get("duplicates") or []]
+            if screening.get("providerError"):
+                reasons.append(f"sanctions provider error: {screening['providerError']}")
+            raise rule_violation(f"Screening of {supplier.code} is REVIEW ({'; '.join(reasons) or 'needs review'}): a supplier manager other "
+                                 "than the requester must clear it, merge the duplicate or re-screen first", "F8-03",
+                                 screening=outcome)
+    return screening
+
+
+def dispose_screening(session: Session, supplier: Supplier, decision: str, note: str, merge_into: Optional[str] = None) -> dict:
+    """Screening disposition by a supplier manager: CLEAR a REVIEW result (not a duplicate / provider outage checked
+    manually), MERGE the registration into the existing supplier it duplicates, or RESCREEN (re-run duplicate and
+    sanctions checks, e.g. once the provider is reachable). Clearing and merging are four-eyes against the requester."""
+    p = principal(session)
+    if "SUPPLIER_MANAGER" not in p.roles:
+        raise Problem(403, "FORBIDDEN", "Screening results are disposed by a supplier manager", rule_ref="F8-03")
+    decision = (decision or "").strip().upper()
+    if decision not in SCREENING_DECISIONS:
+        raise Problem(422, "INVALID_DECISION", f"decision must be one of {', '.join(SCREENING_DECISIONS)}")
+    note = (note or "").strip()
+    if len(note) < 3:
+        raise Problem(422, "REASON_REQUIRED", "Record why (call notes, documents checked)", rule_ref="F8-03")
+    before = dict(supplier.screening or {})
+    instance = _instance(session, supplier)
+    running = instance is not None and instance.status == "RUNNING"
+    if decision == "RESCREEN":
+        result = screen(session, supplier, record_step=running)
+        audit.record(session, "SUPPLIER", supplier.id, "SCREENING_DISPOSED", object_ref=supplier.code, reason=note,
+                     before={"outcome": before.get("outcome")}, after={"decision": "RESCREEN", "outcome": result["outcome"]})
+        return {"supplier": supplier.code, "decision": "RESCREEN", "screening": result}
+    if before.get("outcome") != "REVIEW":
+        raise Problem(409, "NOTHING_TO_DISPOSE", f"Screening of {supplier.code} is {before.get('outcome') or 'not run'}; only a REVIEW "
+                      "result is cleared or merged (re-screen to refresh it)", rule_ref="F8-03")
+    if p.user_id == supplier.created_by:
+        raise Problem(409, "SOD_CONFLICT", "The person who registered the supplier cannot dispose its screening", rule_ref="F8-03")
+    disposition = {"decision": "CLEARED" if decision == "CLEAR" else "MERGED", "by": str(p.user_id), "byName": p.name,
+                   "at": clock.now().isoformat(), "note": note, "screenedAt": before.get("screenedAt")}
+    if decision == "MERGE":
+        candidates = {d["code"] for d in before.get("duplicates") or []}
+        if not merge_into or merge_into not in candidates:
+            raise Problem(422, "MERGE_TARGET_REQUIRED", f"Merge into one of the suspected duplicates: {', '.join(sorted(candidates)) or 'none'}",
+                          rule_ref="F8-03")
+        disposition["mergedInto"] = merge_into
+        previous = supplier.status
+        supplier.status = "MERGED"
+        for q in session.execute(select(Qualification).where(Qualification.supplier_id == supplier.id, Qualification.status == "OPEN")).scalars():
+            q.status, q.decision, q.decision_reason = "DECIDED", "REJECTED", f"registration merged into {merge_into}"
+        for row in session.execute(select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars():
+            _set_category_status(session, supplier, row.category, "EXITED", f"duplicate registration merged into {merge_into}")
+        audit.record(session, "SUPPLIER", supplier.id, "MERGED", object_ref=supplier.code, before={"status": previous},
+                     after={"status": "MERGED", "mergedInto": merge_into}, reason=note)
+        if running:
+            workflow.end(session, instance, "F8-09", outcome=f"duplicate registration merged into {merge_into}", status="CANCELLED")
+    supplier.screening = {**before, "disposition": disposition}
+    audit.record(session, "SUPPLIER", supplier.id, "SCREENING_DISPOSED", object_ref=supplier.code, reason=note,
+                 before={"outcome": "REVIEW"}, after=disposition)
+    if running and decision == "CLEAR":
+        workflow.step(session, instance, "F8-03", outcome=f"screening review cleared by {p.name}")
+    return {"supplier": supplier.code, "decision": decision, "screening": supplier.screening}
 
 
 # ---------------------------------------------------------------- MDM-04 bank change (F8-04)
@@ -293,6 +490,10 @@ def callback_verify(session: Session, change: BankChangeRequest, note: str) -> B
     if instance is None:
         onboarding = _instance(session, supplier)
         instance = onboarding if onboarding and onboarding.status == "RUNNING" else None
+    if instance is None:
+        # An onboarding bank change whose onboarding has ended meanwhile: run it as its own BANK_CHANGE process, so the
+        # approval chain (bankApprovers finance controllers) lives on an instance and never collapses to one approval.
+        instance = workflow.start(session, PROCESS, "BANK_CHANGE", change.id, change.number)
     if instance is not None:
         workflow.step(session, instance, "F8-03", outcome="bank call-back verified")
     workflow.start_approval(
@@ -325,9 +526,8 @@ def _bank_change_decided(session: Session, task: Task, outcome: str) -> None:
     audit.record(session, "SUPPLIER", supplier.id, "BANK_CHANGE_APPROVED", object_ref=supplier.code,
                  after={"account": account.account_masked, "payableFrom": account.payable_from.isoformat(),
                         "approvers": len(approvers)}, rule_set_version=rule.ref)
-    # Verify tax IDs and certificates at the same dual check.
-    for cert in session.execute(select(Certificate).where(Certificate.supplier_id == supplier.id)).scalars():
-        cert.verified = True
+    # Certificates are not verified here: the finance approvers checked the bank letter, not the certificates
+    # (verify_certificate, by a supplier manager or quality inspector).
     if supplier.status in ("ACTIVE",):
         integration.enqueue(session, target_system=integration.target_system(session), message_type="SUPPLIER_MASTER",
                             idempotency_key=f"{supplier.code}|BANK|{change.number}", object_type="SUPPLIER",
@@ -368,8 +568,56 @@ def record_assessment(session: Session, qualification: Qualification, *, questio
     return qualification
 
 
+def current_certificate(session: Session, supplier_id: uuid.UUID, cert_type: str) -> Optional[Certificate]:
+    """The certificate of a type that counts: the VALID, unexpired one that runs longest (latest issue, then latest
+    upload on a tie), so a renewal replaces the certificate it renews deterministically."""
+    return session.execute(select(Certificate).where(
+        Certificate.supplier_id == supplier_id, Certificate.type == cert_type, Certificate.status == "VALID",
+        Certificate.expires_on >= clock.today()).order_by(
+        Certificate.expires_on.desc(), Certificate.issued_on.desc(), Certificate.created_at.desc(), Certificate.id.desc())
+        .limit(1)).scalar_one_or_none()
+
+
+VERIFIER_ROLES = ("SUPPLIER_MANAGER", "QUALITY_INSPECTOR")
+
+
+def verify_certificate(session: Session, cert: Certificate, note: str) -> Certificate:
+    """Explicit certificate verification (issuer register / original sighted) by a supplier manager or quality inspector,
+    never by the person who uploaded it; audited on the supplier."""
+    p = principal(session)
+    if not set(p.roles) & set(VERIFIER_ROLES):
+        raise Problem(403, "FORBIDDEN", "Certificates are verified by a supplier manager or a quality inspector", rule_ref="F8-04")
+    note = (note or "").strip()
+    if len(note) < 3:
+        raise Problem(422, "REASON_REQUIRED", "Record how the certificate was verified (e.g. issuer register checked)", rule_ref="F8-04")
+    if cert.verified:
+        raise Problem(409, "ALREADY_VERIFIED", f"Certificate {cert.type} {cert.number} is already verified")
+    if cert.status != "VALID" or cert.expires_on < clock.today():
+        raise illegal_transition("Certificate", cert.number, "EXPIRED" if cert.status == "VALID" else cert.status, "verify")
+    if cert.created_by == p.user_id:
+        raise Problem(409, "SOD_CONFLICT", "The person who uploaded a certificate cannot verify it", rule_ref="F8-04")
+    cert.verified = True
+    supplier = session.get(Supplier, cert.supplier_id)
+    audit.record(session, "SUPPLIER", supplier.id, "CERTIFICATE_VERIFIED", object_ref=supplier.code, reason=note,
+                 before={"certificate": cert.type, "number": cert.number, "verified": False},
+                 after={"certificate": cert.type, "number": cert.number, "verified": True, "expiresOn": cert.expires_on.isoformat()})
+    return cert
+
+
+def verify_certificates(session: Session, supplier: Supplier, note: str) -> list[Certificate]:
+    """Verify every unverified, valid certificate of a supplier (one audited verification each)."""
+    certs = session.execute(select(Certificate).where(Certificate.supplier_id == supplier.id, Certificate.verified.is_(False),
+                                                      Certificate.status == "VALID", Certificate.expires_on >= clock.today())
+                            .order_by(Certificate.type, Certificate.created_at)).scalars().all()
+    return [verify_certificate(session, cert, note) for cert in certs]
+
+
 def decide_qualification(session: Session, qualification: Qualification, decision: str, reason: str,
                          waiver: Optional[str] = None) -> dict:
+    qualification = session.execute(select(Qualification).where(Qualification.id == qualification.id).with_for_update()
+                                    .execution_options(populate_existing=True)).scalar_one()
+    if qualification.status != "OPEN":
+        raise illegal_transition("Qualification", f"{qualification.category}/{qualification.id}", qualification.status, "decide")
     supplier = session.get(Supplier, qualification.supplier_id)
     rule = rules.resolve(session, "SUPPLIER-QUAL", category=qualification.category)
     body = rule.body
@@ -378,10 +626,9 @@ def decide_qualification(session: Session, qualification: Qualification, decisio
         raise Problem(422, "INVALID_DECISION", "decision must be QUALIFIED, CONDITIONAL or REJECTED")
     gaps = []
     mandatory = body["mandatoryCertificates"].get(qualification.category, [])
-    certs = {c.type: c for c in session.execute(select(Certificate).where(Certificate.supplier_id == supplier.id)).scalars()}
     for cert_type in mandatory:
-        cert = certs.get(cert_type)
-        if cert is None or cert.status != "VALID" or cert.expires_on < clock.today():
+        cert = current_certificate(session, supplier.id, cert_type)
+        if cert is None:
             gaps.append(f"certificate {cert_type} missing or expired")
         elif not cert.verified:
             gaps.append(f"certificate {cert_type} not verified")
@@ -397,8 +644,12 @@ def decide_qualification(session: Session, qualification: Qualification, decisio
         raise rule_violation("A Conditional decision needs a written waiver", rule.ref)
     bank = session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == supplier.id,
                                                              SupplierBankAccount.active.is_(True))).scalar_one_or_none()
-    if decision != "REJECTED" and bank is None:
-        raise rule_violation("Bank details must be verified (dual finance approval) before qualification", "MDM-04")
+    if decision != "REJECTED":
+        if supplier.status in ("BLOCKED", "MERGED"):
+            raise rule_violation(f"{supplier.code} is {supplier.status}; it cannot be qualified", "F8-06")
+        if bank is None:
+            raise rule_violation("Bank details must be verified (dual finance approval) before qualification", "MDM-04")
+        screening_gate(session, supplier)
 
     qualification.status = "DECIDED"
     qualification.decision = decision
@@ -406,28 +657,40 @@ def decide_qualification(session: Session, qualification: Qualification, decisio
     status = {"QUALIFIED": "QUALIFIED", "CONDITIONAL": "CONDITIONAL", "REJECTED": "EXITED"}[decision]
     _set_category_status(session, supplier, qualification.category, status, reason, waiver=waiver)
     instance = _instance(session, supplier)
-    if instance:
+    running = instance is not None and instance.status == "RUNNING"
+    if running:
         workflow.step(session, instance, "F8-05", outcome=f"{qualification.category}: assessment complete")
         workflow.step(session, instance, "F8-06", outcome=f"{decision.lower()}" + (f" (gaps: {'; '.join(gaps)})" if gaps else ""))
 
     if decision != "REJECTED" and supplier.status == "REGISTERED":
         supplier.status = "ACTIVE"
+        target = integration.target_system(session)
+        from app.pic.platform import connectors
+        connectors.require_mapped(target, "SUPPLIER_MASTER")
         message = integration.enqueue(
-            session, target_system=integration.target_system(session), message_type="SUPPLIER_MASTER", idempotency_key=f"{supplier.code}|CREATE",
+            session, target_system=target, message_type="SUPPLIER_MASTER", idempotency_key=f"{supplier.code}|CREATE",
             object_type="SUPPLIER", object_id=supplier.id, object_ref=supplier.code,
             payload={"supplier": supplier.code, "name": supplier.legal_name, "gstin": supplier.gstin_masked,
                      "bank": bank.account_masked, "ifsc": bank.ifsc, "terms": supplier.payment_terms},
         )
         integration.process(session, message)
-        if instance:
+        if running:
             workflow.step(session, instance, "F8-07", outcome=f"supplier master created; ERP vendor {message.erp_doc_no}")
-    for cert in certs.values():
-        workflow.create_timer(session, "CERTIFICATE_EXPIRY", "CERTIFICATE", cert.id, _expiry_due(cert))
-    if instance:
+    for cert in session.execute(select(Certificate).where(Certificate.supplier_id == supplier.id)).scalars():
+        _ensure_expiry_timer(session, cert)  # normally armed at upload; certificates loaded before that get theirs now
+    categories = {r.category: r.status for r in session.execute(
+        select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars()}
+    pending = sorted(c for c, st in categories.items() if st in IN_ONBOARDING_STATUSES)
+    if running:
         workflow.step(session, instance, "F8-08", outcome="risk & performance monitoring on; certificate expiry timers set")
-        workflow.end(session, instance, "F8-09", outcome=status)
+        if pending:
+            # Qualification is per category: onboarding ends when the last invited category is decided.
+            workflow.wait(session, instance, "F8-05", outcome=f"still qualifying for {', '.join(pending)}")
+        else:
+            outcome = status if len(categories) == 1 else "; ".join(f"{c}: {st}" for c, st in sorted(categories.items()))
+            workflow.end(session, instance, "F8-09", outcome=outcome)
     return {"supplier": supplier.code, "category": qualification.category, "status": status, "gaps": gaps,
-            "ruleSetVersion": rule.ref}
+            "ruleSetVersion": rule.ref, "stillQualifying": pending}
 
 
 def _expiry_due(cert: Certificate):
@@ -447,19 +710,37 @@ def _certificate_expired(session: Session, timer) -> None:
         return
     cert.status = "EXPIRED"
     supplier = session.get(Supplier, cert.supplier_id)
+    # The categories that need this certificate come from SUPPLIER-QUAL, not from what the supplier declared; a renewal
+    # (another VALID, unexpired certificate of the same type) keeps the categories qualified.
+    mandatory = mandatory_categories(session, supplier, cert.type)
+    replacement = current_certificate(session, supplier.id, cert.type)
     audit.record(session, "SUPPLIER", supplier.id, "CERTIFICATE_EXPIRED", object_ref=supplier.code,
                  after={"certificate": cert.type, "number": cert.number, "expiresOn": cert.expires_on.isoformat(),
-                        "mandatoryFor": list(cert.mandatory_for or [])})
+                        "mandatoryFor": mandatory, **({"renewedBy": replacement.number} if replacement is not None else {})})
+    if replacement is not None:
+        return
     for row in session.execute(select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars():
-        if row.category in (cert.mandatory_for or []) and row.status in ACTIVE_CATEGORY_STATUSES:
+        if row.category in mandatory and row.status in ACTIVE_CATEGORY_STATUSES:
             _set_category_status(session, supplier, row.category, "CONDITIONAL", f"mandatory certificate {cert.type} expired")
 
 
 def block(session: Session, supplier: Supplier, reason: str) -> dict:
     before = supplier.status
+    before_categories = {r.category: r.status for r in session.execute(
+        select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars()}
     supplier.status = "BLOCKED"
     for row in session.execute(select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars():
         _set_category_status(session, supplier, row.category, "BLOCKED", reason)
+    # A blocked supplier is not paid: every unpaid invoice gets a payment block (the payment run also skips blocked
+    # suppliers); only an explicit unblock lifts the blocks set here.
+    payment_blocked = []
+    for invoice in session.execute(select(Invoice).where(Invoice.supplier_id == supplier.id, Invoice.payment_status == "UNPAID",
+                                                         Invoice.status.notin_(("REJECTED", "PAID"))).order_by(Invoice.number)).scalars():
+        if not invoice.payment_block:
+            invoice.payment_block = True
+            payment_blocked.append(invoice.number)
+            audit.record(session, "INVOICE", invoice.id, "PAYMENT_BLOCKED", object_ref=invoice.number, reason=reason,
+                         before={"paymentBlock": False}, after={"paymentBlock": True, "cause": "SUPPLIER_BLOCKED", "supplier": supplier.code})
     open_pos = session.execute(select(PurchaseOrder).where(
         PurchaseOrder.supplier_id == supplier.id,
         PurchaseOrder.status.in_(("RELEASED", "TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED")))).scalars().all()
@@ -467,9 +748,53 @@ def block(session: Session, supplier: Supplier, reason: str) -> dict:
         workflow.start_approval(session, None, "BLOCKED_SUPPLIER_PO", object_type="PURCHASE_ORDER", object_id=po.id,
                                 object_ref=po.number, chain=["BUYER"], step_id=None, initiator_id=None,
                                 evidence={"reason": reason})
-    audit.record(session, "SUPPLIER", supplier.id, "BLOCKED", object_ref=supplier.code, before={"status": before},
-                 after={"status": "BLOCKED", "openPosFlagged": [po.number for po in open_pos]}, reason=reason)
-    return {"supplier": supplier.code, "status": "BLOCKED", "openPosFlagged": [po.number for po in open_pos]}
+    audit.record(session, "SUPPLIER", supplier.id, "BLOCKED", object_ref=supplier.code, before={"status": before, "categories": before_categories},
+                 after={"status": "BLOCKED", "openPosFlagged": [po.number for po in open_pos], "paymentBlocked": payment_blocked}, reason=reason)
+    return {"supplier": supplier.code, "status": "BLOCKED", "openPosFlagged": [po.number for po in open_pos], "paymentBlocked": payment_blocked}
+
+
+def unblock(session: Session, supplier: Supplier, reason: str) -> dict:
+    """Explicit, audited unblock by a supplier manager: restores the status before the block and lifts the payment blocks
+    the block set (on posted invoices without open exceptions). A sanctions match must be re-screened clear first."""
+    p = principal(session)
+    if "SUPPLIER_MANAGER" not in p.roles:
+        raise Problem(403, "FORBIDDEN", "Suppliers are unblocked by a supplier manager")
+    reason = (reason or "").strip()
+    if len(reason) < 3:
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for lifting the block")
+    if supplier.status != "BLOCKED":
+        raise illegal_transition("Supplier", supplier.code, supplier.status, "unblock")
+    if (supplier.screening or {}).get("outcome") == "BLOCKED":
+        raise rule_violation(f"{supplier.code} has a sanctions match ({', '.join(supplier.screening.get('sanctionsHits') or [])}); "
+                             "re-screen it (screening disposition RESCREEN) before unblocking", "F8-03")
+    blocked = session.execute(select(AuditEvent).where(AuditEvent.object_type == "SUPPLIER", AuditEvent.object_id == supplier.id,
+                                                       AuditEvent.action == "BLOCKED").order_by(AuditEvent.seq.desc()).limit(1)).scalar_one_or_none()
+    before = (blocked.before or {}) if blocked is not None else {}
+    restored = before.get("status") or ("ACTIVE" if supplier.twin_ref else "REGISTERED")
+    if restored == "BLOCKED":
+        restored = "ACTIVE" if supplier.twin_ref else "REGISTERED"
+    supplier.status = restored
+    categories = before.get("categories") or {}
+    for row in session.execute(select(SupplierCategoryStatus).where(SupplierCategoryStatus.supplier_id == supplier.id)).scalars():
+        if row.status == "BLOCKED":
+            _set_category_status(session, supplier, row.category, categories.get(row.category) or "REGISTERED", f"unblocked: {reason}")
+    lifted = []
+    for number in ((blocked.after or {}).get("paymentBlocked") or []) if blocked is not None else []:
+        invoice = session.execute(select(Invoice).where(Invoice.number == number, Invoice.supplier_id == supplier.id)).scalar_one_or_none()
+        if invoice is None or not invoice.payment_block or invoice.payment_status != "UNPAID" or invoice.status != "POSTED":
+            continue  # not yet posted: matching and posting decide the block; paid or rejected: nothing to lift
+        if invoice.duplicate_of or session.execute(select(InvoiceException.id).where(InvoiceException.invoice_id == invoice.id,
+                                                                                    InvoiceException.status == "OPEN")).first():
+            continue
+        invoice.payment_block = False
+        lifted.append(invoice.number)
+        audit.record(session, "INVOICE", invoice.id, "PAYMENT_BLOCK_LIFTED", object_ref=invoice.number, reason=reason,
+                     before={"paymentBlock": True}, after={"paymentBlock": False, "cause": "SUPPLIER_UNBLOCKED"})
+    audit.record(session, "SUPPLIER", supplier.id, "UNBLOCKED", object_ref=supplier.code, before={"status": "BLOCKED"},
+                 after={"status": restored, "paymentBlockLifted": lifted}, reason=reason)
+    outbox.emit(session, "supplier.status.changed", "SUPPLIER", supplier.id, supplier.code,
+                {"supplierCode": supplier.code, "from": "BLOCKED", "to": restored, "reason": reason})
+    return {"supplier": supplier.code, "status": restored, "paymentBlockLifted": lifted}
 
 
 @workflow.on_task("BLOCKED_SUPPLIER_PO")
@@ -532,23 +857,87 @@ def _scorecard_on_receipt(session: Session, event) -> None:
     _score_receipt(session, gr, po, event)
 
 
+RECEIPT_OTIF = "RECEIPT_OTIF"  # per-receipt contribution (1 on time in full, 0 not), so a reversal can take it back out
+
+
+def _earlier_receipts_qty(session: Session, gr: GoodsReceipt, po_line_id: uuid.UUID) -> Decimal:
+    """Quantity received on the PO line by receipts posted before this one (reversed receipts do not count)."""
+    total = Decimal(0)
+    for other, qty in session.execute(select(GoodsReceipt, GrLine.qty).join(GrLine, GrLine.gr_id == GoodsReceipt.id).where(
+            GrLine.po_line_id == po_line_id, GoodsReceipt.id != gr.id, GoodsReceipt.status != "REVERSED")).all():
+        if (other.posting_date, other.created_at, str(other.id)) < (gr.posting_date, gr.created_at, str(gr.id)):
+            total += qty
+    return total
+
+
+def receipt_line_otif(session: Session, gr: GoodsReceipt, po: PurchaseOrder, line: GrLine) -> bool:
+    """On time in full for one receipt line, against the delivery-schedule lines this receipt fulfils: receipts fill the
+    schedule earliest date first, so this receipt covers the cumulative range (earlier receipts, earlier + this qty]. It is
+    on time when posted by the (confirmed) date of every schedule line in that range, and in full when it completes the
+    last of them (within the under-delivery tolerance). Lines without a schedule use the line quantity and need date."""
+    po_line = session.get(PoLine, line.po_line_id)
+    under = Decimal(str(po.tolerance.get("under_pct", 0)))
+    schedule = [(sl.qty, sl.confirmed_date or sl.delivery_date) for sl in session.execute(
+        select(PoScheduleLine).where(PoScheduleLine.po_line_id == po_line.id)
+        .order_by(PoScheduleLine.delivery_date, PoScheduleLine.seq)).scalars()] or [(po_line.qty, po_line.need_date)]
+    start = _earlier_receipts_qty(session, gr, po_line.id)
+    end = start + line.qty
+    cumulative, touched = Decimal(0), []
+    for qty, due in schedule:
+        low, high = cumulative, cumulative + qty
+        cumulative = high
+        if end > low and start < high:
+            touched.append((qty, due, high))
+    if not touched:
+        touched = [(schedule[-1][0], schedule[-1][1], cumulative)]  # over-delivery beyond the schedule counts on the last line
+    on_time = all(gr.posting_date <= due for _, due, _ in touched)
+    last_qty, _, last_end = touched[-1]
+    in_full = end >= last_end - last_qty * under / 100
+    return on_time and in_full
+
+
 def _score_receipt(session: Session, gr: GoodsReceipt, po: PurchaseOrder, event) -> None:
+    if gr.status == "REVERSED" or session.execute(select(TwinFeedback.id).where(
+            TwinFeedback.metric == RECEIPT_OTIF, TwinFeedback.source_ref == gr.number, TwinFeedback.supplier_id == po.supplier_id)).first():
+        return  # reversed before it was scored, or already scored
     card = _scorecard(session, po.supplier_id, gr.posting_date.strftime("%Y-%m"))
     lines = session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars().all()
     on_time = True
     for line in lines:
-        po_line = session.get(PoLine, line.po_line_id)
-        under = Decimal(str(po.tolerance.get("under_pct", 0)))
-        in_full = po_line.received_qty >= po_line.qty * (1 - under / 100)
-        on_time = on_time and gr.posting_date <= po_line.need_date and in_full
+        on_time = receipt_line_otif(session, gr, po, line) and on_time
         card.qty_received += line.qty
         card.qty_rejected += line.rejected_qty or 0
     card.receipts += 1
     card.on_time_in_full += 1 if on_time else 0
     _recompute(card)
+    _feedback(session, po.supplier_id, RECEIPT_OTIF, Decimal(1 if on_time else 0), event, gr.number)
     _feedback(session, po.supplier_id, "OTIF", card.otif_pct or Decimal(0), event, gr.number)
     if card.ppm is not None:
         _feedback(session, po.supplier_id, "PPM", card.ppm, event, gr.number)
+
+
+@outbox.consumer("goods_receipt.reversed", "supplier-scorecard")
+def _scorecard_on_reversal(session: Session, event) -> None:
+    """A reversed receipt (movement 102) leaves the scorecard: its receipt, OTIF hit and quantities are taken back out."""
+    gr = session.get(GoodsReceipt, uuid.UUID(event.payload["grId"]))
+    po = session.get(PurchaseOrder, gr.po_id)
+    scored = session.execute(select(TwinFeedback).where(TwinFeedback.metric == RECEIPT_OTIF, TwinFeedback.source_ref == gr.number,
+                                                        TwinFeedback.supplier_id == po.supplier_id)).scalars().first()
+    if scored is None or session.execute(select(TwinFeedback.id).where(
+            TwinFeedback.metric == f"{RECEIPT_OTIF}_REVERSED", TwinFeedback.source_ref == gr.number,
+            TwinFeedback.supplier_id == po.supplier_id)).first():
+        return  # never scored (reversed while in quality inspection) or already taken out
+    card = _scorecard(session, po.supplier_id, gr.posting_date.strftime("%Y-%m"))
+    for line in session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars():
+        card.qty_received -= line.qty
+        card.qty_rejected -= line.rejected_qty or 0
+    card.receipts = max(card.receipts - 1, 0)
+    card.on_time_in_full = max(card.on_time_in_full - (1 if scored.value == 1 else 0), 0)
+    card.otif_pct = None if not card.receipts else card.otif_pct
+    card.ppm = None if not card.qty_received else card.ppm
+    _recompute(card)
+    _feedback(session, po.supplier_id, f"{RECEIPT_OTIF}_REVERSED", Decimal(-scored.value), event, gr.number)
+    _feedback(session, po.supplier_id, "OTIF", card.otif_pct or Decimal(0), event, gr.number)
 
 
 @outbox.consumer("invoice.posted", "supplier-scorecard")

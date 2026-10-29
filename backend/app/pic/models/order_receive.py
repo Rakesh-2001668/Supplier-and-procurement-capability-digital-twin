@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -56,6 +56,7 @@ class PoLine(TenantScoped, Base):
     __tablename__ = "po_line"
     __table_args__ = (
         UniqueConstraint("tenant_id", "po_id", "line_no"),
+        Index("ix_po_line_material_plant", "tenant_id", "material_id", "plant"),
         # §5.2: a contract-priced line outside tolerance must carry a justification.
         CheckConstraint("NOT price_deviation OR deviation_reason IS NOT NULL", name="deviation_reason"),
     )
@@ -136,6 +137,7 @@ class Asn(TenantScoped, Base):
 
 class AsnLine(TenantScoped, Base):
     __tablename__ = "asn_line"
+    __table_args__ = (Index("ix_asn_line_asn", "tenant_id", "asn_id"), Index("ix_asn_line_po_line", "tenant_id", "po_line_id"))
     asn_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.asn.id"), nullable=False)
     po_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.po_line.id"), nullable=False)
     qty: Mapped[Decimal] = mapped_column(QTY, nullable=False)

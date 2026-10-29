@@ -65,13 +65,13 @@ INTERNAL_USERS = [
 
 SUPPLIERS = [
     # code, legal name, GSTIN, IFSC, account, terms, incoterms, categories, twin (free capacity/month, trust, late prob, ppm, lead days)
-    ("TF001", "Trichy Forge Pvt Ltd", "33AABCT1234K1Z5", "SBIN0001234", "30112345678", "N60", "FCA Trichy", [CATEGORY],
+    ("TF001", "Trichy Forge Pvt Ltd", "33AABCT1234K1ZM", "SBIN0001234", "30112345678", "N60", "FCA Trichy", [CATEGORY],
      (60000, "0.860", "0.220", 1200, 12), "tf.sales"),
-    ("KD002", "Kovai Diecast Pvt Ltd", "33AABCK5678L1Z2", "HDFC0002345", "50100234567", "N45", "FCA Coimbatore", [CATEGORY],
+    ("KD002", "Kovai Diecast Pvt Ltd", "33AABCK5678L1Z5", "HDFC0002345", "50100234567", "N45", "FCA Coimbatore", [CATEGORY],
      (45000, "0.810", "0.120", 800, 10), "kd.sales"),
-    ("SLA003", "Salem Light Alloys Pvt Ltd", "33AABCS9012M1Z8", "ICIC0003456", "000405123456", "N30", "FCA Salem", [CATEGORY],
+    ("SLA003", "Salem Light Alloys Pvt Ltd", "33AABCS9012M1ZB", "ICIC0003456", "000405123456", "N30", "FCA Salem", [CATEGORY],
      (70000, "0.740", "0.180", 2500, 14), "sla.sales"),
-    ("HTS004", "Hosur Tooling Services", "33AABCH3456N1Z1", "CNRB0004567", "1234101009876", "N30", None, ["TOOLING-SERVICES"],
+    ("HTS004", "Hosur Tooling Services", "33AABCH3456N1ZG", "CNRB0004567", "1234101009876", "N30", None, ["TOOLING-SERVICES"],
      (400, "0.900", "0.100", 0, 2), "hts.service"),
 ]
 
@@ -220,6 +220,8 @@ def _onboard_suppliers(sc: Scenario, password: str) -> dict:
             change_id = change.id
         sc.approve_all(change_id, at(day + _days(1), 15), "Bank letter and cancelled cheque verified")
         with sc.act("supplier.manager", at(day + _days(3), 10)) as s:
+            # F8-04: the certificates are verified explicitly (issuer register), no longer as a side effect of the bank approval.
+            svc.verify_certificates(s, s.get(Supplier, supplier_id), "Checked against the certification body's public register")
             for category in categories:
                 q = svc.start_qualification(s, s.get(Supplier, supplier_id), category)
                 score = {"TF001": (86, 88), "KD002": (84, 85), "SLA003": (74, 78), "HTS004": (82, 80)}[code]
@@ -231,7 +233,7 @@ def _onboard_suppliers(sc: Scenario, password: str) -> dict:
         sc.note(f"F8 onboarded {code} {name}: bank dual-approved, qualified for {', '.join(categories)}")
     # A supplier still in onboarding: profile submitted, waiting for the bank call-back.
     with sc.act("supplier.manager", at(date(2026, 10, 20), 10)) as s:
-        mpc = svc.register(s, code="MPC005", legal_name="Madurai Precision Castings", gstin="33AABCM7890P1Z4", pan="AABCM7890P", state_code="33",
+        mpc = svc.register(s, code="MPC005", legal_name="Madurai Precision Castings", gstin="33AABCM7890P1ZT", pan="AABCM7890P", state_code="33",
                            contact_email="sales@mpc005.example", categories=[CATEGORY], payment_terms="N45", incoterms="FCA Madurai")
         s.add(AppUser(tenant_id=sc.tenant_id, email=email("mpc.sales"), full_name="Madurai Precision Castings – sales",
                       password_hash=hash_password(password), roles=["SUPPLIER_USER"], attributes={}, supplier_id=mpc.id, mfa_enrolled=True))
@@ -298,7 +300,7 @@ def run(password: str) -> list[str]:
 
     reference.deploy_process_definitions()
     tenant_id = reference.create_tenant(*TENANT)
-    reference.bootstrap(tenant_id, company=("1000", TENANT[1], "33AAACA4321F1Z9"),
+    reference.bootstrap(tenant_id, company=("1000", TENANT[1], "33AAACA4321F1ZF"),
                         plants=[("P100", "Hosur", "33"), ("P200", "Chennai", "33")],
                         cost_objects=[("COST_CENTER", "4100", "Production engineering – Hosur"), ("COST_CENTER", "4200", "IT services"),
                                       ("WBS", "C-2207", "Tower B structure")],
@@ -336,7 +338,9 @@ def run(password: str) -> list[str]:
                                                            "description": "Custom fixture for DC-330 line 3", "material_group": "41-FIXTURE",
                                                            "category": "TOOLING", "qty": "2", "uom": "EA", "price_est_minor": 9_250_000,
                                                            "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100",
-                                                           "need_date": "2026-12-01", "quotes_attached": 1, "reusable": True,
+                                                           "need_date": "2026-12-01", "reusable": True,
+                                                           "quotes": [{"supplier": "HTS004", "reference": "HTS/Q/26-27/0412",
+                                                                       "date": "2026-10-08"}],
                                                            "attributes": {"line": "DC-330 L3", "type": "fixture"}}])
         requisition.submit(s, fixture)
         fixture_id, fixture_no = fixture.id, fixture.number
@@ -458,7 +462,7 @@ def run(password: str) -> list[str]:
     # ---------------------------------------------------------------- F7 invoice → exception → credit note → post
     tf = suppliers["TF001"]
     with sc.act("tf.sales", at(date(2026, 11, 14), 10)) as s:
-        irn = payables.expected_irn("33AABCT1234K1Z5", "2026-27", "INV", "INV-TF-8812")
+        irn = payables.expected_irn("33AABCT1234K1ZM", "2026-27", "INV", "INV-TF-8812")
         invoice = payables.capture(s, supplier="TF001", supplier_invoice_no="INV-TF-8812", invoice_date=date(2026, 11, 14), channel="E_INVOICE",
                                    irn=irn, lines=[{"po": po_ids["TF001"][1], "po_line": 10, "qty": "5400", "unit_price": "398",
                                                     "gst_rate": "18", "hsn": "87089900"}])
@@ -481,7 +485,8 @@ def run(password: str) -> list[str]:
                                  lines=[{"item_type": "FREE_TEXT", "purchase_type": "SERVICE", "description": "Die maintenance AMC – November 2026 (T&M)",
                                          "material_group": "SVC-TOOLING", "category": "TOOLING-SERVICES", "qty": "40", "uom": "H",
                                          "price_est_minor": 300_000, "account_assignment_type": "COST_CENTER", "account_assignment_code": "4100",
-                                         "need_date": "2026-11-30", "quotes_attached": 1}])
+                                         "need_date": "2026-11-30",
+                                         "quotes": [{"supplier": "HTS004", "reference": "HTS/Q/26-27/0438", "date": "2026-10-30"}]}])
         requisition.submit(s, amc)
         amc_id, amc_no = amc.id, amc.number
     sc.approve_all(amc_id, at(date(2026, 11, 3), 14))
@@ -530,4 +535,17 @@ def run(password: str) -> list[str]:
     operations.run(sc, password)
     intelligence.run(sc)
     clock.set_pinned(None)
+    _record_signature(tenant_id)
     return sc.log
+
+
+# Bump when the signature case changes in a way the AXN dataset packs depend on (users, documents, identifiers). The
+# packs REQUIRE this marker, so they are skipped, not half-applied, on a database seeded by an older release.
+SIGNATURE_KEY, SIGNATURE_VERSION = "axn-signature-case", "2026.10.29"
+
+
+def _record_signature(tenant_id: uuid.UUID) -> None:
+    from app.pic.models import DatasetLoad
+    with tenant_tx(tenant_id) as s:
+        s.add(DatasetLoad(tenant_id=tenant_id, key=SIGNATURE_KEY, version=SIGNATURE_VERSION, loaded_at=clock.now(),
+                          summary={"notes": ["Axion signature case (seed/axion.py, operations.py, intelligence.py)"]}))

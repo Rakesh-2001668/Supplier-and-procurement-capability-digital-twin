@@ -100,10 +100,10 @@ export function AsnDialog({ po, onClose }: { po: PoDetail; onClose: () => void }
 const METHODS = ['TIME_MATERIAL', 'MILESTONE', 'UNIT_RATE', 'PROGRESS'];
 
 function monthBounds() {
-  const d = new Date();
-  const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
-  return [first.toISOString().slice(0, 10), last.toISOString().slice(0, 10)];
+  // The current month in IST (the business calendar), not in UTC.
+  const [y, m] = today().split('-').map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return [`${y}-${String(m).padStart(2, '0')}-01`, `${y}-${String(m).padStart(2, '0')}-${String(last).padStart(2, '0')}`];
 }
 
 export function ServiceSheetDialog({ po, onClose }: { po: PoDetail; onClose: () => void }) {
@@ -257,27 +257,47 @@ export function CreditNoteDialog({ invoiceId, onClose }: { invoiceId: string; on
   const [noteDate, setNoteDate] = useState(today());
   const [reason, setReason] = useState('');
   const [qtys, setQtys] = useState<Record<number, string>>({});
+  // Value credit (price difference) per unit in rupees; empty = a quantity credit at the invoice price.
+  const [prices, setPrices] = useState<Record<number, string>>({});
   const open = (inv?.exceptions ?? []).filter((e) => e.status === 'OPEN' && ['QUANTITY', 'PRICE'].includes(e.type));
   const [prefilled, setPrefilled] = useState(false);
   if (inv && !prefilled) {
     setPrefilled(true);
     const defaults: Record<number, string> = {};
+    const priceDefaults: Record<number, string> = {};
     for (const l of inv.lines) {
       const exc = inv.exceptions.find((e) => e.status === 'OPEN' && e.type === 'QUANTITY' && e.invoice_line_id === l.id);
+      const price = inv.exceptions.find((e) => e.status === 'OPEN' && e.type === 'PRICE' && e.invoice_line_id === l.id);
       defaults[l.line_no] = exc?.delta?.qty !== undefined ? String(exc.delta.qty) : '';
+      if (!exc && price && Number(price.delta?.perUnitMinor) > 0) {
+        defaults[l.line_no] = String(Number(l.qty));
+        priceDefaults[l.line_no] = rupees(Number(price.delta.perUnitMinor));
+      }
     }
     setQtys(defaults);
+    setPrices(priceDefaults);
     const first = inv.exceptions.find((e) => e.status === 'OPEN' && ['QUANTITY', 'PRICE'].includes(e.type));
     if (first) setReason((r) => r || first.detail);
   }
   const chosen = Object.entries(qtys).filter(([, v]) => isPositive(v));
+  const unitCredit = (line: string) => (prices[Number(line)] && isPositive(prices[Number(line)]) ? rupeesToMinor(prices[Number(line)]) : null);
   const amount = inv ? chosen.reduce((s, [line, v]) => {
     const l = inv.lines.find((x) => x.line_no === Number(line));
-    return s + (l ? Math.round(Number(v) * l.unit_price_minor * (1 + Number(l.gst_rate) / 100)) : 0);
+    const unit = unitCredit(line) ?? l?.unit_price_minor ?? 0;
+    return s + (l ? Math.round(Number(v) * unit * (1 + Number(l.gst_rate) / 100)) : 0);
   }, 0) : 0;
+  const tooMuch = inv ? chosen.some(([line, v]) => {
+    const l = inv.lines.find((x) => x.line_no === Number(line));
+    const unit = unitCredit(line);
+    return !l || Number(v) > Number(l.qty) || (unit !== null && unit > l.unit_price_minor);
+  }) : false;
+  const badPrice = Object.entries(prices).some(([line, v]) => v !== '' && !isPositive(v) && isPositive(qtys[Number(line)] ?? ''));
   const send = useCommand(() => api.post<{ number: string }>(`/invoices/${invoiceId}/credit-notes`, {
     supplier_credit_note_no: noteNo.trim(), note_date: noteDate, reason: reason.trim(),
-    lines: chosen.map(([line, v]) => ({ invoice_line: Number(line), qty: v })),
+    lines: chosen.map(([line, v]) => {
+      const unit = unitCredit(line);
+      return unit !== null ? { invoice_line: Number(line), qty: v, unit_credit_minor: unit } : { invoice_line: Number(line), qty: v };
+    }),
   }), { success: (r) => `Credit note ${r.number} issued — AP can now resolve the exception`, onSuccess: onClose });
   return (
     <Dialog open title={`Issue credit note${inv ? ` against ${inv.number}` : ''}`} onClose={onClose}>
@@ -300,20 +320,26 @@ export function CreditNoteDialog({ invoiceId, onClose }: { invoiceId: string; on
           </div>
           <div className="space-y-2">
             {inv.lines.map((l) => (
-              <div key={l.id} className="grid items-end gap-3 md:grid-cols-3">
+              <div key={l.id} className="grid items-end gap-3 md:grid-cols-4">
                 <div className="text-sm md:col-span-2">
                   <p className="font-medium">Invoice line {l.line_no} · {l.description}</p>
                   <p className="text-xs text-slate-500">Invoiced {qty(l.qty)} at {inr(l.unit_price_minor)} + GST {l.gst_rate}%</p>
                 </div>
                 <Field label="Credit quantity">{(id) => <Input id={id} value={qtys[l.line_no] ?? ''} onChange={(e) => setQtys((q) => ({ ...q, [l.line_no]: e.target.value }))} />}</Field>
+                <Field label="Price credit / unit (₹)" hint="Leave empty to credit the quantity at the invoice price">
+                  {(id) => <Input id={id} value={prices[l.line_no] ?? ''} placeholder="e.g. 5.00" onChange={(e) => setPrices((p) => ({ ...p, [l.line_no]: e.target.value }))} />}
+                </Field>
               </div>
             ))}
           </div>
+          {(tooMuch || badPrice) && (
+            <p role="alert" className="text-sm text-red-700">A credit quantity cannot exceed the invoiced quantity, and a price credit must be positive and at most the invoice price.</p>
+          )}
           <p className="text-right text-sm">Credit incl. GST ≈ <span className="font-semibold">{inr(amount)}</span></p>
           {inv.creditNotes.length > 0 && <p className="text-xs text-slate-500">Already issued: {inv.creditNotes.map((n) => `${n.number} (${inr(n.gross_minor)})`).join(', ')}</p>}
           <div className="flex justify-end gap-2">
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="primary" disabled={!noteNo.trim() || !reason.trim() || !noteDate || !chosen.length} busy={send.isPending} onClick={() => send.mutate()}>Issue credit note</Button>
+            <Button variant="primary" disabled={!noteNo.trim() || !reason.trim() || !noteDate || !chosen.length || tooMuch || badPrice} busy={send.isPending} onClick={() => send.mutate()}>Issue credit note</Button>
           </div>
         </div>
       )}
@@ -358,17 +384,15 @@ export function SignDialog({ number, defaultName, onClose }: { number: string; d
   );
 }
 
-const POSITIONS = ['STANDARD', 'FALLBACK', 'NON_STANDARD'];
-
 export function RedlineDialog({ number, onClose }: { number: string; onClose: () => void }) {
   const { data: c, isLoading, error } = useApi<ContractDetail>(`/contracts/${encodeURIComponent(number)}`);
   const [code, setCode] = useState('');
   const [text, setText] = useState('');
-  const [position, setPosition] = useState('FALLBACK');
   const clause = c?.clauses.find((x) => x.code === code);
   if (c?.clauses.length && !code) { setCode(c.clauses[0].code); setText(c.clauses[0].text); }
-  const send = useCommand(() => api.post<{ code: string; risk_score: number }>(`/contracts/${encodeURIComponent(number)}/redlines`, { clause: code, text: text.trim(), position }), {
-    success: (r) => `Redline on ${r.code} sent · playbook risk score ${r.risk_score}`, onSuccess: onClose,
+  // The buyer classifies a supplier redline against its playbook; until then the clause counts as non-standard.
+  const send = useCommand(() => api.post<{ code: string }>(`/contracts/${encodeURIComponent(number)}/redlines`, { clause: code, text: text.trim() }), {
+    success: (r) => `Redline on ${r.code} sent · the buyer's contract manager reviews it before the contract goes for approval`, onSuccess: onClose,
   });
   return (
     <Dialog open title={`Propose redline · ${number}`} onClose={onClose}>
@@ -380,9 +404,10 @@ export function RedlineDialog({ number, onClose }: { number: string; onClose: ()
           </Field>
           {clause && <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700"><span className="text-xs font-semibold uppercase text-slate-500">Current</span><br />{clause.text}</p>}
           <Field label="Proposed text">{(id) => <Textarea id={id} value={text} onChange={(e) => setText(e.target.value)} className="min-h-[120px]" />}</Field>
-          <Field label="Position against Axion's playbook" hint="Non-standard positions need higher approval on Axion's side">
-            {(id) => <Select id={id} value={position} onChange={(e) => setPosition(e.target.value)} options={POSITIONS.map((p) => ({ value: p, label: label(p) }))} />}
-          </Field>
+          <p className="text-xs text-slate-500">
+            Your proposal is recorded against the current text and reviewed by the buyer&apos;s contract manager, who accepts it or keeps the
+            original wording before the contract goes for internal approval.
+          </p>
           <div className="flex justify-end gap-2">
             <Button onClick={onClose}>Cancel</Button>
             <Button variant="primary" disabled={!code || !text.trim() || text.trim() === clause?.text} busy={send.isPending} onClick={() => send.mutate()}>Send redline</Button>
@@ -524,6 +549,102 @@ export function CapaPanel() {
         </ul>
       )}
       {open && <CapaResponseDialog capa={open} onClose={() => setOpen(null)} />}
+    </Card>
+  );
+}
+
+
+// ---------------------------------------------------------------- F8-02 profile: bank details (onboarding only) and certificates
+type ProfileCertificate = { id: string; type: string; number: string; issued_on: string; expires_on: string; verified: boolean; status: string;
+  mandatory_for: string[] | null };
+type ProfileState = { supplier: string; status: string; onboardingOpen: boolean; certificates: ProfileCertificate[];
+  bankAccounts: { account_masked: string; ifsc: string; holder_name: string; active: boolean; payable_from: string | null }[];
+  pendingBankChanges: { number: string; status: string }[] };
+type CertDraft = { type: string; number: string; issued_on: string; expires_on: string };
+const emptyCert = (): CertDraft => ({ type: '', number: '', issued_on: '', expires_on: '' });
+
+export function ProfilePanel({ supplierCode }: { supplierCode: string }) {
+  const path = `/suppliers/${encodeURIComponent(supplierCode)}/profile`;
+  const { data, isLoading, error } = useApi<ProfileState>(path);
+  const [account, setAccount] = useState('');
+  const [ifsc, setIfsc] = useState('');
+  const [holder, setHolder] = useState('');
+  const [certs, setCerts] = useState<CertDraft[]>([emptyCert()]);
+  const bankGiven = !!(account || ifsc || holder);
+  const accountOk = /^[0-9]{9,18}$/.test(account);
+  const ifscOk = /^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc);
+  const filled = certs.filter((c) => c.type.trim() || c.number.trim() || c.issued_on || c.expires_on);
+  const certsOk = filled.every((c) => c.type.trim().length >= 2 && c.number.trim().length >= 2 && c.issued_on && c.expires_on && c.expires_on > c.issued_on
+    && c.expires_on >= today());
+  const bankOk = !bankGiven || (accountOk && ifscOk && holder.trim().length >= 3);
+  const submit = useCommand(() => api.post<{ bankChange?: string; certificates: unknown[] }>(path, {
+    ...(bankGiven ? { bank_account: account, ifsc, holder_name: holder.trim() } : {}),
+    certificates: filled.map((c) => ({ type: c.type.trim().toUpperCase(), number: c.number.trim(), issued_on: c.issued_on, expires_on: c.expires_on })),
+  }), {
+    success: (r) => [r.bankChange ? `Bank details sent for verification (${r.bankChange})` : '', r.certificates.length ? `${r.certificates.length} certificate(s) uploaded for verification` : '']
+      .filter(Boolean).join(' · '),
+    onSuccess: () => { setAccount(''); setIfsc(''); setHolder(''); setCerts([emptyCert()]); },
+  });
+  if (isLoading) return <Loading />;
+  if (error || !data) return <ProblemBox error={error} />;
+  const pendingBank = data.pendingBankChanges.length > 0;
+  return (
+    <Card title="Bank details and certificates (F8-02)">
+      <div className="space-y-5">
+        <div>
+          <p className="text-sm font-semibold">Bank account</p>
+          {data.bankAccounts.length ? (
+            <ul className="mt-1 space-y-1 text-sm">
+              {data.bankAccounts.map((b) => (
+                <li key={`${b.account_masked}-${b.ifsc}`} className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono">{b.account_masked}</span> · <span className="font-mono">{b.ifsc}</span> · {b.holder_name}
+                  <StatusChip status={b.active ? 'ACTIVE' : 'PENDING'} />
+                  {b.payable_from && <span className="text-xs text-slate-500">payable from {dateTime(b.payable_from)}</span>}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="mt-1 text-sm text-slate-500">No bank account on file yet.</p>}
+          {pendingBank && <p className="mt-1 text-xs text-amber-800">Bank change {data.pendingBankChanges.map((c) => `${c.number} (${label(c.status).toLowerCase()})`).join(', ')} is being verified.</p>}
+          {data.onboardingOpen && !pendingBank ? (
+            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              <Field label="Account number" hint={account && !accountOk ? '9–18 digits' : undefined}>{(id) => <Input id={id} inputMode="numeric" autoComplete="off" value={account} onChange={(e) => setAccount(e.target.value.replace(/\s/g, ''))} />}</Field>
+              <Field label="IFSC" hint={ifsc && !ifscOk ? 'e.g. SBIN0001234' : undefined}>{(id) => <Input id={id} maxLength={11} value={ifsc} onChange={(e) => setIfsc(e.target.value.toUpperCase().trim())} />}</Field>
+              <Field label="Account holder (as with the bank)">{(id) => <Input id={id} value={holder} onChange={(e) => setHolder(e.target.value)} />}</Field>
+            </div>
+          ) : !data.onboardingOpen && (
+            <p className="mt-1 text-xs text-slate-500">Your onboarding is complete. To change bank details, ask your Axion supplier manager: changes are verified by an independent call-back and approved by two finance controllers before any payment goes to the new account.</p>
+          )}
+        </div>
+        <div>
+          <p className="text-sm font-semibold">Certificates</p>
+          {data.certificates.length ? (
+            <ul className="mt-1 space-y-1 text-sm">
+              {data.certificates.map((c) => (
+                <li key={c.id} className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs font-semibold">{c.type}</span> {c.number} · valid {date(c.issued_on)} – {date(c.expires_on)}
+                  <StatusChip status={c.status} /> <span className="text-xs text-slate-500">{c.verified ? 'verified by Axion' : 'awaiting verification'}</span>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="mt-1 text-sm text-slate-500">No certificates uploaded yet.</p>}
+          <p className="mt-2 text-xs text-slate-500">Upload a renewal as a new certificate before the old one expires; Axion verifies each certificate against the issuing body&apos;s register.</p>
+          <div className="mt-2 space-y-2">
+            {certs.map((c, index) => (
+              <div key={index} className="grid items-end gap-3 md:grid-cols-4">
+                <Field label="Type">{(id) => <Input id={id} placeholder="e.g. IATF16949" value={c.type} onChange={(e) => setCerts((all) => all.map((x, i) => (i === index ? { ...x, type: e.target.value.toUpperCase() } : x)))} />}</Field>
+                <Field label="Certificate number">{(id) => <Input id={id} value={c.number} onChange={(e) => setCerts((all) => all.map((x, i) => (i === index ? { ...x, number: e.target.value } : x)))} />}</Field>
+                <Field label="Issued on">{(id) => <Input id={id} type="date" value={c.issued_on} onChange={(e) => setCerts((all) => all.map((x, i) => (i === index ? { ...x, issued_on: e.target.value } : x)))} />}</Field>
+                <Field label="Expires on">{(id) => <Input id={id} type="date" value={c.expires_on} onChange={(e) => setCerts((all) => all.map((x, i) => (i === index ? { ...x, expires_on: e.target.value } : x)))} />}</Field>
+              </div>
+            ))}
+            <Button onClick={() => setCerts((all) => [...all, emptyCert()])}>Add another certificate</Button>
+          </div>
+        </div>
+        {(!bankOk || !certsOk) && <p role="alert" className="text-sm text-red-700">Check the bank details (account 9–18 digits, IFSC like SBIN0001234) and that each certificate has a type, number and a future expiry after its issue date.</p>}
+        <div className="flex justify-end">
+          <Button variant="primary" disabled={!bankOk || !certsOk || (!bankGiven && !filled.length) || data.status === 'BLOCKED'} busy={submit.isPending} onClick={() => submit.mutate()}>Submit</Button>
+        </div>
+      </div>
     </Card>
   );
 }

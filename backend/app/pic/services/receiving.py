@@ -59,6 +59,14 @@ def sample_size(lot: Decimal) -> int:
     return 1250
 
 
+def _positive(qty, what: str) -> Decimal:
+    """Shipped, received and service quantities are strictly positive (a negative receipt is a reversal, never a line)."""
+    value = D(qty)
+    if not value.is_finite() or value <= 0:
+        raise Problem(422, "INVALID_QUANTITY", f"{what}: the quantity must be positive (got {qty})", rule_ref="RCV")
+    return value
+
+
 def _move(session: Session, *, material_id, plant, sloc, stock_type, batch, qty: Decimal, movement: str, ref_type, ref_id, ref) -> None:
     stock = session.execute(select(Stock).where(Stock.material_id == material_id, Stock.plant == plant, Stock.storage_location == sloc,
                                                 Stock.stock_type == stock_type, Stock.batch == batch).with_for_update()).scalar_one_or_none()
@@ -81,11 +89,11 @@ VEHICLE_NO = re.compile(r"^([A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}|[0-9]{2}BH[0-9]
 
 def _eway(session: Session, po: PurchaseOrder, consignment_minor: int, *, ship_date: date, eway_bill_no: Optional[str],
           valid_until: Optional[datetime], vehicle_no: Optional[str], distance_km: Optional[int]) -> dict:
-    """EWAY-BILL rule: at or above requiredAboveMinor (consignment value including GST, CGST Rule 138) the e-way bill
-    number (rule ``format``), the vehicle number and the validity are mandatory. The validity is taken as given or computed
-    from the distance: one day per ``kmPerDay`` km or part of it, ending at midnight of the last day."""
+    """EWAY-BILL rule: above requiredAboveMinor (consignment value including GST, CGST Rule 138: "exceeds fifty thousand
+    rupees") the e-way bill number (rule ``format``), the vehicle number and the validity are mandatory. The validity is
+    taken as given or computed from the distance: one day per ``kmPerDay`` km or part of it, ending at midnight of the last day."""
     rule = rules.resolve(session, "EWAY-BILL", company_code=po.company_code, plant=po.plant)
-    required = consignment_minor >= int(rule.body["requiredAboveMinor"])
+    required = consignment_minor > int(rule.body["requiredAboveMinor"])
     eway_bill_no = (eway_bill_no or "").strip() or None
     vehicle_no = re.sub(r"[\s-]", "", vehicle_no or "").upper() or None
     if required:
@@ -93,7 +101,7 @@ def _eway(session: Session, po: PurchaseOrder, consignment_minor: int, *, ship_d
         if valid_until is None and not distance_km:
             missing.append("eway_bill_valid_until (or distance_km)")
         if missing:
-            raise Problem(422, "EWAY_BILL_REQUIRED", f"Consignment value {consignment_minor / 100:,.2f} is at or above "
+            raise Problem(422, "EWAY_BILL_REQUIRED", f"Consignment value {consignment_minor / 100:,.2f} exceeds "
                           f"{int(rule.body['requiredAboveMinor']) / 100:,.2f}: an e-way bill is required ({', '.join(missing)} missing)",
                           rule_ref=rule.ref, missing=missing, consignmentValueMinor=consignment_minor)
     if eway_bill_no and not re.fullmatch(rule.body["format"], eway_bill_no):
@@ -119,12 +127,14 @@ def create_asn(session: Session, po: PurchaseOrder, *, lines: list[dict], ship_d
     if po.status not in ("CONFIRMED", "PARTIALLY_RECEIVED"):
         raise illegal_transition("Purchase order", po.number, po.status, "ship")
     po_lines = {l.line_no: l for l in order_svc.lines_of(session, po)}
+    if not lines:
+        raise Problem(422, "LINES_REQUIRED", "An ASN lists at least one shipped line", rule_ref="RCV")
     consignment = 0
     for data in lines:
         line = po_lines.get(int(data["line"]))
         if line is None:
             raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {data['line']}")
-        net = line_amount(D(data["qty"]), line.unit_price_minor)
+        net = line_amount(_positive(data["qty"], f"Line {line.line_no}"), line.unit_price_minor)
         consignment += net + tax_amount(net, line.gst_rate)
     eway = _eway(session, po, consignment, ship_date=ship_date, eway_bill_no=eway_bill_no, valid_until=eway_bill_valid_until,
                  vehicle_no=vehicle_no, distance_km=distance_km)
@@ -173,8 +183,20 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
     p = principal(session)
     if po.status not in ("TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED"):
         raise illegal_transition("Purchase order", po.number, po.status, "receive")
+    if asn is not None and asn.po_id != po.id:
+        # F6-03: the receipt quantities are booked onto the ASN lines; an ASN of another order would be closed by the wrong goods.
+        other = session.get(PurchaseOrder, asn.po_id)
+        raise Problem(422, "ASN_PO_MISMATCH", f"ASN {asn.number} was shipped against {other.number if other else 'another order'}, "
+                      f"not {po.number}; post the receipt against that order or without the ASN", rule_ref="F6-03",
+                      asn=asn.number, asnPo=other.number if other else None, po=po.number)
     sod.guard(session, "GR_POST", {"po_id": po.id})
     po_lines = {l.line_no: l for l in order_svc.lines_of(session, po)}
+    if not lines:
+        raise Problem(422, "LINES_REQUIRED", "A goods receipt lists at least one received line", rule_ref="RCV")
+    for data in lines:
+        if int(data["line"]) not in po_lines:
+            raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {data['line']}")
+        _positive(data["qty"], f"Line {data['line']}")
     gr = GoodsReceipt(tenant_id=po.tenant_id, number=next_number(session, "GOODS_RECEIPT"), po_id=po.id, asn_id=asn.id if asn else None,
                       status="POSTED", posting_date=posting_date or clock.today(), delivery_note=delivery_note, posted_by=p.user_id,
                       created_by=p.user_id)
@@ -254,11 +276,19 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
 
 
 def usage_decision(session: Session, lot: InspectionLot, *, accepted: Decimal, rejected: Decimal, defect_code: Optional[str] = None,
-                   reason: Optional[str] = None) -> dict:
+                   reason: Optional[str] = None, replacement: bool = False) -> dict:
+    """F6-06 usage decision on one inspection lot. A receipt with several quality-managed lines has one lot per line: each
+    decision releases (321) or returns (350/122) its own line; the receipt's status, the ERP material document and the end of
+    its process follow when the last open lot is decided. With replacement=True the rejected quantity is returned for
+    replacement: it is open again on the order for a new ASN and receipt instead of being settled by credit note."""
     p = principal(session)
     if lot.status != "OPEN":
         raise illegal_transition("Inspection lot", lot.number, lot.status, "decide")
     accepted, rejected = D(accepted), D(rejected)
+    if accepted < 0 or rejected < 0:
+        raise Problem(422, "INVALID_QUANTITY", "Accepted and rejected quantities cannot be negative", rule_ref="QM-UD")
+    if replacement and rejected <= 0:
+        raise rule_violation("A replacement is requested for a rejected quantity", "QM-UD")
     if accepted + rejected != lot.qty:
         raise rule_violation(f"Accepted + rejected must equal the lot quantity {lot.qty}", "QM-UD")
     if rejected > 0 and not (defect_code and reason):
@@ -290,18 +320,46 @@ def usage_decision(session: Session, lot: InspectionLot, *, accepted: Decimal, r
         _move(session, stock_type="BLOCKED", qty=-rejected, movement="122", **{**common, "ref_type": "RETURN_DELIVERY",
                                                                               "ref_id": return_delivery.id, "ref": return_delivery.number})
         link(session, "GOODS_RECEIPT", gr.id, gr.number, "RETURN_DELIVERY", return_delivery.id, return_delivery.number, "returned_as")
-    command = "accept" if rejected == 0 else ("reject" if accepted == 0 else "partially_reject")
-    GR_SM.apply(session, gr, command, reason=reason, extra_after={"accepted": str(accepted), "rejected": str(rejected), "lot": lot.number})
-    outbox.emit(session, "quality.usage_decision", "GOODS_RECEIPT", gr.id, gr.number,
-                {"grId": str(gr.id), "lot": lot.number, "accepted": str(accepted), "rejected": str(rejected), "defect": defect_code,
-                 "po": po.number})
+        if replacement:
+            _reopen_for_replacement(session, return_delivery, po, po_line)
+    session.flush()
+    still_open = session.execute(select(InspectionLot.number).where(InspectionLot.gr_id == gr.id, InspectionLot.status == "OPEN")
+                                 .order_by(InspectionLot.number)).scalars().all()
     instance = workflow.find(session, "GOODS_RECEIPT", gr.id, PROCESS)
-    workflow.step(session, instance, "F6-06", outcome=f"{lot.number}: {accepted} accepted, {rejected} rejected" + (f" ({defect_code})" if rejected else ""))
+    if not still_open:
+        # The receipt's outcome covers every line: all accepted, all rejected, or partly rejected.
+        gr_lines = session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars().all()
+        total_accepted = sum((D(g.accepted_qty) for g in gr_lines), Decimal(0))
+        total_rejected = sum((D(g.rejected_qty) for g in gr_lines), Decimal(0))
+        command = "accept" if total_rejected == 0 else ("reject" if total_accepted == 0 else "partially_reject")
+        GR_SM.apply(session, gr, command, reason=reason, extra_after={"accepted": str(accepted), "rejected": str(rejected), "lot": lot.number,
+                                                                      "receiptAccepted": str(total_accepted), "receiptRejected": str(total_rejected)})
+    else:
+        audit.record(session, "GOODS_RECEIPT", gr.id, "LOT_DECIDED", object_ref=gr.number, reason=reason, rule_set_version="QM-UD",
+                     after={"lot": lot.number, "accepted": str(accepted), "rejected": str(rejected), "openLots": still_open})
+    if not still_open:
+        # One event per receipt (the scorecard scores the receipt once; a rejection opens one CAPA): the quantities of all
+        # its lots, the lot with the largest rejection as the reference.
+        lots = session.execute(select(InspectionLot).where(InspectionLot.gr_id == gr.id, InspectionLot.status == "DECIDED")
+                               .order_by(InspectionLot.number)).scalars().all()
+        worst = max(lots, key=lambda x: (D(x.rejected_qty or 0), x.id == lot.id))
+        outbox.emit(session, "quality.usage_decision", "GOODS_RECEIPT", gr.id, gr.number,
+                    {"grId": str(gr.id), "lot": worst.number, "accepted": str(sum((D(x.accepted_qty or 0) for x in lots), Decimal(0))),
+                     "rejected": str(sum((D(x.rejected_qty or 0) for x in lots), Decimal(0))),
+                     "defect": ", ".join(sorted({x.defect_code for x in lots if x.defect_code})) or None, "po": po.number,
+                     "lots": [{"lot": x.number, "accepted": str(x.accepted_qty), "rejected": str(x.rejected_qty)} for x in lots]})
+    workflow.step(session, instance, "F6-06", outcome=f"{lot.number}: {accepted} accepted, {rejected} rejected" + (f" ({defect_code})" if rejected else "")
+                  + (f"; still open: {', '.join(still_open)}" if still_open else ""), status="ACTIVE" if still_open else "COMPLETED")
     if return_delivery is not None:
-        workflow.step(session, instance, "F6-07", outcome=f"{return_delivery.number}: {rejected} returned; credit note requested from supplier")
-    _complete_receipt(session, gr, instance, "stock, GRIR and scorecard updated")
+        workflow.step(session, instance, "F6-07", outcome=f"{return_delivery.number}: {rejected} returned; "
+                      + ("replacement requested from supplier" if replacement else "credit note requested from supplier"))
+        if still_open:
+            workflow.wait(session, instance, "F6-06", outcome="inspection " + ", ".join(still_open))
+    if not still_open:
+        _complete_receipt(session, gr, instance, "stock, GRIR and scorecard updated")
     return {"gr": gr.number, "status": gr.status, "lot": lot.number, "accepted": str(accepted), "rejected": str(rejected),
-            "returnDelivery": return_delivery.number if return_delivery else None}
+            "returnDelivery": return_delivery.number if return_delivery else None, "openLots": still_open,
+            "replacement": bool(replacement and return_delivery is not None)}
 
 
 def _complete_receipt(session: Session, gr: GoodsReceipt, instance, outcome: str) -> None:
@@ -318,19 +376,35 @@ def _complete_receipt(session: Session, gr: GoodsReceipt, instance, outcome: str
 
 
 def reverse_gr(session: Session, gr: GoodsReceipt, reason: str) -> GoodsReceipt:
-    invoiced = session.execute(select(InvoiceLine).join(Invoice, Invoice.id == InvoiceLine.invoice_id).join(
-        GrLine, GrLine.po_line_id == InvoiceLine.po_line_id).where(GrLine.gr_id == gr.id, Invoice.status.in_(("POSTED", "PAID")))).first()
-    if invoiced:
-        raise rule_violation("Receipts that are already invoiced and posted cannot be reversed; use a return delivery", "RCV-REVERSE")
+    # Any invoice on these PO lines that is not rejected was (or is being) matched against this receipt: reversing it would
+    # let an approved invoice post without a receipt.
+    invoices = session.execute(select(Invoice.number, Invoice.status).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id).join(
+        GrLine, GrLine.po_line_id == InvoiceLine.po_line_id).where(GrLine.gr_id == gr.id, Invoice.status != "REJECTED")
+        .order_by(Invoice.number).distinct()).all()
+    if invoices:
+        listed = ", ".join(f"{number} ({status.lower()})" for number, status in invoices)
+        raise Problem(409, "RECEIPT_INVOICED", f"{gr.number} cannot be reversed: invoice {listed} references its order lines. Reject the "
+                      "invoice first, or use a return delivery for goods already invoiced and posted", rule_ref="RCV-REVERSE",
+                      invoices=[{"invoice": number, "status": status} for number, status in invoices])
+    if not GR_SM.can(gr.status, "reverse"):
+        raise illegal_transition("Goods receipt", gr.number, gr.status, "reverse")
+    lots = {l.gr_line_id: l for l in session.execute(select(InspectionLot).where(InspectionLot.gr_id == gr.id)).scalars()}
+    returned = [l.number for l in lots.values() if l.status == "DECIDED" and D(l.rejected_qty or 0) > 0]
+    if returned:
+        raise rule_violation(f"{gr.number}: lot {', '.join(returned)} was already rejected and returned to the supplier; reverse is not "
+                             "possible, correct the remaining quantity with a return delivery", "RCV-REVERSE")
     for gr_line in session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars():
         po_line = session.get(PoLine, gr_line.po_line_id)
         po_line.received_qty -= gr_line.qty
         po_line.accepted_qty -= gr_line.accepted_qty
         order_svc.allocate_receipts(session, session.get(PurchaseOrder, gr.po_id), po_line)
         if gr_line.material_id and po_line.purchase_type in STOCK_PURCHASE_TYPES:  # non-stock lines never moved stock at receipt
-            remaining_type = "QUALITY" if gr.status == "QUALITY_HOLD" else (
+            # Each line is taken back from where it is now: quality stock while its own lot is open, else released stock.
+            lot = lots.get(gr_line.id)
+            in_quality = gr_line.stock_type == "QUALITY" and lot is not None and lot.status == "OPEN"
+            remaining_type = "QUALITY" if in_quality else (
                 CONSIGNMENT if po_line.purchase_type == "CONSIGNMENT" else "UNRESTRICTED")
-            qty = gr_line.qty if gr.status == "QUALITY_HOLD" else gr_line.accepted_qty
+            qty = gr_line.qty if in_quality else gr_line.accepted_qty
             _move(session, material_id=gr_line.material_id, plant=po_line.plant, sloc=gr_line.storage_location, stock_type=remaining_type,
                   batch=gr_line.batch, qty=-qty, movement="102", ref_type="GOODS_RECEIPT", ref_id=gr.id, ref=gr.number)
         if po_line.purchase_type == "SUBCONTRACTING":
@@ -379,6 +453,43 @@ def _after_reversal(session: Session, gr: GoodsReceipt, was: str, reason: str) -
             workflow.end(session, instance, instance.current_step or "F6-06", outcome=f"reversed (102): {reason}", status="CANCELLED")
         else:
             workflow.step(session, instance, "F6-09", outcome=f"reversed (102): {reason}")
+
+
+# ---------------------------------------------------------------- replacement of returned goods (M09 "returns and replacements")
+REPLACEABLE_PO = ("TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED", "RECEIVED")
+
+
+def _reopen_for_replacement(session: Session, rd: ReturnDelivery, po: PurchaseOrder, po_line: PoLine) -> None:
+    """The returned quantity is owed again by the supplier: it leaves the received (and rejected) quantity of the PO line and
+    the shipped quantity, so a new ASN and goods receipt can be posted for it; no credit note is expected for it."""
+    if po.status not in REPLACEABLE_PO:
+        raise illegal_transition("Purchase order", po.number, po.status, "receive a replacement")
+    if po_line.rejected_qty < rd.qty or po_line.received_qty < rd.qty:
+        raise rule_violation(f"{rd.number}: {jsonable(rd.qty)} returned but the line holds only {jsonable(po_line.rejected_qty)} rejected; "
+                             "this return is settled by credit note", "RCV-RETURN")
+    po_line.received_qty -= rd.qty
+    po_line.rejected_qty -= rd.qty
+    po_line.shipped_qty = max(po_line.shipped_qty - rd.qty, Decimal(0))
+    order_svc.allocate_receipts(session, po, po_line)
+    rd.replacement_required, rd.credit_note_expected, rd.status = True, False, "REPLACEMENT_DUE"
+    order_svc.receipt_reversed(session, po, rd.number, reason=f"{rd.number}: {jsonable(rd.qty)} returned for replacement")
+    audit.record(session, "RETURN_DELIVERY", rd.id, "REPLACEMENT_REQUESTED", object_ref=rd.number, rule_set_version="RCV-RETURN",
+                 after={"po": po.number, "poLine": po_line.line_no, "qty": jsonable(rd.qty), "openQty": jsonable(po_line.qty - po_line.received_qty),
+                        "poStatus": po.status})
+    outbox.emit(session, "return_delivery.replacement_requested", "RETURN_DELIVERY", rd.id, rd.number,
+                {"po": po.number, "poLine": po_line.line_no, "qty": jsonable(rd.qty), "supplierId": str(po.supplier_id)})
+
+
+def request_replacement(session: Session, rd: ReturnDelivery, reason: Optional[str] = None) -> ReturnDelivery:
+    """Turn a return delivery that awaits a credit note into a replacement (e.g. the supplier offers to re-deliver)."""
+    if rd.status != "CREATED" or not rd.credit_note_expected:
+        raise illegal_transition("Return delivery", rd.number, rd.status, "request replacement")
+    po_line = session.get(PoLine, rd.po_line_id)
+    po = session.get(PurchaseOrder, po_line.po_id)
+    _reopen_for_replacement(session, rd, po, po_line)
+    if reason:
+        audit.record(session, "RETURN_DELIVERY", rd.id, "REPLACEMENT_REASON", object_ref=rd.number, reason=reason)
+    return rd
 
 
 # ---------------------------------------------------------------- P08 special stocks: lots, subcontracting, consignment (BP §22, §23)
@@ -746,20 +857,38 @@ def create_ses(session: Session, po: PurchaseOrder, *, method: str, period_from:
     require_supplier_user(session, po.supplier_id)
     if po.status not in ("TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED"):
         raise illegal_transition("Purchase order", po.number, po.status, "service entry")
-    ses = ServiceEntry(tenant_id=po.tenant_id, number=next_number(session, "SERVICE_ENTRY"), po_id=po.id, status="DRAFT", method=method.upper(),
-                       period_from=period_from, period_to=period_to, entered_by=p.user_id, created_by=p.user_id)
-    session.add(ses)
-    session.flush()
     po_lines = {l.line_no: l for l in order_svc.lines_of(session, po)}
-    total = 0
+    if not lines:
+        raise Problem(422, "LINES_REQUIRED", "A service entry lists at least one service line", rule_ref="RCV-SES")
+    for data in lines:
+        if int(data["line"]) not in po_lines:
+            raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {data['line']}")
+        _positive(data["qty"], f"Line {data['line']}")
+        if "unit_rate" in data and D(data["unit_rate"]) <= 0:
+            raise Problem(422, "INVALID_RATE", f"Line {data['line']}: the unit rate must be positive", rule_ref="RCV-SES")
+    entered: dict = {}  # this sheet's value per PO line (a sheet may list a PO line more than once); checked before the sheet exists
     for data in lines:
         line = po_lines[int(data["line"])]
         if not line.ses_required:
             raise rule_violation(f"Line {line.line_no} is not a service line", "P08")
         rate = int(D(data["unit_rate"]) * 100) if "unit_rate" in data else line.unit_price_minor
+        entered[line.id] = entered.get(line.id, 0) + line_amount(D(data["qty"]), rate)
+        # Approved value + value of other sheets still in approval + this sheet must stay within the PO line.
+        in_approval = _ses_value(session, line.id, ("SUBMITTED",))
+        if line.ses_approved_minor + in_approval + entered[line.id] > line.net_minor:
+            raise rule_violation(f"Line {line.line_no}: service value exceeds the PO line ({line.ses_approved_minor / 100:,.2f} approved, "
+                                 f"{in_approval / 100:,.2f} in approval, {entered[line.id] / 100:,.2f} on this sheet; line value "
+                                 f"{line.net_minor / 100:,.2f})", "RCV-SES", approvedMinor=line.ses_approved_minor, inApprovalMinor=in_approval,
+                                 enteredMinor=entered[line.id], lineValueMinor=line.net_minor)
+    ses = ServiceEntry(tenant_id=po.tenant_id, number=next_number(session, "SERVICE_ENTRY"), po_id=po.id, status="DRAFT", method=method.upper(),
+                       period_from=period_from, period_to=period_to, entered_by=p.user_id, created_by=p.user_id)
+    session.add(ses)
+    session.flush()
+    total = 0
+    for data in lines:
+        line = po_lines[int(data["line"])]
+        rate = int(D(data["unit_rate"]) * 100) if "unit_rate" in data else line.unit_price_minor
         amount = line_amount(D(data["qty"]), rate)
-        if line.ses_approved_minor + amount > line.net_minor:
-            raise rule_violation(f"Line {line.line_no}: service value exceeds the PO line", "RCV-SES")
         session.add(SesLine(tenant_id=po.tenant_id, ses_id=ses.id, po_line_id=line.id, description=data.get("description", line.description),
                             qty=D(data["qty"]), unit_rate_minor=rate, amount_minor=amount, created_by=p.user_id))
         total += amount
@@ -767,8 +896,34 @@ def create_ses(session: Session, po: PurchaseOrder, *, method: str, period_from:
     return ses
 
 
+def _ses_value(session: Session, po_line_id, statuses: tuple, exclude=None) -> int:
+    query = select(func.coalesce(func.sum(SesLine.amount_minor), 0)).join(ServiceEntry, ServiceEntry.id == SesLine.ses_id).where(
+        SesLine.po_line_id == po_line_id, ServiceEntry.status.in_(statuses))
+    if exclude is not None:
+        query = query.where(ServiceEntry.id != exclude)
+    return int(session.execute(query).scalar_one())
+
+
+def _check_ses_cap(session: Session, ses: ServiceEntry, *, lock: bool) -> None:
+    """RCV-SES: approved + in-approval value of every PO line on the sheet stays within the line value (PO lines locked at approval)."""
+    amounts: dict = {}
+    for line in session.execute(select(SesLine).where(SesLine.ses_id == ses.id)).scalars():
+        amounts[line.po_line_id] = amounts.get(line.po_line_id, 0) + line.amount_minor
+    for po_line_id, amount in sorted(amounts.items(), key=lambda item: str(item[0])):
+        po_line = session.get(PoLine, po_line_id, with_for_update=lock, populate_existing=lock)
+        others = _ses_value(session, po_line_id, ("SUBMITTED",), exclude=ses.id) if not lock else 0
+        if po_line.ses_approved_minor + others + amount > po_line.net_minor:
+            raise rule_violation(f"{ses.number}: line {po_line.line_no} would reach {(po_line.ses_approved_minor + others + amount) / 100:,.2f} "
+                                 f"approved / in approval against a line value of {po_line.net_minor / 100:,.2f}", "RCV-SES",
+                                 approvedMinor=po_line.ses_approved_minor, sheetMinor=amount, lineValueMinor=po_line.net_minor)
+
+
 def submit_ses(session: Session, ses: ServiceEntry) -> ServiceEntry:
     po = session.get(PurchaseOrder, ses.po_id)
+    if po.status not in ("TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED"):
+        raise illegal_transition("Purchase order", po.number, po.status, "service entry")
+    if ses.status == "REJECTED":
+        _check_ses_cap(session, ses, lock=False)  # a re-submitted sheet competes with the sheets entered since
     SES_SM.apply(session, ses, "submit")
     instance = workflow.start(session, PROCESS, "SERVICE_ENTRY", ses.id, ses.number, {"po": po.number})
     workflow.step(session, instance, "F6-02", outcome="service")
@@ -787,6 +942,8 @@ def _ses_decided(session: Session, task: Task, outcome: str) -> None:
         SES_SM.apply(session, ses, "reject", reason=task.comment)
         workflow.end(session, instance, "F6-09", outcome=f"rejected: {task.comment}")
         return
+    # Two sheets approved concurrently must not overrun the PO line: re-check under a lock on the PO line(s).
+    _check_ses_cap(session, ses, lock=True)
     SES_SM.apply(session, ses, "approve")
     ses.approver_id = task.completed_by
     for line in session.execute(select(SesLine).where(SesLine.ses_id == ses.id)).scalars():

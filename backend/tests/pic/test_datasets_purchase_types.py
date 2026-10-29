@@ -129,7 +129,8 @@ def test_wbs_hard_stop_then_rescoped_requisition_is_ordered(sc, pack, client, lo
     body = {"origin": "MANUAL", "purpose_code": "CAPEX", "plant": "P100", "lines": [
         {"item_type": "FREE_TEXT", "purchase_type": "ASSET", "description": "Chip conveyor for Line 4 cell", "material_group": "AUTOMATION",
          "category": "CAPEX-MACHINERY", "qty": "1", "uom": "EA", "price_est_minor": 3 * L, "account_assignment_type": "WBS",
-         "account_assignment_code": "CX-2728-04", "need_date": "2027-09-30", "quotes_attached": 3}]}
+         "account_assignment_code": "CX-2728-04", "need_date": "2027-09-30",
+         "quotes": [{"supplier": "NPM201", "reference": "NPM/CX/27-090", "date": "2027-06-21"}, {"supplier": "Pune Robotics Integrators Pvt Ltd", "reference": "PRI-Q-0622", "date": "2027-06-22"}, {"supplier": "Chennai Automation Works", "reference": "CAW/27/241", "date": "2027-06-23"}]}]}
     created = client.post("/v1/requisitions", json=body, headers=login("requester"))
     assert created.status_code == 201, created.text
     submitted = client.post(f"/v1/requisitions/{created.json()['number']}/submit", json={"justification": "urgent"}, headers=login("requester"))

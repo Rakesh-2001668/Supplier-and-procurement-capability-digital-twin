@@ -356,6 +356,142 @@ def send(session: Session, po: PurchaseOrder, channels: Optional[list[str]] = No
     return created
 
 
+def delivered_outside_portal(session: Session, po: PurchaseOrder) -> bool:
+    """True once an EDI or e-mail order document of the current version reached the supplier (SENT / ACKNOWLEDGED)."""
+    return session.execute(select(PoTransmission.id).where(
+        PoTransmission.po_id == po.id, PoTransmission.po_version == po.version, PoTransmission.channel != "PORTAL",
+        PoTransmission.status.in_(("SENT", "ACKNOWLEDGED")), PoTransmission.format.not_in(tuple(CANCEL_FORMATS.values())))).first() is not None
+
+
+def refresh_undelivered(session: Session, po: PurchaseOrder) -> list[PoTransmission]:
+    """An in-place edit of a transmitted order before anything left the building: regenerate the queued / failed EDI and
+    e-mail documents of the current version (delivered later with the edited content) and publish the edited portal view."""
+    doc = _order_doc(session, po)
+    supplier = session.get(Supplier, po.supplier_id)
+    refreshed = []
+    for record in session.execute(select(PoTransmission).where(
+            PoTransmission.po_id == po.id, PoTransmission.po_version == po.version, PoTransmission.channel != "PORTAL",
+            PoTransmission.status.in_(("QUEUED", "FAILED")), PoTransmission.format.not_in(tuple(CANCEL_FORMATS.values())))).scalars():
+        if record.channel == "EDI":
+            record.document = edifact_orders(doc, _tenant_code(session), record.recipient or supplier.code)
+        else:
+            _, record.document = email_document(doc)
+        record.document_sha256 = _sha(record.document)
+        refreshed.append(record)
+    if any(c == "PORTAL" for c in channels_for(supplier)):
+        document = portal_document(doc)
+        portal = PoTransmission(tenant_id=po.tenant_id, po_id=po.id, po_version=po.version, channel="PORTAL", format="PORTAL", document=document,
+                                document_sha256=_sha(document), recipient=supplier.code, status="SENT", sent_at=clock.now(),
+                                created_by=principal(session).user_id)
+        session.add(portal)
+        refreshed.append(portal)
+    session.flush()
+    if refreshed:
+        audit.record(session, "PURCHASE_ORDER", po.id, "DOCUMENT_REFRESHED", object_ref=po.number,
+                     after={"version": po.version, "transmissions": transmission_summary(refreshed)})
+    return refreshed
+
+
+# ---------------------------------------------------------------- cancellation notice (an already transmitted order is cancelled)
+# The cancellation goes over the same channels as a change order. EDI: ORDCHG D.96A with BGM message function 1
+# (cancellation), the reason in FTX+AAI and every line as LIN action 2 (deleted); its own interchange reference.
+CANCEL_FORMATS = {"PORTAL": "PORTAL_CANCEL", "EDI": "EDIFACT_CANCEL", "EMAIL": "HTML_EMAIL_CANCEL"}
+
+
+def is_cancellation(record: PoTransmission) -> bool:
+    return record.format in CANCEL_FORMATS.values()
+
+
+def cancellation_ref(po: PurchaseOrder) -> str:
+    digits = re.sub(r"\D", "", po.number)[-10:]
+    return f"{digits}X{po.version:03d}"[:14]
+
+
+def edifact_cancellation(doc: OrderDoc, sender: str, receiver: str, reason: str, at: Optional[datetime] = None) -> str:
+    po = doc.po
+    at = (at or clock.now()).astimezone(clock.IST)
+    icref = cancellation_ref(po)
+    body = [
+        "UNH+1+ORDCHG:D:96A:UN",
+        f"BGM+230+{_esc(po.number)}+1",
+        f"DTM+137:{at:%Y%m%d}:102",
+        f"FTX+AAI+++{_esc(reason[:512])}",
+        f"NAD+BY+{_esc(po.company_code)}::92++{_esc(doc.company_name[:35])}",
+        f"NAD+SU+{_esc(doc.supplier.code)}::92++{_esc(doc.supplier.legal_name[:35])}",
+        f"CUX+2:{_esc(po.currency)}:9",
+    ]
+    for line in doc.lines:
+        item = f"{_esc(line['material'])}:IN" if line["material"] else ""
+        body.append(f"LIN+{line['line']}+2+{item}".rstrip("+"))
+    body += ["UNS+S", f"CNT+2:{len(doc.lines)}"]
+    body.append(f"UNT+{len(body) + 1}+1")
+    segments = [f"UNB+UNOC:3+{_esc(sender)}:{_party_qualifier(sender)}+{_esc(receiver)}:{_party_qualifier(receiver)}+{at:%y%m%d}:{at:%H%M}+{icref}",
+                *body, f"UNZ+1+{icref}"]
+    return UNA + "".join(s + "'" for s in segments)
+
+
+def cancellation_email(doc: OrderDoc, reason: str) -> tuple[str, str]:
+    po = doc.po
+    subject = f"Cancellation of purchase order {po.number} from {doc.company_name}"
+    rows = "".join(f"<tr><td>{line['line']}</td><td>{html.escape(line['material'] or '')}</td><td>{html.escape(line['description'])}</td>"
+                   f"<td style=\"text-align:right\">{jsonable(line['qty'])} {html.escape(line['uom'])}</td></tr>" for line in doc.lines)
+    body = (
+        "<!doctype html><html><body style=\"font-family:Arial,sans-serif;font-size:13px;color:#0B1020\">"
+        f"<h2>Purchase order {html.escape(po.number)} (version {po.version}) is cancelled</h2>"
+        f"<p>From {html.escape(doc.company_name)}" + (f" (GSTIN {html.escape(doc.company_gstin)})" if doc.company_gstin else "") +
+        f" to {html.escape(doc.supplier.legal_name)} ({html.escape(doc.supplier.code)}).</p>"
+        f"<p><strong>Reason:</strong> {html.escape(reason)}</p>"
+        "<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border-collapse:collapse\">"
+        "<tr><th>Line</th><th>Material</th><th>Description</th><th>Quantity cancelled</th></tr>" + rows + "</table>"
+        "<p>Please do not ship against this order. Goods dispatched after this notice will not be received.</p></body></html>")
+    return subject, body
+
+
+def send_cancellation(session: Session, po: PurchaseOrder, reason: str) -> list[PoTransmission]:
+    """Tell the supplier that a transmitted order is cancelled, over the channels a change order would use."""
+    supplier = session.get(Supplier, po.supplier_id)
+    channels = channels_for(supplier)
+    doc = _order_doc(session, po)
+    settings = supplier.order_channel or {}
+    p = principal(session)
+    now = clock.now()
+    created = []
+    for channel in channels:
+        status, error, recipient = "QUEUED", None, None
+        if channel == "PORTAL":
+            status, recipient = "SENT", supplier.code
+            document = json.dumps(jsonable({
+                "po": po.number, "version": po.version, "action": "CANCELLED", "reason": reason, "cancelledAt": now,
+                "buyer": {"companyCode": po.company_code, "name": doc.company_name, "gstin": doc.company_gstin},
+                "supplier": {"code": supplier.code, "name": supplier.legal_name},
+                "lines": [{"line": l["line"], "material": l["material"], "qty": l["qty"], "uom": l["uom"]} for l in doc.lines],
+            }), sort_keys=True, indent=2)
+        elif channel == "EDI":
+            recipient = settings.get("ediId")
+            document = edifact_cancellation(doc, _tenant_code(session), recipient or supplier.code, reason)
+            if not recipient:
+                status, error = "FAILED", "Supplier has no EDI partner id (order_channel.ediId)"
+        else:
+            recipient = settings.get("email") or supplier.contact_email
+            _, document = cancellation_email(doc, reason)
+            if not recipient:
+                status, error = "FAILED", "Supplier has no order e-mail address (order_channel.email)"
+        record = PoTransmission(tenant_id=po.tenant_id, po_id=po.id, po_version=po.version, channel=channel, format=CANCEL_FORMATS[channel],
+                                document=document, document_sha256=_sha(document), recipient=recipient, status=status, error=error,
+                                sent_at=now if status == "SENT" else None, created_by=p.user_id)
+        session.add(record)
+        created.append(record)
+    session.flush()
+    audit.record(session, "PURCHASE_ORDER", po.id, "CANCELLATION_TRANSMITTED", object_ref=po.number, reason=reason,
+                 after={"version": po.version, "transmissions": transmission_summary(created)})
+    return created
+
+
+def transmission_summary(records: list[PoTransmission]) -> list[dict]:
+    return [{"id": str(t.id), "channel": t.channel, "format": t.format, "status": t.status, "recipient": t.recipient,
+             "sha256": t.document_sha256, "error": t.error} for t in records]
+
+
 def edi_gateway() -> Optional[tuple[str, str]]:
     url = os.environ.get("PIC_EDI_GATEWAY_URL")
     return (url, os.environ.get("PIC_EDI_GATEWAY_TOKEN", "")) if url else None
@@ -385,10 +521,12 @@ def deliver(session: Session, record: PoTransmission) -> PoTransmission:
         if gateway is None:
             record.status, record.error = "QUEUED", "EDI gateway not configured"
         else:
-            ok, error = _post_edi(gateway[0], gateway[1], record.document, interchange_ref(po))
+            ok, error = _post_edi(gateway[0], gateway[1], record.document,
+                                  cancellation_ref(po) if is_cancellation(record) else interchange_ref(po))
             record.status, record.error = ("SENT", None) if ok else ("FAILED", error)
     else:
-        subject = f"Purchase order {po.number} version {record.po_version}"
+        subject = (f"Cancellation of purchase order {po.number}" if is_cancellation(record)
+                   else f"Purchase order {po.number} version {record.po_version}")
         result = mailer.send(record.recipient, subject, html_to_text(record.document), record.document)
         if result == "SENT":
             record.status, record.error = "SENT", None
@@ -406,6 +544,7 @@ def deliver(session: Session, record: PoTransmission) -> PoTransmission:
 
 
 @outbox.consumer("purchase_order.transmitted", "po-transmission-delivery")
+@outbox.consumer("purchase_order.cancelled", "po-transmission-delivery")  # the cancellation notice (send_cancellation)
 def _deliver_transmitted(session: Session, event) -> None:
     ids = [uuid.UUID(t["id"]) for t in event.payload.get("transmissions", []) if t.get("channel") in ("EDI", "EMAIL")]
     for record in session.execute(select(PoTransmission).where(PoTransmission.id.in_(ids))).scalars() if ids else []:
@@ -442,7 +581,8 @@ def view(record: PoTransmission, with_document: bool = False) -> dict:
     out = {"id": str(record.id), "version": record.po_version, "channel": record.channel, "format": record.format,
            "recipient": record.recipient, "status": record.status, "sha256": record.document_sha256, "bytes": len(record.document.encode("utf-8")),
            "sentAt": record.sent_at.isoformat() if record.sent_at else None, "ackAt": record.ack_at.isoformat() if record.ack_at else None,
-           "error": record.error, "createdAt": record.created_at.isoformat()}
+           "error": record.error, "createdAt": record.created_at.isoformat(),
+           "purpose": "CANCELLATION" if is_cancellation(record) else ("CHANGE" if record.po_version > 1 else "ORDER")}
     if with_document:
         out["document"] = record.document
         if record.format.startswith("EDIFACT"):

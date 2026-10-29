@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer, LargeBinary, Numeric,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric,
     String, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -215,7 +215,8 @@ class MaterialRequest(TenantScoped, Base):
 class InfoRecord(TenantScoped, Base):
     """Purchasing info record: last price and lead time per supplier and material."""
     __tablename__ = "info_record"
-    __table_args__ = (UniqueConstraint("tenant_id", "supplier_id", "material_id", "plant"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "supplier_id", "material_id", "plant"),
+                      Index("ix_info_record_material_plant", "tenant_id", "material_id", "plant"))
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
@@ -226,6 +227,7 @@ class InfoRecord(TenantScoped, Base):
 
 class SourceList(TenantScoped, Base):
     __tablename__ = "source_list"
+    __table_args__ = (Index("ix_source_list_material_plant", "tenant_id", "material_id", "plant"),)
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
@@ -236,6 +238,7 @@ class SourceList(TenantScoped, Base):
 
 class QuotaArrangement(TenantScoped, Base):
     __tablename__ = "quota_arrangement"
+    __table_args__ = (Index("ix_quota_arrangement_material_plant", "tenant_id", "material_id", "plant"),)
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
@@ -245,6 +248,7 @@ class QuotaArrangement(TenantScoped, Base):
 
 class QuotaLine(TenantScoped, Base):
     __tablename__ = "quota_line"
+    __table_args__ = (Index("ix_quota_line_quota", "tenant_id", "quota_id"),)
     quota_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.quota_arrangement.id"), nullable=False)
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)
     contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))

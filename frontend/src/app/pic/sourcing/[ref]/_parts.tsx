@@ -23,7 +23,7 @@ export type AwardDecision = { id: string; scenario_id: string; status: string; r
 export type ShouldCost = { model: string; material: string; conversion: string; tooling: string; packaging: string; subtotal: string;
   overheadMarginPct: string; unitCost: string; unitCostMinor: number };
 export type SourcingEvent = {
-  id: string; number: string; type: string; title: string; category: string; status: string; round: number; weights_locked: boolean;
+  id: string; number: string; type: string; title: string; category: string; status: string; round: number; weights_locked: boolean; owner_id?: string;
   published_at: string | null; close_at: string; closed_at: string | null; unsealed_at: string | null; baseline_price_minor: number | null;
   baseline_method: string | null; should_cost: ShouldCost | null; constraints: { max_suppliers?: number; max_share?: string; min_share?: string } | null;
   tco_params: Record<string, string | number> | null; savings_target_pct: string | null;
@@ -359,6 +359,34 @@ export function AwardDialog({ event, scenarios, matrix, initial, onClose }: { ev
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!ready} busy={award.isPending} onClick={() => award.mutate()}>Propose award</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** States from which POST …/cancel is allowed (sourcing.SM: anything before the award). */
+export const CANCELLABLE = ['DRAFT', 'PUBLISHED', 'OPEN', 'CLOSED', 'UNDER_EVALUATION', 'AWARD_PENDING'];
+
+export function CancelEventDialog({ event, onClose }: { event: SourcingEvent; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const cancel = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/cancel`, { reason: reason.trim() }), {
+    success: `${event.number} cancelled${event.status !== 'DRAFT' ? ' – invited suppliers are notified' : ''}`, onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`Cancel ${event.number}`} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-700">
+          The event stops here: open approval tasks and timers close{event.status === 'AWARD_PENDING' ? ', the pending award decision is withdrawn' : ''},
+          requirement lines no other event is sourcing go back to open, and the savings initiative is marked lost.
+          {event.status !== 'DRAFT' ? ' Every invited supplier is told the event was cancelled and why.' : ''} This cannot be undone.
+        </p>
+        <Field label="Reason (required, shown to invited suppliers)">{(id) => (
+          <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Requirement withdrawn after the design change ECN-2240" />
+        )}</Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Keep event</Button>
+        <Button variant="danger" disabled={!reason.trim()} busy={cancel.isPending} onClick={() => cancel.mutate()}>Cancel event</Button>
       </div>
     </Dialog>
   );

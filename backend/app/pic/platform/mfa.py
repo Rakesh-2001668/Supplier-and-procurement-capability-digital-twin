@@ -12,14 +12,15 @@ import secrets
 import struct
 import time
 import uuid
+from datetime import timedelta
 from typing import Optional
 from urllib.parse import quote, urlencode
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
-from app.pic.models import AppUser, MfaFactor
+from app.pic.models import AppUser, AuditEvent, MfaFactor
 from app.pic.platform import audit, clock, crypto, rules
 from app.pic.platform.errors import Problem
 
@@ -146,6 +147,67 @@ def verify(session: Session, f: MfaFactor, code: str) -> bool:
     f.last_used_step = step
     session.flush()
     return True
+
+
+# ---------------------------------------------------------------- per-account brute-force lockout
+LOCKOUT_MAX_FAILURES = 10  # wrong codes per account (rule MFA.maxFailures) ...
+LOCKOUT_WINDOW_MINUTES = 15  # ... within this window (rule MFA.lockoutMinutes) since the last successful code
+
+
+def _lockout_policy(session: Session) -> tuple[int, int]:
+    try:
+        body = rules.resolve(session, "MFA").body
+    except Problem:
+        body = {}
+    return int(body.get("maxFailures") or LOCKOUT_MAX_FAILURES), int(body.get("lockoutMinutes") or LOCKOUT_WINDOW_MINUTES)
+
+
+def _recent_failures(session: Session, user_id: uuid.UUID) -> list:
+    """Timestamps of the account's MFA_FAILED audit events in the window and after its last MFA_VERIFIED: the counter lives in
+    the (shared, append-only) audit trail, so it holds across API replicas and serverless instances."""
+    _, minutes = _lockout_policy(session)
+    since = clock.now() - timedelta(minutes=minutes)
+    last_ok = session.execute(select(func.max(AuditEvent.ts)).where(
+        AuditEvent.object_type == "APP_USER", AuditEvent.object_id == user_id, AuditEvent.action == "MFA_VERIFIED")).scalar()
+    if last_ok is not None and last_ok > since:
+        since = last_ok
+    return list(session.execute(select(AuditEvent.ts).where(
+        AuditEvent.object_type == "APP_USER", AuditEvent.object_id == user_id, AuditEvent.action == "MFA_FAILED",
+        AuditEvent.ts > since).order_by(AuditEvent.ts)).scalars())
+
+
+def locked_for(session: Session, user_id: uuid.UUID) -> Optional[int]:
+    """Seconds until the account may try codes again, or None when it is not locked."""
+    limit, minutes = _lockout_policy(session)
+    failures = _recent_failures(session, user_id)
+    if len(failures) < limit:
+        return None
+    until = failures[-limit] + timedelta(minutes=minutes)
+    return max(int((until - clock.now()).total_seconds()) + 1, 1)
+
+
+def ensure_not_locked(session: Session, user_id: uuid.UUID) -> None:
+    wait = locked_for(session, user_id)
+    if wait is not None:
+        raise Problem(429, "MFA_LOCKED", f"Too many wrong authenticator codes for this account. Try again in {max(wait // 60, 1)} minute(s) "
+                      "or ask your administrator.", rule_ref="MFA", retryAfterSeconds=wait)
+
+
+def record_failure(session: Session, user: AppUser, context: str, ip: Optional[str] = None) -> int:
+    """Audit a wrong code (MFA_FAILED) and return the account's failures in the current window."""
+    audit.record(session, "APP_USER", user.id, "MFA_FAILED", object_ref=user.email, actor=f"u:{user.email}",
+                 after={"context": context, "ip": ip}, reason="wrong or replayed authenticator code")
+    count = len(_recent_failures(session, user.id))
+    limit, minutes = _lockout_policy(session)
+    if count == limit:
+        audit.record(session, "APP_USER", user.id, "MFA_LOCKED_OUT", object_ref=user.email, actor=f"u:{user.email}",
+                     after={"failures": count, "windowMinutes": minutes}, reason="authenticator code brute-force lockout")
+    return count
+
+
+def record_success(session: Session, user: AppUser) -> None:
+    """A correct second factor at sign-in (MFA_VERIFIED) restarts the account's failure count."""
+    audit.record(session, "APP_USER", user.id, "MFA_VERIFIED", object_ref=user.email, actor=f"u:{user.email}", after={"kind": "TOTP"})
 
 
 def confirm(session: Session, user: AppUser, code: str) -> MfaFactor:

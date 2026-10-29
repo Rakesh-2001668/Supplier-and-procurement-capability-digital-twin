@@ -452,7 +452,7 @@ def test_admin_resets_a_lost_authenticator(client, login, fixed_step):
 @pytest.fixture(scope="module")
 def enforced_tenant():
     tenant_id = reference.create_tenant("MFAT", "MFA Enforcement Test Pvt Ltd", "MANUFACTURING")
-    reference.bootstrap(tenant_id, company=("3000", "MFA Enforcement Test Pvt Ltd", "29AAACM1111C1Z1"), plants=[("M100", "Mysuru", "29")],
+    reference.bootstrap(tenant_id, company=("3000", "MFA Enforcement Test Pvt Ltd", "29AAACM1111C1Z8"), plants=[("M100", "Mysuru", "29")],
                         cost_objects=[("COST_CENTER", "9300", "Admin")])
     with tenant_tx(tenant_id) as s:
         if not s.execute(select(AppUser.id).where(AppUser.email == "admin@mfat.example")).first():

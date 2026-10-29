@@ -11,7 +11,8 @@ from typing import Optional
 
 import bcrypt
 from fastapi import Depends, Header
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 
 from app.pic.config import get_settings
 from app.pic.platform.errors import Problem
@@ -176,7 +177,7 @@ def enrolment_principal(authorization: Optional[str] = Header(default=None)) -> 
         raise Problem(401, "UNAUTHENTICATED", "Send 'Authorization: Bearer <token>' from POST /v1/auth/token")
     token = authorization.split(" ", 1)[1].strip()
     try:
-        claims = jwt.get_unverified_claims(token)
+        claims = jwt.decode(token, options={"verify_signature": False})
     except JWTError:
         claims = {}
     if claims.get("iss") != CHALLENGE_ISSUER:

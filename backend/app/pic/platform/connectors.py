@@ -73,6 +73,24 @@ def _http(method: str, url: str, *, headers: Optional[dict] = None, body: Option
         raise ConnectorTimeout(f"{url.split('?')[0]} not reachable: {exc}")
 
 
+def _json(text: str, system: str) -> dict:
+    """An ERP's JSON answer; an unreadable or non-object answer is a rejection (retried, then dead-lettered), never a crash."""
+    try:
+        answer = json.loads(text or "{}")
+    except ValueError:
+        raise ConnectorRejected(f"{system} answered with unreadable JSON: {(text or '')[:200]}")
+    if not isinstance(answer, dict):
+        raise ConnectorRejected(f"{system} answered with unexpected JSON: {(text or '')[:200]}")
+    return answer
+
+
+def _xml(text: str, system: str) -> ElementTree.Element:
+    try:
+        return ElementTree.fromstring(text)
+    except ElementTree.ParseError:
+        raise ConnectorRejected(f"{system} answered with unreadable XML: {(text or '')[:200]}")
+
+
 # ---------------------------------------------------------------- base
 class Connector:
     system = ""
@@ -256,14 +274,14 @@ class OracleFusion(Connector):
         value = message.payload.get("material") if field == "ItemNumber" else reference(message.idempotency_key, 240)
         query = urllib.parse.quote(f"{field}='{value}'")
         _, text = self._call("GET", f"{self.BASE}/{resource}?q={query}&limit=1&onlyData=true")
-        items = json.loads(text or "{}").get("items") or []
+        items = _json(text, self.system).get("items") or []
         return RemoteDocument(str(items[0].get(number))) if items else None
 
     def post(self, session, message):
         self._require(message)
         resource, _, number = self.RESOURCES[message.message_type]
         _, text = self._call("POST", f"{self.BASE}/{resource}", self.body(message))
-        return str(json.loads(text or "{}").get(number) or "")
+        return str(_json(text, self.system).get(number) or "")
 
     def health_path(self) -> str:
         return f"{self.BASE}/invoices?limit=1&onlyData=true&fields=InvoiceId"
@@ -315,7 +333,7 @@ class Dynamics365(Connector):
         area = self.company(message.payload.get("companyCode"))
         flt = urllib.parse.quote(f"{field} eq '{self._key(message)}' and dataAreaId eq '{area}'")
         _, text = self._call("GET", f"/data/{entity}?$filter={flt}&cross-company=true&$top=1")
-        items = json.loads(text or "{}").get("value") or []
+        items = _json(text, self.system).get("value") or []
         return RemoteDocument(str(items[0].get(number))) if items else None
 
     def post(self, session, message):
@@ -327,7 +345,7 @@ class Dynamics365(Connector):
             self._call("PATCH", f"/data/{entity}({urllib.parse.quote(key)})", {k: v for k, v in body.items() if k not in ("dataAreaId", field)})
             return self._key(message)
         _, text = self._call("POST", f"/data/{entity}", body)
-        doc_no = str(json.loads(text or "{}").get(number) or "")
+        doc_no = str(_json(text, self.system).get(number) or "")
         if message.message_type == "PURCHASE_ORDER":
             for line in message.payload.get("lines", []):
                 self._call("POST", "/data/PurchaseOrderLinesV2", {
@@ -372,14 +390,58 @@ class TallyPrime(Connector):
                 f"<REPORTNAME>{report}</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>{company}</SVCURRENTCOMPANY></STATICVARIABLES>"
                 f"</REQUESTDESC><REQUESTDATA><TALLYMESSAGE>{data}</TALLYMESSAGE></REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>")
 
+    def lookup_envelope(self, message: IntegrationMessage) -> Optional[str]:
+        """Export request (TDL collection) for the document a message would create: vouchers by the PIC voucher number written
+        by ``envelope``, ledgers / stock items by name. None when there is nothing to look up (master alterations are idempotent)."""
+        p, t = message.payload, message.message_type
+        if t in ("SUPPLIER_MASTER", "MATERIAL_MASTER") and p.get("change"):
+            return None
+
+        def literal(value) -> str:  # a TDL string literal inside XML text
+            return escape(str(value or "").replace('"', "").replace("\n", " "))
+
+        if t == "SUPPLIER_MASTER":
+            kind, fetch, formula = "Ledger", "Name, MasterId", f'$Name = "{literal(p.get("name") or p.get("supplier"))}"'
+        elif t == "MATERIAL_MASTER":
+            kind, fetch, formula = "StockItem", "Name, MasterId", f'$Name = "{literal(p.get("material"))}"'
+        else:
+            kind, fetch = "Voucher", "VoucherNumber, VoucherTypeName, MasterId"
+            formula = (f'$VoucherTypeName = "{literal(self.VOUCHERS[t])}" AND '
+                       f'$VoucherNumber = "{literal(reference(message.idempotency_key, 50))}"')
+        company = escape(self.company(p.get("companyCode")))
+        return (f"<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>PICLookup</ID>"
+                f"</HEADER><BODY><DESC><STATICVARIABLES><SVCURRENTCOMPANY>{company}</SVCURRENTCOMPANY>"
+                f"<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT></STATICVARIABLES><TDL><TDLMESSAGE>"
+                f'<COLLECTION NAME="PICLookup" ISMODIFY="No"><TYPE>{kind}</TYPE><FETCH>{fetch}</FETCH><FILTER>PICMatch</FILTER></COLLECTION>'
+                f'<SYSTEM TYPE="Formulae" NAME="PICMatch">{formula}</SYSTEM></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>')
+
+    def find(self, session, message):
+        """Query-before-retry (TD §12.2 step 3): ask the Tally gateway whether the voucher / master already exists."""
+        if not self.configured() or message.message_type not in self.message_types:
+            return None
+        request = self.lookup_envelope(message)
+        if request is None:
+            return None
+        _, text = self._call("POST", "/", raw=request.encode(), content_type="text/xml; charset=utf-8")
+        root = _xml(text, "Tally")
+        if root.findtext(".//LINEERROR"):
+            raise ConnectorRejected(f"Tally rejected the lookup: {root.findtext('.//LINEERROR')}")
+        for tag in ("VOUCHER", "LEDGER", "STOCKITEM"):
+            found = root.find(f".//{tag}")
+            if found is not None:
+                number = (found.findtext("MASTERID") or found.findtext("VOUCHERNUMBER") or found.get("NAME") or found.findtext("NAME") or "").strip()
+                return RemoteDocument(number or reference(message.idempotency_key, 50))
+        return None
+
     def post(self, session, message):
         self._require(message)
         _, text = self._call("POST", "/", raw=self.envelope(message).encode(), content_type="text/xml; charset=utf-8")
+        root = _xml(text, "Tally")
         try:
-            root = ElementTree.fromstring(text)
-        except ElementTree.ParseError:
-            raise ConnectorRejected(f"Tally answered with unreadable XML: {text[:200]}")
-        if int(root.findtext(".//ERRORS") or 0) > 0 or int(root.findtext(".//EXCEPTIONS") or 0) > 0:
+            failed = int(root.findtext(".//ERRORS") or 0) > 0 or int(root.findtext(".//EXCEPTIONS") or 0) > 0
+        except ValueError:
+            raise ConnectorRejected(f"Tally answered with an unreadable import status: {text[:200]}")
+        if failed:
             raise ConnectorRejected(f"Tally rejected the import: {root.findtext('.//LINEERROR') or text[:200]}")
         return root.findtext(".//LASTVCHID") or reference(message.idempotency_key, 50)
 
@@ -410,7 +472,7 @@ class Odoo(Connector):
         body = {"jsonrpc": "2.0", "method": "call", "id": uuid.uuid4().hex, "params": {"service": service, "method": method, "args": list(args)}}
         _, text = _http("POST", f"{self.env('URL').rstrip('/')}/jsonrpc", headers={"content-type": "application/json"},
                         body=json.dumps(body).encode(), timeout=float(self.env("TIMEOUT") or 20))
-        answer = json.loads(text or "{}")
+        answer = _json(text, self.system)
         if answer.get("error"):
             raise ConnectorRejected(f"Odoo: {answer['error'].get('data', {}).get('message') or answer['error'].get('message')}")
         return answer.get("result")
@@ -485,6 +547,29 @@ def get(system: str) -> Connector:
     if connector is None:
         raise ConnectorNotConfigured(f"No connector for target system {system}; known: {', '.join(REGISTRY)}")
     return connector
+
+
+def maps(system: str, message_type: str) -> bool:
+    """Whether the target system's connector maps this PIC message type (SAP_S4: every simulator document type)."""
+    connector = REGISTRY.get((system or "").upper())
+    if connector is None:
+        return False
+    if isinstance(connector, SapS4):
+        return message_type in integration.DOC_TYPES
+    return message_type in connector.message_types
+
+
+def require_mapped(system: str, message_type: str) -> None:
+    """Refuse to enqueue a message the target connector cannot post: it would only dead-letter after 8 retries while the
+    platform reports the business step as done. Raise a clear 422 instead, before anything is written."""
+    from app.pic.platform.errors import Problem
+
+    if not maps(system, message_type):
+        connector = REGISTRY.get((system or "").upper())
+        supported = ", ".join(connector.message_types) if connector is not None else "none (unknown target system)"
+        raise Problem(422, "MESSAGE_TYPE_NOT_MAPPED",
+                      f"The {system} connector does not map {message_type}; post it in the ERP directly or configure a connector that "
+                      f"maps it (supported: {supported})", rule_ref="P13", targetSystem=system, messageType=message_type)
 
 
 def check_health(system: str) -> dict:

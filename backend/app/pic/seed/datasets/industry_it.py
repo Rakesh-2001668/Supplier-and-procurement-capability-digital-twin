@@ -312,6 +312,9 @@ def _contract(sc, contract_svc, spec, when, *, title, valid, lines, redline=None
         with sc.act(kit.supplier_email(spec), when + timedelta(days=1)) as s:
             contract_svc.redline(s, s.get(Contract, contract_id), redline[0], redline[1], "STANDARD")
     with sc.act("contract.manager", when + timedelta(days=1, hours=4)) as s:
+        if redline:  # the supplier redline is reviewed by the contract manager before submission
+            contract_svc.review_redline(s, s.get(Contract, contract_id), redline[0], "ACCEPT", "STANDARD",
+                                        "Clarification only; within the playbook standard position")
         contract_svc.submit(s, s.get(Contract, contract_id))
     sc.approve_all(contract_id, when + timedelta(days=2), "Commercials and clauses approved")
     with sc.act("contract.manager", when + timedelta(days=3)) as s:

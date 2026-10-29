@@ -1,11 +1,13 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, Card, DataTable, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { downloadFile } from '../purchase-orders/[ref]/_ops';
+import { today } from './_components';
 
 // ---------------------------------------------------------------- GST e-invoice verification (TD §12.3)
 type Check = { code: string; ok: boolean; detail: string };
@@ -174,6 +176,59 @@ function FileStatusDialog({ file, onClose }: { file: PaymentFile; onClose: () =>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!next || missing} busy={save.isPending} onClick={() => save.mutate()}>Save</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------- consignment settlement (P08 self-billing, ERS)
+type SupplierRef = { code: string; name: string; status: string };
+type Settlement = { id: string; number: string; status: string; gross_minor: number };
+
+/** Roles that run consignment self-billing (scope invoice:post or payment:run; the service also checks the role). */
+export const SETTLE_ROLES = ['AP_CLERK', 'FINANCE_CONTROLLER'];
+
+/** One AP document for everything withdrawn from a supplier's consignment stock up to a date and not yet settled. */
+export function ConsignmentSettlementDialog({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const reference = useApi<{ suppliers: SupplierRef[] }>('/reference');
+  const [supplier, setSupplier] = useState('');
+  const [periodTo, setPeriodTo] = useState(today());
+  const [companyCode, setCompanyCode] = useState('1000');
+  const [taxInvoice, setTaxInvoice] = useState('');
+  const settle = useCommand(() => api.post<Settlement>('/consignment/settlements', {
+    supplier, period_to: periodTo, company_code: companyCode.trim() || '1000', reference: taxInvoice.trim() || undefined,
+  }), {
+    success: (r) => `${r.number} created · ${inr(r.gross_minor)} · ${r.status.replace(/_/g, ' ').toLowerCase()}`,
+    onSuccess: (r) => { onClose(); router.push(`/pic/invoices/${r.id}`); },
+  });
+  return (
+    <Dialog open title="Consignment settlement (self-billing)" onClose={onClose}>
+      {reference.error && <ProblemBox error={reference.error} />}
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Consignor (supplier)">
+          {(id) => <Select id={id} value={supplier} onChange={(e) => setSupplier(e.target.value)}
+            options={[{ value: '', label: reference.isLoading ? 'Loading…' : 'Choose a supplier' },
+              ...(reference.data?.suppliers ?? []).map((s) => ({ value: s.code, label: `${s.code} · ${s.name}` }))]} />}
+        </Field>
+        <Field label="Settle withdrawals up to (inclusive)">
+          {(id) => <Input id={id} type="date" required value={periodTo} max={today()} onChange={(e) => setPeriodTo(e.target.value)} />}
+        </Field>
+        <Field label="Company code">
+          {(id) => <Input id={id} maxLength={4} value={companyCode} onChange={(e) => setCompanyCode(e.target.value)} />}
+        </Field>
+        <Field label="Supplier tax invoice (optional)" hint="Where the consignor issues a GST tax invoice for the withdrawn quantity">
+          {(id) => <Input id={id} maxLength={60} value={taxInvoice} onChange={(e) => setTaxInvoice(e.target.value)} />}
+        </Field>
+      </div>
+      <p className="mt-3 text-xs text-slate-500">
+        Withdrawals from consignment stock (201K consumption, 411K transfer) create the liability; this settles everything withdrawn up to the date and not yet
+        settled, priced at the consignment PO line with its GST rate and HSN. The document is duplicate-checked and ERS-matched (settled ≤ withdrawn), then
+        approved and posted like any invoice.
+      </p>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={!supplier || !periodTo} busy={settle.isPending} onClick={() => settle.mutate()}>Create settlement</Button>
       </div>
     </Dialog>
   );

@@ -98,6 +98,11 @@ def rule_version(sc: Scenario, key: str, version: str, effective_from: date, pat
                      actor="configuration")
 
 
+# Axion's approved FY 2027-28 controlling budgets (company code 1000), loaded by whichever AXN pack runs first so the
+# amounts never depend on pack order: (cost object type, code, control, amount in lakh).
+AXN_BUDGETS_2027_28 = (("COST_CENTER", "4100", "SOFT", 60), ("COST_CENTER", "4200", "SOFT", 30), ("WBS", "C-2207", "HARD", 200))
+
+
 def load_budgets(sc: Scenario, budgets: list[tuple[str, str, str, int]], when: datetime) -> None:
     """§12.4 initial load of the approved FY budgets from the ERP (cost object type, code, control, amount in paise)."""
     clock.set_pinned(when)
@@ -181,6 +186,7 @@ def onboard(sc: Scenario, spec: SupplierSpec, password: str, day: date, *, manag
         change_id = change.id
     sc.approve_all(change_id, at(day + days(1), 15), "Cancelled cheque and bank letter verified")
     with sc.act(manager, at(day + days(2), 10)) as s:
+        svc.verify_certificates(s, s.get(Supplier, supplier_id), "Certificates checked against the issuing bodies' registers")
         for category in spec.categories:
             q = svc.start_qualification(s, s.get(Supplier, supplier_id), category)
             svc.record_assessment(s, q, questionnaire=spec.questionnaire or {"capacity": "verified"},

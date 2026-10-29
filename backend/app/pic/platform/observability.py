@@ -348,7 +348,9 @@ HTTP_IN_FLIGHT = Gauge("pic_http_requests_in_flight", "Requests currently being 
 RATE_LIMITED = Counter("pic_http_rate_limited_total", "Requests rejected with 429 by limiter scope.", ("scope",))
 BODY_REJECTED = Counter("pic_http_body_too_large_total", "Requests rejected with 413.")
 WORKER_TICKS = Counter("pic_worker_ticks_total", "Worker ticks by outcome (this process only).", ("outcome",))
-_REGISTRY = [HTTP_REQUESTS, HTTP_ERRORS, HTTP_LATENCY, HTTP_IN_FLIGHT, RATE_LIMITED, BODY_REJECTED, WORKER_TICKS]
+WORKER_TENANT_FAILURES = Counter("pic_worker_tenant_failures_total",
+                                 "One tenant's worker stage (timers, integration, outbox) failed; the other tenants ran.", ("stage",))
+_REGISTRY = [HTTP_REQUESTS, HTTP_ERRORS, HTTP_LATENCY, HTTP_IN_FLIGHT, RATE_LIMITED, BODY_REJECTED, WORKER_TICKS, WORKER_TENANT_FAILURES]
 
 
 def observe_request(method: str, route: str, status: int, seconds: float) -> None:
@@ -376,8 +378,31 @@ def worker_heartbeats(conn) -> list[float]:
     return beats
 
 
+def tenant_scope(conn, tenant_id) -> None:
+    """Make the row-level-secured tables readable for one tenant on an owner connection, transaction-local, exactly as
+    ``db.tenant_tx`` does: under FORCE RLS an owner without BYPASSRLS (Neon) sees no rows otherwise. Undo with RESET ROLE."""
+    from sqlalchemy import text
+    from app.pic.config import get_settings
+    conn.execute(text(f'SET LOCAL ROLE "{get_settings().app_role}"'))
+    conn.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": str(tenant_id)})
+
+
+def outbox_backlog(conn) -> tuple[int, Optional[Any]]:
+    """(unrelayed events, oldest occurred_at) over all tenants, read tenant by tenant under RLS (readiness probe)."""
+    from sqlalchemy import text
+    pending, oldest = 0, None
+    for (tenant_id,) in conn.execute(text("SELECT id FROM pic.tenant")).all():
+        tenant_scope(conn, tenant_id)
+        count, first = conn.execute(text("SELECT count(*), min(occurred_at) FROM pic.outbox_event WHERE published_at IS NULL")).one()
+        pending += count
+        oldest = first if oldest is None or (first is not None and first < oldest) else oldest
+        conn.execute(text("RESET ROLE"))
+    return pending, oldest
+
+
 def _db_samples() -> list[tuple[str, str, dict, float]]:
-    """(metric, help, labels, value) rows from cheap aggregate queries. Owner connection: sees every tenant."""
+    """(metric, help, labels, value) rows from cheap aggregate queries. Tenant tables are read tenant by tenant under RLS
+    (``tenant_scope``); the tenant directory, schema version and heartbeats with the owner connection."""
     from sqlalchemy import text
     from app.pic.db import engine
     from app.pic.platform import clock
@@ -400,13 +425,22 @@ def _db_samples() -> list[tuple[str, str, dict, float]]:
             def code(tid) -> str:
                 return tenants.get(tid, str(tid))
 
+            def query_tenants(conn, sql: str, params: Optional[dict] = None):
+                """The query once per tenant under its RLS scope (GROUP BY tenant_id then yields that tenant's row)."""
+                rows = []
+                for tid in tenants:
+                    tenant_scope(conn, tid)
+                    rows += query(conn, sql, params)
+                conn.execute(text("RESET ROLE"))
+                return rows
+
             for tid in tenants:  # report zeros explicitly: an absent series is not the same as "no backlog"
                 t = {"tenant": code(tid)}
                 for name, help_ in (("pic_outbox_pending_events", "Outbox events not yet relayed."),
                                     ("pic_workflow_open_tasks", "Open human tasks."),
                                     ("pic_workflow_overdue_tasks", "Open human tasks past their SLA due time.")):
                     samples.append((name, help_, t, 0))
-            for tid, pending, oldest, dead in query(conn, """
+            for tid, pending, oldest, dead in query_tenants(conn, """
                     SELECT tenant_id, count(*) FILTER (WHERE published_at IS NULL),
                            min(occurred_at) FILTER (WHERE published_at IS NULL),
                            count(*) FILTER (WHERE published_at >= :since AND last_error LIKE 'DEAD_LETTER%')
@@ -416,24 +450,24 @@ def _db_samples() -> list[tuple[str, str, dict, float]]:
                 samples.append(("pic_outbox_lag_seconds", "Age of the oldest unrelayed outbox event (business clock).", t,
                                 max((now - oldest).total_seconds(), 0) if oldest else 0))
                 samples.append(("pic_outbox_dead_letters", f"Outbox events dead-lettered in the last {SLO_WINDOW_DAYS} days.", t, dead))
-            for tid, open_, overdue in query(conn, """
+            for tid, open_, overdue in query_tenants(conn, """
                     SELECT tenant_id, count(*), count(*) FILTER (WHERE due_at < :now) FROM pic.task WHERE status = 'OPEN'
                     GROUP BY tenant_id""", {"now": now}):
                 t = {"tenant": code(tid)}
                 samples.append(("pic_workflow_open_tasks", "Open human tasks.", t, open_))
                 samples.append(("pic_workflow_overdue_tasks", "Open human tasks past their SLA due time.", t, overdue))
-            for tid, status, n in query(conn, """
+            for tid, status, n in query_tenants(conn, """
                     SELECT tenant_id, status, count(*) FROM pic.integration_message
                     WHERE status IN ('PENDING', 'RETRY', 'DEAD_LETTER') GROUP BY tenant_id, status"""):
                 samples.append(("pic_integration_messages", "ERP integration messages not yet posted, by status.",
                                 {"tenant": code(tid), "status": status}, n))
-            for tid, posted, settled in query(conn, """
+            for tid, posted, settled in query_tenants(conn, """
                     SELECT tenant_id, count(*) FILTER (WHERE status = 'POSTED'), count(*) FILTER (WHERE status IN ('POSTED', 'DEAD_LETTER'))
                     FROM pic.integration_message WHERE created_at >= :since GROUP BY tenant_id""", {"since": since}):
                 if settled:
                     samples.append(("pic_slo_posting_success_ratio", f"ERP postings posted / (posted + dead-lettered), last {SLO_WINDOW_DAYS} days.",
                                     {"tenant": code(tid)}, posted / settled))
-            for tid, p50, p95, n in query(conn, """
+            for tid, p50, p95, n in query_tenants(conn, """
                     SELECT tenant_id,
                            percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM approved_at - submitted_at)),
                            percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM approved_at - submitted_at)), count(*)
@@ -444,13 +478,13 @@ def _db_samples() -> list[tuple[str, str, dict, float]]:
                 samples.append(("pic_slo_pr_approval_latency_seconds", f"Requisition submit → approved, last {SLO_WINDOW_DAYS} days.",
                                 {**t, "quantile": "0.95"}, float(p95 or 0)))
                 samples.append(("pic_slo_pr_approvals", f"Requisitions approved, last {SLO_WINDOW_DAYS} days.", t, n))
-            for tid, yes, n in query(conn, """
+            for tid, yes, n in query_tenants(conn, """
                     SELECT tenant_id, count(*) FILTER (WHERE touchless), count(*) FROM pic.purchase_order
                     WHERE touchless IS NOT NULL AND created_at >= :since GROUP BY tenant_id""", {"since": since}):
                 if n:
                     samples.append(("pic_slo_touchless_ratio", f"Validated POs that met DMN-02 touchless criteria, last {SLO_WINDOW_DAYS} days.",
                                     {"tenant": code(tid)}, yes / n))
-            for tid, yes, n in query(conn, """
+            for tid, yes, n in query_tenants(conn, """
                     SELECT tenant_id, count(*) FILTER (WHERE first_pass_matched), count(*) FROM pic.invoice
                     WHERE first_pass_matched IS NOT NULL AND created_at >= :since GROUP BY tenant_id""", {"since": since}):
                 if n:

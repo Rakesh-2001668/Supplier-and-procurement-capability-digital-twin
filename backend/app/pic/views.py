@@ -1,5 +1,5 @@
 """Read models returned by the API: header, lines, process path, lineage."""
-from sqlalchemy import select
+from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.orm import Session
 
 from app.pic.models import (
@@ -10,7 +10,7 @@ from app.pic.models import (
 )
 from app.pic.platform import workflow
 from app.pic.platform.core import lineage
-from app.pic.platform.serialize import row, rows
+from app.pic.platform.serialize import column_keys, jsonable, row, rows
 
 
 def _process(session: Session, business_type: str, obj) -> dict | None:
@@ -29,16 +29,28 @@ def requisition(session: Session, pr: Requisition) -> dict:
                           "lineage": lineage(session, "REQUISITION", pr.id)})
 
 
+def _column_rows(session: Session, model, *where) -> list[tuple]:
+    """(raw row, ``row()`` dict) per match, from a column select: the same keys and values as ``row`` on the ORM objects,
+    without building them (an MRP run of 50,000 materials returns ~120,000 planned orders)."""
+    keys = column_keys(sa_inspect(model))
+    return [(r, {k: jsonable(v) for k, v in zip(keys, r)})
+            for r in session.execute(select(*(getattr(model, k) for k in keys)).where(*where))]
+
+
 def mrp_run(session: Session, run: MrpRun) -> dict:
-    orders = session.execute(select(PlannedOrder).where(PlannedOrder.mrp_run_id == run.id)).scalars().all()
-    exceptions = session.execute(select(MrpException).where(MrpException.mrp_run_id == run.id)).scalars().all()
-    materials = {m.id: m.number for m in session.execute(select(Material)).scalars()}
+    orders = _column_rows(session, PlannedOrder, PlannedOrder.mrp_run_id == run.id)
+    exceptions = _column_rows(session, MrpException, MrpException.mrp_run_id == run.id)
+    materials = dict(session.execute(select(Material.id, Material.number)).all())  # numbers only: no full rows for a 50k-material run
     prs = {r.id: r.number for r in session.execute(select(Requisition).where(
-        Requisition.id.in_([o.requisition_id for o in orders if o.requisition_id]))).scalars()}
-    return row(run, extra={
-        "plannedOrders": [row(o, extra={"material": materials.get(o.material_id), "requisition": prs.get(o.requisition_id)}) for o in orders],
-        "exceptions": [row(e, extra={"material": materials.get(e.material_id)}) for e in exceptions],
-        "process": _process(session, "MRP_RUN", run)})
+        Requisition.id.in_([o.requisition_id for o, _ in orders if o.requisition_id]))).scalars()}
+    for o, d in orders:  # in place: the lists are already JSON-safe, so they are not copied again by row(extra=...)
+        d["material"], d["requisition"] = materials.get(o.material_id), prs.get(o.requisition_id)
+    for e, d in exceptions:
+        d["material"] = materials.get(e.material_id)
+    out = row(run, extra={"process": _process(session, "MRP_RUN", run)})
+    process = out.pop("process")  # key order as before: columns, plannedOrders, exceptions, process
+    out.update({"plannedOrders": [d for _, d in orders], "exceptions": [d for _, d in exceptions], "process": process})
+    return out
 
 
 def material_request(session: Session, request: MaterialRequest) -> dict:
@@ -73,7 +85,20 @@ def sourcing_event(session: Session, event: SourcingEvent) -> dict:
                   "submittedAt": b.submitted_at.isoformat(), "hash": b.payload_hash} for b in bids],
         "scenarios": rows(scenarios), "awardDecisions": rows(decisions),
         "process": _process(session, "SOURCING_EVENT", event), "lineage": lineage(session, "SOURCING_EVENT", event.id),
+        "cancellation": _cancellation(session, event),
     })
+
+
+def _cancellation(session: Session, event: SourcingEvent):
+    """When and why a cancelled event was cancelled (from its audit trail); shown to invited suppliers too."""
+    if event.status != "CANCELLED":
+        return None
+    from app.pic.models import AuditEvent
+    entry = session.execute(select(AuditEvent).where(AuditEvent.object_type == "SOURCING_EVENT", AuditEvent.object_id == event.id,
+                                                     AuditEvent.action == "CANCEL").order_by(AuditEvent.seq.desc()).limit(1)).scalar_one_or_none()
+    if entry is None:
+        return {"reason": None, "at": None, "from": None}
+    return {"reason": entry.reason, "at": entry.ts.isoformat(), "from": (entry.before or {}).get("status")}
 
 
 def contract(session: Session, c: Contract) -> dict:
@@ -83,9 +108,15 @@ def contract(session: Session, c: Contract) -> dict:
     clauses = session.execute(select(Clause).where(Clause.contract_id == c.id)).scalars().all()
     signatures = session.execute(select(Signature).where(Signature.contract_id == c.id)).scalars().all()
     return row(c, extra={"supplier": _supplier(session, c.supplier_id), "lines": rows(lines), "priceValidity": rows(validities),
-                         "clauses": rows(clauses),
+                         "clauses": rows(clauses), "pendingRedlines": _pending_redlines(session, c),
                          "signatures": [row(x, extra={"documentHash": x.document_hash}) for x in signatures], "process": _process(session, "CONTRACT", c),
                          "lineage": lineage(session, "CONTRACT", c.id)})
+
+
+def _pending_redlines(session: Session, c: Contract) -> list[dict]:
+    """Supplier redlines waiting for the contract manager's review (accept with a position, or restore the text)."""
+    from app.pic.services.contract import pending_redlines
+    return list(pending_redlines(session, c).values())
 
 
 def purchase_order(session: Session, po: PurchaseOrder) -> dict:

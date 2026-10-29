@@ -68,7 +68,7 @@ def test_metrics_from_the_platform_services(pack):
     assert m["spendForecastMape"] is not None and m["spendForecastMape"] < 0.25
     f8_precision, f8_recall = m["dedupF8"]
     spd_precision, spd_recall = m["dedupSpd"]
-    assert spd_recall >= f8_recall and f8_recall < 1.0                # F8-03 screening has no PAN check and no suffix normalisation
+    assert f8_recall >= 0.95 and spd_recall >= 0.95                  # F8-03 screening checks the PAN and normalises legal names
     assert 0.5 < f8_precision < 1.0 and 0.5 < spd_precision < 1.0     # similar-name different companies raise review flags
     assert m["copilotCompleteness"] >= 0.99                          # the documented gate
     assert any("Copilot" in n and "completeness" in n for n in pack["notes"])
@@ -80,7 +80,7 @@ def test_full_report_details():
     assert q["routingAccuracy"] >= 0.9 and q["evidenceAccuracy"] >= 0.9 and q["documentStatusAccuracy"] >= 0.9, q["failures"]
     assert not [f for f in q["failures"] if not f["complete"]]
     assert "DP-021" not in d["SPD_CLUSTERS"]["missed"]                 # the two Kanchi ERP vendor masters are clustered
-    assert "OTHER_STATE_GSTIN" in d["F8_SCREENING"]["missedKinds"]   # same PAN, other state: missed by the registration screening
+    assert "OTHER_STATE_GSTIN" not in d["F8_SCREENING"]["missedKinds"]  # same PAN, other state: caught by the registration screening
     assert report["gates"]["copilotCompleteness"]["documented"] is True
 
 

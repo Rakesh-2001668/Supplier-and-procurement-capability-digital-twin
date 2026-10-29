@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -164,6 +164,8 @@ class Contract(TenantScoped, Base):
 
 class ContractLine(TenantScoped, Base):
     __tablename__ = "contract_line"
+    __table_args__ = (Index("ix_contract_line_material_plant", "tenant_id", "material_id", "plant"),
+                      Index("ix_contract_line_contract", "tenant_id", "contract_id"))
     contract_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract.id"), nullable=False)
     line_no: Mapped[int] = mapped_column(Integer, nullable=False)
     material_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"))
@@ -178,6 +180,7 @@ class ContractLine(TenantScoped, Base):
 class PriceValidity(TenantScoped, Base):
     """Price per period. Index resets add a new period; existing periods are never overwritten."""
     __tablename__ = "price_validity"
+    __table_args__ = (Index("ix_price_validity_contract_line", "tenant_id", "contract_line_id"),)
     contract_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract_line.id"), nullable=False)
     valid_from: Mapped[date] = mapped_column(Date, nullable=False)
     valid_to: Mapped[date] = mapped_column(Date, nullable=False)

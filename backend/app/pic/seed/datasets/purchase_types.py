@@ -50,6 +50,8 @@ TITLE = "D2 purchase types: expense, capital asset, consignment, subcontracting 
 TENANTS = ('AXN',)
 CREATES_TENANT = False
 READY = True
+from app.pic.seed.axion import SIGNATURE_KEY, SIGNATURE_VERSION  # noqa: E402
+REQUIRES = {SIGNATURE_KEY: SIGNATURE_VERSION}  # the current signature case (users, documents, identifiers)
 
 FISCAL_YEAR = "2027-28"
 L = 100_000 * 100  # one lakh rupees in paise
@@ -120,6 +122,7 @@ def onboard(sc: Scenario, spec: dict, password: str, day: date) -> uuid.UUID:
         change_id = change.id
     sc.approve_all(change_id, at(day + timedelta(days=1), 15), "Cancelled cheque and bank letter on letterhead verified")
     with sc.act("supplier.manager", at(day + timedelta(days=2), 10)) as s:
+        svc.verify_certificates(s, s.get(Supplier, supplier_id), "Certificates checked against the issuing bodies' registers")
         for category in spec["categories"]:
             q = svc.start_qualification(s, s.get(Supplier, supplier_id), category)
             svc.record_assessment(s, q, questionnaire=spec.get("questionnaire", {}), questionnaire_score=Decimal(spec["scores"][0]),
@@ -321,7 +324,8 @@ def apply(tenant_code: str, password: str) -> dict:
     _, e2_pr, _ = requisition(sc, "requester", _june(8, 11), purpose_code="FACILITIES", purpose_text="Seating for the Line 4 office", plant="P100", lines=[
         {"item_type": "FREE_TEXT", "purchase_type": "EXPENSE", "description": "Ergonomic task chair with lumbar support and 4D armrests",
          "material_group": "FURNITURE", "category": "OFFICE-SAFETY", "qty": "12", "uom": "EA", "price_est_minor": 980_000,
-         "account_assignment_type": "COST_CENTER", "account_assignment_code": "4150", "need_date": "2027-06-18", "quotes_attached": 1}])
+         "account_assignment_type": "COST_CENTER", "account_assignment_code": "4150", "need_date": "2027-06-18",
+         "quotes": [{"supplier": "MOS205", "reference": "MOS-Q-2711", "date": "2027-06-04"}]}])
     sc.approve_all(_pr_id(sc, e2_pr), _june(8, 15), "Quote MOS-Q-2711 attached")
     e2_po_id, e2_po = order_from(sc, "buyer", _june(9, 10), e2_pr, supplier="MOS205")
     confirm(sc, supplier_user["MOS205"], _june(9, 15), e2_po_id)
@@ -337,7 +341,8 @@ def apply(tenant_code: str, password: str) -> dict:
         {"item_type": "FREE_TEXT", "purchase_type": "ASSET", "description": "Vertical machining centre, 3-axis, 850 x 500 mm table, BT40, "
          "with 4th-axis rotary table", "material_group": "MACHINE-TOOLS", "category": "CAPEX-MACHINERY", "qty": "1", "uom": "EA",
          "price_est_minor": 4_650_000_00, "account_assignment_type": "ASSET", "account_assignment_code": "AST-P100-VMC-07",
-         "need_date": "2027-06-30", "quotes_attached": 3}])
+         "need_date": "2027-06-30",
+         "quotes": [{"supplier": "NPM201", "reference": "NPM/CX/27-061", "date": "2027-05-24"}, {"supplier": "Bharat Machine Tools Pvt Ltd", "reference": "BMT-Q-2705-17", "date": "2027-05-26"}, {"supplier": "Deccan CNC Systems Pvt Ltd", "reference": "DCS/QTN/0527", "date": "2027-05-27"}]}])
     with tenant_tx(sc.tenant_id) as s:
         a1_chain = list(s.get(Requisition, a1_pr_id).approval_chain)
     sc.approve_all(a1_pr_id, _june(10, 11), "Capex proposal CX-27-011 approved; three quotations compared")
@@ -362,7 +367,8 @@ def apply(tenant_code: str, password: str) -> dict:
         pr = req_svc.create(s, origin="MANUAL", purpose_code="CAPEX", purpose_text="Line 4 cell automation", plant="P100", lines=[
             {"item_type": "FREE_TEXT", "purchase_type": "ASSET", "description": "Robotic loading cell for Line 4 with safety fencing and light curtains",
              "material_group": "AUTOMATION", "category": "CAPEX-MACHINERY", "qty": "1", "uom": "EA", "price_est_minor": 2_840_000_00,
-             "account_assignment_type": "WBS", "account_assignment_code": "CX-2728-04", "need_date": "2027-08-31", "quotes_attached": 3}])
+             "account_assignment_type": "WBS", "account_assignment_code": "CX-2728-04", "need_date": "2027-08-31",
+             "quotes": [{"supplier": "NPM201", "reference": "NPM/CX/27-074", "date": "2027-06-02"}, {"supplier": "Pune Robotics Integrators Pvt Ltd", "reference": "PRI-Q-0603", "date": "2027-06-03"}, {"supplier": "Chennai Automation Works", "reference": "CAW/27/219", "date": "2027-06-04"}]}])
         a2_pr_id, a2_pr = pr.id, pr.number
     hard_stop = None
     try:

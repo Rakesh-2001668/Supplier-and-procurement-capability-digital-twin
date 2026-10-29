@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["sin1"],
+  "functions": {
+    "app/main.py": {
+      "maxDuration": 60,
+      "excludeFiles": "{tests/**,venv/**,.pytest_cache/**,data/legacy/**,data/eval/**,evals/**,*.db,verify_*.py,test_*.py,check_*.py}"
+    }
+  },
+  "crons": [
+    { "path": "/internal/worker/tick", "schedule": "0 3 * * *" }
+  ]
+}

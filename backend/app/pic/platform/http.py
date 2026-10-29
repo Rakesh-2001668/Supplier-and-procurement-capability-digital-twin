@@ -19,6 +19,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
+from starlette.background import BackgroundTask, BackgroundTasks
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.pic.config import get_settings
@@ -280,8 +281,7 @@ def readiness() -> tuple[int, dict]:
             alive = age is not None and age <= settings.worker_stale_seconds
             checks["worker"] = {"status": "ok" if alive else ("stale" if beats else "absent"), "instances": len(beats), "heartbeatAgeSeconds": age}
             from app.pic.platform import clock
-            pending, oldest = conn.execute(text(
-                "SELECT count(*), min(occurred_at) FROM pic.outbox_event WHERE published_at IS NULL")).one()
+            pending, oldest = obs.outbox_backlog(conn)  # per tenant under RLS: an owner without BYPASSRLS would see no rows
             lag = max((clock.now() - oldest).total_seconds(), 0) if oldest else 0
             checks["outbox"] = {"pending": pending, "lagSeconds": round(lag, 1)}
         failed = []
@@ -311,6 +311,27 @@ def _metrics_allowed(request: Request) -> bool:
         return request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
     except ValueError:
         return request.client is not None and request.client.host in ("testclient", "localhost")
+
+
+# ---------------------------------------------------------------- serverless worker (Vercel)
+WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def _cron_allowed(request: Request) -> bool:
+    secret = get_settings().cron_secret
+    if not secret:
+        return False
+    supplied = request.headers.get("authorization") or ""
+    return hmac.compare_digest(supplied.encode(), f"Bearer {secret}".encode())
+
+
+def _drain_after(response, budget_seconds: float, tenant_id=None) -> None:
+    """Run the worker after the response has been sent (the client does not wait), so events, ERP messages and timers do
+    not have to wait for the next scheduled tick. Only the caller's tenant when known: one tenant's request never runs (or
+    waits for) every tenant's work; the scheduled cron drain stays global."""
+    from app.pic import worker
+    task = BackgroundTask(worker.drain, budget_seconds, tenant_id=tenant_id)
+    response.background = task if response.background is None else BackgroundTasks([response.background, task])
 
 
 # ---------------------------------------------------------------- install
@@ -366,6 +387,9 @@ def install(app: FastAPI) -> None:
                         "event": "http_request", "method": request.method, "path": path, "route": route, "status": status,
                         "ms": round(elapsed * 1000, 1), "tenant": current.tenant if current else None,
                         "user": current.user if current else None}})
+            if settings.inline_worker and path.startswith("/v1/") and request.method in WRITE_METHODS and status < 400:
+                principal = _bearer_principal(request)
+                _drain_after(response, settings.worker_tick_budget_seconds, principal.tenant_id if principal is not None else None)
             return _finish(request, response, ctx)
         finally:
             obs.deactivate(token)
@@ -395,6 +419,14 @@ def install(app: FastAPI) -> None:
                                 headers={"Retry-After": str(retry), "RateLimit-Limit": str(limit), "RateLimit-Policy": f"{limit};w={window}"},
                                 limit=limit, windowSeconds=window, scope=scope)
         return None
+
+    @app.api_route("/internal/worker/tick", methods=["GET", "POST"], include_in_schema=False)
+    def worker_tick(request: Request):
+        """Serverless worker: Vercel Cron (or any scheduler) sends 'Authorization: Bearer <CRON_SECRET>'. Off without CRON_SECRET."""
+        if not _cron_allowed(request):
+            return errors._body(request, 404, "NOT_FOUND", "Not found")
+        from app.pic import worker
+        return worker.drain(get_settings().worker_tick_budget_seconds)
 
     @app.get("/healthz", tags=["Operations"])
     def healthz():

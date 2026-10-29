@@ -21,8 +21,38 @@ from app.pic.services.common import material_by_number, principal
 
 PROCESS = "pic.requisition"
 NEEDS_ACCOUNT = ("NON_STOCK", "SERVICE", "EXPENSE", "ASSET")
-NEEDS_MATERIAL = ("CONSIGNMENT", "SUBCONTRACTING")  # P08: special stocks are kept per material master
+NEEDS_MATERIAL = ("CONSIGNMENT", "SUBCONTRACTING", "STOCK")  # P08: stock and special stocks are kept per material master
 CAPEX_ACCOUNTS = ("ASSET", "WBS")
+COST_OBJECT_ROLES = ("COST_OBJECT_OWNER", "DEPT_HEAD")  # one task per distinct cost object when a PR spans several
+
+
+def unstructured(line) -> bool:
+    """A line with no material master, catalogue item or contract line: free text or a free service (quote policy, F2-04)."""
+    return not (line.material_id or line.catalogue_item_id or line.contract_line_id)
+
+
+def quote_count(line) -> int:
+    """Quotes that count for the quote policy: one per distinct supplier with a recorded reference (see ``_quote_refs``)."""
+    return len({q["supplier"].strip().upper() for q in (line.source_determination or {}).get("quotes") or []})
+
+
+def _quote_refs(raw) -> list[dict]:
+    """Quote references on a line. There is no document store for quote files yet, so every quote is recorded by
+    supplier, the supplier's quote reference and its date; a bare "quotes attached" number does not count."""
+    refs = []
+    for index, quote in enumerate(raw or [], start=1):
+        quote = dict(quote or {})
+        supplier, reference = str(quote.get("supplier") or "").strip(), str(quote.get("reference") or "").strip()
+        try:
+            quoted_on = quote["date"] if isinstance(quote.get("date"), date) else date.fromisoformat(str(quote.get("date")))
+        except (TypeError, ValueError):
+            quoted_on = None
+        if not supplier or not reference or quoted_on is None:
+            raise rule_violation(f"quote {index}: give the supplier, the supplier's quote reference and the quote date", "QUOTE-POLICY")
+        if quoted_on > clock.today():
+            raise rule_violation(f"quote {index}: the quote date {quoted_on.isoformat()} is in the future", "QUOTE-POLICY")
+        refs.append({"supplier": supplier[:80], "reference": reference[:80], "date": quoted_on.isoformat()})
+    return refs
 
 SM = StateMachine("REQUISITION", {
     ("DRAFT", "submit"): "SUBMITTED",
@@ -41,6 +71,7 @@ SM = StateMachine("REQUISITION", {
     ("DRAFT", "cancel"): "CANCELLED",
     ("RETURNED", "cancel"): "CANCELLED",
     ("APPROVED", "cancel"): "CANCELLED",
+    ("IN_APPROVAL", "cancel"): "CANCELLED",  # the requester withdraws it from approval (open tasks are cancelled)
     # A cancelled purchase order gives its quantity back to the requisition (order.cancel).
     ("ORDERED", "reopen"): "APPROVED",
     ("PARTIALLY_ORDERED", "reopen"): "APPROVED",
@@ -96,6 +127,8 @@ def create(session: Session, *, origin: str, lines: list[dict], plant: str, purp
     p = principal(session)
     if origin == "MRP" and not (p.is_agent or "MRP_CONTROLLER" in p.roles):
         raise Problem(403, "FORBIDDEN", "Only MRP conversion creates MRP-origin requisitions", rule_ref="P02")
+    if not lines:
+        raise rule_violation("A requisition needs at least one line", "REQ-02")
     pr = Requisition(tenant_id=current_tenant(session), number=next_number(session, "REQUISITION"), origin=origin,
                      origin_ref=origin_ref, purpose_code=purpose_code, purpose_text=purpose_text, requester_id=p.user_id,
                      company_code=company_code, plant=plant, status="DRAFT", created_by=p.user_id)
@@ -110,7 +143,7 @@ def create(session: Session, *, origin: str, lines: list[dict], plant: str, purp
         session.add(line)
         total += line_amount(line.qty, line.price_est_minor)
         channels.add(line.item_type)
-        if line.item_type == "FREE_TEXT" and line.reusable:
+        if unstructured(line) and line.reusable:
             reusable_lines.append((line, data))
     pr.total_minor = total
     session.flush()
@@ -118,8 +151,11 @@ def create(session: Session, *, origin: str, lines: list[dict], plant: str, purp
     found = channels & {"CONTRACT", "CATALOGUE"}
     other = "material master" if "MATERIAL" in channels else "free text"
     workflow.step(session, instance, "F2-03", outcome="yes: " + ", ".join(sorted(found)) if found else f"no → {other}")
-    if "FREE_TEXT" in channels:
-        workflow.step(session, instance, "F2-04", outcome="free-text line(s) with material group and account assignment")
+    free = [l for l in _lines(session, pr) if unstructured(l)]
+    if free:
+        kinds = ", ".join(sorted({l.item_type.lower().replace("_", " ") for l in free}))
+        workflow.step(session, instance, "F2-04", outcome=f"{len(free)} {kinds} line(s) without material, catalogue or contract: "
+                                                          "material group, account assignment and quote policy")
         workflow.step(session, instance, "F2-05", outcome="yes" if reusable_lines else "no")
     for line, data in reusable_lines:
         mdm.create_request(session, description=line.description, type="NON_STOCK" if line.purchase_type != "STOCK" else "STOCK",
@@ -153,7 +189,10 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
     if item_type == "CONTRACT":
         if not data.get("contract_line_id"):
             raise rule_violation("Contract lines need the contract line from the guided-buying search", "P03")
-        contract_line = session.get(ContractLine, uuid.UUID(str(data["contract_line_id"])))
+        try:
+            contract_line = session.get(ContractLine, uuid.UUID(str(data["contract_line_id"])))
+        except ValueError:
+            contract_line = None
         if contract_line is None or contract_line.material_id != material.id:
             raise rule_violation("The contract line does not match the material", "P03")
         validity = source.contract_price(session, contract_line.id, max(clock.today(), session.get(Contract, contract_line.contract_id).valid_from))
@@ -168,19 +207,38 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
         price = catalogue.price_minor
     if price is None:
         raise rule_violation("Every line needs an estimated price", "REQ-02")
+    # A negative quantity or price would net down the requisition value and dodge the approval band and the budget.
+    try:
+        qty = D(data["qty"])
+    except (ArithmeticError, TypeError, ValueError):
+        raise rule_violation(f"line {line_no}: the quantity '{data.get('qty')}' is not a number", "REQ-02")
+    if not qty.is_finite() or qty <= 0:
+        raise rule_violation(f"line {line_no}: the quantity must be greater than zero", "REQ-02")
+    if int(price) < 0:
+        raise rule_violation(f"line {line_no}: the estimated price cannot be negative", "REQ-02")
+    quotes = _quote_refs(data.get("quotes"))
+    declared = int(data.get("quotes_attached", 0) or 0)
+    if declared < 0:
+        raise rule_violation(f"line {line_no}: quotes attached cannot be negative", "QUOTE-POLICY")
+    if declared > len(quotes):
+        raise rule_violation(f"line {line_no}: {declared} quote(s) declared but {len(quotes)} quote reference(s) given; record each quote "
+                             "with the supplier, its quote reference and date", "QUOTE-POLICY")
+    determination = dict(data.get("source_determination") or {})
+    if quotes:
+        determination["quotes"] = quotes
     return PrLine(
         tenant_id=pr.tenant_id, requisition_id=pr.id, line_no=line_no, item_type=item_type, purchase_type=purchase_type,
         material_id=material.id if material else None, catalogue_item_id=catalogue.id if catalogue else None,
         contract_line_id=contract_line.id if contract_line else None,
         description=description, material_group=material_group,
         category=data.get("category") or (material.category if material else catalogue.category if catalogue else material_group),
-        qty=D(data["qty"]), uom=data.get("uom") or (material.base_uom if material else catalogue.uom if catalogue else "EA"),
+        qty=qty, uom=data.get("uom") or (material.base_uom if material else catalogue.uom if catalogue else "EA"),
         price_est_minor=int(price), account_assignment_type=data.get("account_assignment_type"),
         account_assignment_code=data.get("account_assignment_code"),
         need_date=data["need_date"] if isinstance(data["need_date"], date) else date.fromisoformat(str(data["need_date"])),
         plant=data.get("plant", pr.plant), storage_location=data.get("storage_location"),
-        quotes_attached=int(data.get("quotes_attached", 0)), reusable=bool(data.get("reusable", False)),
-        planned_order_id=data.get("planned_order_id"), source_determination=data.get("source_determination", {}),
+        quotes_attached=len({q["supplier"].upper() for q in quotes}), reusable=bool(data.get("reusable", False)),
+        planned_order_id=data.get("planned_order_id"), source_determination=determination,
         preferred_supplier_id=data.get("preferred_supplier_id"), created_by=pr.created_by,
     )
 
@@ -217,11 +275,15 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
     if not SM.can(pr.status, "submit"):
         raise illegal_transition("Requisition", pr.number, pr.status, "submit")
     lines = _lines(session, pr)
+    if not lines:
+        raise rule_violation("A requisition needs at least one line before submission", "REQ-02")
     if not pr.purpose_code:
         raise rule_violation("A purpose code is mandatory before submission", "P01")
     hints, violations = [], []
     quote_rule = rules.resolve(session, "QUOTE-POLICY", company_code=pr.company_code)
     for line in lines:
+        if line.qty <= 0 or line.price_est_minor < 0:
+            violations.append(f"line {line.line_no}: quantity must be greater than zero and the price cannot be negative")
         if line.purchase_type in NEEDS_ACCOUNT and not line.account_assignment_code:
             violations.append(f"line {line.line_no}: {line.purchase_type.lower()} purchases need an account assignment")
         # BP §22: capital assets are assigned to an asset or a WBS element (capex); consignment and subcontracting need a material.
@@ -230,27 +292,22 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
                               f"not {(line.account_assignment_type or 'none').lower().replace('_', ' ')}")
         if line.purchase_type in NEEDS_MATERIAL and not line.material_id:
             violations.append(f"line {line.line_no}: {line.purchase_type.lower()} purchases need a material master")
-        if line.item_type == "FREE_TEXT":
-            value = line_amount(line.qty, line.price_est_minor)
-            required = 0 if value < quote_rule.body["noQuoteBelow"] else 1 if value < quote_rule.body["oneQuoteBelow"] else 3
-            if line.quotes_attached < required:
+        if unstructured(line):  # free text and free services alike (no material, catalogue or contract price)
+            required = quotes_required(quote_rule, line_amount(line.qty, line.price_est_minor))
+            if quote_count(line) < required:
                 if required == 3 and request_sourcing:
                     line.sourcing_status = "SOURCING_REQUIRED"
                     hints.append(f"line {line.line_no}: sourcing event required instead of three quotes")
                 else:
-                    violations.append(f"line {line.line_no}: {required} quote(s) required for free text of this value")
+                    violations.append(f"line {line.line_no}: {required} quote(s) from different suppliers, each with its reference "
+                                      f"and date, required for a {line.item_type.lower().replace('_', ' ')} line of this value")
     if violations:
         raise rule_violation("; ".join(violations), "P01/P08/" + quote_rule.ref, violations=violations)
 
     category_result, category_rules = category_budget_check(session, pr, lines, justification)
     budget_rule = rules.resolve(session, "BUDGET", company_code=pr.company_code)
     budget_result = _budget_check(session, pr, lines, budget_rule, justification)
-    route_rule = rules.resolve(session, "DMN-01", company_code=pr.company_code, plant=pr.plant)
-    channel = "CATALOGUE" if all(l.item_type == "CATALOGUE" for l in lines) else (
-        "CONTRACT" if all(l.item_type == "CONTRACT" for l in lines) else "OTHER")
-    account_type = "ASSET" if any(l.account_assignment_type == "ASSET" for l in lines) else (lines[0].account_assignment_type if lines else None)
-    purchase_type = "ASSET" if any(l.purchase_type == "ASSET" for l in lines) else lines[0].purchase_type
-    chain = rules.requisition_chain(route_rule, pr.total_minor, channel, account_type, purchase_type)
+    route_rule, chain = _route(session, pr, lines)
     pr.rule_set_version = rules.refs(route_rule, quote_rule, budget_rule)
     for extra in category_rules:  # the full list stays in budget_result; the column holds 80 characters
         if extra.ref not in pr.rule_set_version and len(pr.rule_set_version) + len(extra.ref) + 1 <= 80:
@@ -276,13 +333,104 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
         _approved(session, pr, instance)
         return {"status": pr.status, "chain": chain, "categoryBudget": category_result}
     SM.apply(session, pr, "route", rule_set_version=route_rule.ref)
-    workflow.start_approval(
-        session, instance, "REQ_APPROVAL", object_type="REQUISITION", object_id=pr.id, object_ref=pr.number, chain=chain,
-        step_id="F2-08", initiator_id=pr.requester_id, scopes=_scopes(lines, chain),
-        sla_business_days=int(route_rule.body.get("slaBusinessDays", 2)), rule_set_version=route_rule.ref,
-        evidence={"totalMinor": pr.total_minor, "budget": budget_result},
-    )
+    _start_route(session, pr, instance, lines, chain, route_rule)
     return {"status": pr.status, "chain": chain, "categoryBudget": category_result}
+
+
+def quotes_required(rule, value_minor: int) -> int:
+    """BP §10.2 default quote policy: "< 25,000 none; 25,000 – 2 L one quote or catalogue; > 2 L three quotes or sourcing
+    event". Below ``noQuoteBelow`` none; up to and including ``oneQuoteBelow`` (₹2 L) one; strictly above it three
+    (exactly ₹2 L needs one quote, as in the blueprint wording and sourcing_strategy)."""
+    return 0 if value_minor < rule.body["noQuoteBelow"] else 1 if value_minor <= rule.body["oneQuoteBelow"] else 3
+
+
+def _route(session: Session, pr: Requisition, lines: list[PrLine]):
+    """DMN-01 for the whole requisition (submit and re-approval after a change alike): value = requisition total, rule
+    scope = company code, plant, dominant category by value and purchase type (ASSET if any line is an asset, else the
+    dominant purchase type by value) — the same scope the ADM-03 policy simulator resolves with."""
+    by_category: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    for line in lines:
+        value = line_amount(line.qty, line.price_est_minor)
+        category = line.category or line.material_group
+        by_category[category] = by_category.get(category, 0) + value
+        by_type[line.purchase_type] = by_type.get(line.purchase_type, 0) + value
+    category = max(sorted(by_category), key=lambda k: by_category[k])
+    purchase_type = "ASSET" if "ASSET" in by_type else max(sorted(by_type), key=lambda k: by_type[k])
+    channel = "CATALOGUE" if all(l.item_type == "CATALOGUE" for l in lines) else (
+        "CONTRACT" if all(l.item_type == "CONTRACT" for l in lines) else "OTHER")
+    account_type = "ASSET" if any(l.account_assignment_type == "ASSET" for l in lines) else lines[0].account_assignment_type
+    route_rule = rules.resolve(session, "DMN-01", company_code=pr.company_code, plant=pr.plant, category=category,
+                               purchase_type=purchase_type)
+    return route_rule, rules.requisition_chain(route_rule, pr.total_minor, channel, account_type, purchase_type)
+
+
+def _cost_objects(lines: list[PrLine]) -> list[str]:
+    objects = []
+    for line in lines:
+        if line.account_assignment_type and line.account_assignment_code:
+            key = f"{line.account_assignment_type}:{line.account_assignment_code}"
+            if key not in objects:
+                objects.append(key)
+    return objects
+
+
+def _stages(lines: list[PrLine], chain: list[str]) -> list[dict]:
+    """Approval stages for a chain. With one cost object (or none) the chain runs as one sequential group, as before.
+    A requisition charged to several cost objects gets, for each cost-object role in the chain (owner, department head),
+    a parallel stage with one task per distinct cost object — all must approve — and the other roles run sequentially
+    between those stages in chain order."""
+    objects = _cost_objects(lines)
+    if len(objects) <= 1:
+        return [{"mode": "SEQUENTIAL", "chain": chain}]
+    stages, rest = [], []
+    for role in chain:
+        if role in COST_OBJECT_ROLES:
+            if rest:
+                stages.append({"mode": "SEQUENTIAL", "chain": rest})
+                rest = []
+            stages.append({"mode": "PARALLEL", "chain": [role] * len(objects), "costObjects": objects})
+        else:
+            rest.append(role)
+    if rest:
+        stages.append({"mode": "SEQUENTIAL", "chain": rest})
+    return stages
+
+
+def _start_route(session: Session, pr: Requisition, instance, lines: list[PrLine], chain: list[str], route_rule) -> None:
+    stages = _stages(lines, chain)
+    for stage in stages:
+        stage.update(rule=route_rule.ref, sla=int(route_rule.body.get("slaBusinessDays", 2)))
+    _start_stage(session, pr, instance, lines, stages[0], [])
+    instance.variables = {**(instance.variables or {}), "reqStages": stages[1:]}
+
+
+def _start_stage(session: Session, pr: Requisition, instance, lines: list[PrLine], stage: dict, exclude: list) -> None:
+    parallel = stage["mode"] == "PARALLEL"
+    tasks = workflow.start_approval(
+        session, instance, "REQ_APPROVAL", object_type="REQUISITION", object_id=pr.id, object_ref=pr.number, chain=stage["chain"],
+        mode=stage["mode"], step_id="F2-08", initiator_id=pr.requester_id, scopes={} if parallel else _scopes(lines, stage["chain"]),
+        sla_business_days=stage["sla"], rule_set_version=stage["rule"], exclude=exclude,
+        evidence={"totalMinor": pr.total_minor, "budget": pr.budget_result},
+    )
+    if parallel:  # each parallel task is bound to one cost object (as the F9 steward tasks are bound to a domain)
+        for task, cost_object in zip(tasks, stage["costObjects"]):
+            task.candidate_scope = {"cost_object": cost_object}
+            task.name = f"{task.name} · {cost_object.replace(':', ' ')}"[:200]
+        session.flush()
+
+
+def _next_stage(session: Session, pr: Requisition, instance) -> bool:
+    """Open the next approval stage of a multi-cost-object requisition; False when every stage is approved."""
+    pending = list((instance.variables or {}).get("reqStages") or []) if instance is not None else []
+    if not pending:
+        return False
+    approvers = [t.completed_by for t in session.execute(select(Task).where(
+        Task.object_id == pr.id, Task.kind == "REQ_APPROVAL", Task.instance_id == instance.id, Task.decision == "APPROVE")).scalars()
+        if t.completed_by]
+    _start_stage(session, pr, instance, _lines(session, pr), pending[0], approvers)
+    instance.variables = {**(instance.variables or {}), "reqStages": pending[1:]}
+    return True
 
 
 def _scopes(lines: list[PrLine], chain: list[str]) -> dict:
@@ -380,9 +528,11 @@ def category_budget_check(session: Session, pr: Requisition, lines: list[PrLine]
     for line in lines:
         category = line.category or line.material_group
         amounts[category] = amounts.get(category, 0) + line_amount(line.qty, line.price_est_minor)
+    # Lock the plan rows (in a fixed order) before reading the committed spend, so concurrent submits against the same
+    # category plan are serialised and a HARD budget cannot be overrun by two requisitions read side by side.
     plans = {plan.category: plan for plan in session.execute(select(CategoryPlan).where(
         CategoryPlan.category.in_(list(amounts)), CategoryPlan.fiscal_year == fiscal_year, CategoryPlan.status == "APPROVED",
-        CategoryPlan.budget_minor.is_not(None))).scalars()}
+        CategoryPlan.budget_minor.is_not(None)).order_by(CategoryPlan.category, CategoryPlan.id).with_for_update()).scalars()}
     result = {"outcome": "NOT_APPLICABLE", "fiscalYear": fiscal_year, "measure": CATEGORY_MEASURE, "checks": [], "warnings": []}
     if not plans:
         return result, []
@@ -431,9 +581,14 @@ def _decided(session: Session, task: Task, outcome: str) -> None:
     pr = session.get(Requisition, task.object_id)
     instance = workflow.find(session, "REQUISITION", pr.id, PROCESS)
     if outcome == "APPROVED":
+        if _next_stage(session, pr, instance):  # a multi-cost-object requisition has more approval stages
+            return
         SM.apply(session, pr, "approve", rule_set_version=task.rule_set_version)
         _approved(session, pr, instance)
-    elif outcome == "REJECTED":
+        return
+    if instance is not None and (instance.variables or {}).get("reqStages"):
+        instance.variables = {**instance.variables, "reqStages": []}
+    if outcome == "REJECTED":
         SM.apply(session, pr, "reject", reason=task.comment)
         _release_budget(session, pr)
         workflow.end(session, instance, "F2-09", outcome=f"rejected: {task.comment}")
@@ -449,6 +604,7 @@ def _approved(session: Session, pr: Requisition, instance) -> None:
     pr.approved_at = clock.now()
     lines = _lines(session, pr)
     pr.approved_snapshot = {str(l.line_no): {"value": line_amount(l.qty, l.price_est_minor), "account": l.account_assignment_code,
+                                             "accountType": l.account_assignment_type,
                                              "supplier": str(l.preferred_supplier_id) if l.preferred_supplier_id else None}
                             for l in lines}
     for line in lines:
@@ -469,42 +625,113 @@ def change_line(session: Session, pr: Requisition, line_no: int, changes: dict) 
     """Restart approval only when value, account assignment or supplier changes (§10.4)."""
     if pr.status not in ("APPROVED", "DRAFT", "RETURNED"):
         raise illegal_transition("Requisition", pr.number, pr.status, "change")
-    line = session.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line_no)).scalar_one()
+    p = principal(session)
+    # DRAFT / RETURNED: the requester's own document. APPROVED: the requester or a buyer (re-approval rules apply).
+    if p.user_id != pr.requester_id and not (pr.status == "APPROVED" and "BUYER" in p.roles):
+        raise Problem(403, "FORBIDDEN", "Only the requester can change this requisition" +
+                      (" (or a buyer once it is approved)" if pr.status == "APPROVED" else ""))
+    line = session.execute(select(PrLine).where(PrLine.requisition_id == pr.id, PrLine.line_no == line_no)).scalar_one_or_none()
+    if line is None:
+        raise Problem(404, "NOT_FOUND", f"Requisition {pr.number} has no line {line_no}")
+    justification = (changes.get("justification") or "").strip() or None
     before = {"qty": str(line.qty), "price": line.price_est_minor, "account": line.account_assignment_code,
+              "accountType": line.account_assignment_type,
               "supplier": str(line.preferred_supplier_id) if line.preferred_supplier_id else None, "need_date": line.need_date.isoformat()}
     for field in ("qty", "price_est_minor", "account_assignment_code", "account_assignment_type", "need_date", "description",
                   "preferred_supplier_id"):
         if field in changes:
             value = changes[field]
             if field == "qty":
-                value = D(value)
+                try:
+                    value = D(value)
+                except (ArithmeticError, TypeError, ValueError):
+                    raise rule_violation(f"line {line_no}: the quantity '{value}' is not a number", "REQ-02")
+                if not value.is_finite() or value <= 0:
+                    raise rule_violation(f"line {line_no}: the quantity must be greater than zero", "REQ-02")
+                if value < (line.ordered_qty or 0):
+                    raise rule_violation(f"line {line_no}: {line.ordered_qty} is already ordered; the quantity cannot go below it", "REQ-02")
+            if field == "price_est_minor" and (value is None or int(value) < 0):
+                raise rule_violation(f"line {line_no}: the estimated price cannot be negative", "REQ-02")
             if field == "need_date" and not isinstance(value, date):
                 value = date.fromisoformat(str(value))
             setattr(line, field, value)
-    pr.total_minor = sum(line_amount(l.qty, l.price_est_minor) for l in _lines(session, pr))
+    lines = _lines(session, pr)
+    pr.total_minor = sum(line_amount(l.qty, l.price_est_minor) for l in lines)
     restart = False
     if pr.status == "APPROVED":
         snap = (pr.approved_snapshot or {}).get(str(line_no), {})
         restart = (line_amount(line.qty, line.price_est_minor) != snap.get("value")
                    or line.account_assignment_code != snap.get("account")
+                   or ("accountType" in snap and line.account_assignment_type != snap.get("accountType"))
                    or (str(line.preferred_supplier_id) if line.preferred_supplier_id else None) != snap.get("supplier"))
     audit.record(session, "REQUISITION", pr.id, "LINE_CHANGED", object_ref=pr.number, before=before,
-                 after={k: str(v) for k, v in changes.items()}, reason="re-approval required" if restart else "no re-approval needed")
+                 after={k: str(v) for k, v in changes.items() if k != "justification"},
+                 reason=("re-approval required" if restart else "no re-approval needed") + (f"; justification: {justification}" if justification else ""))
     if restart:
         SM.apply(session, pr, "reapprove", reason="value, account or supplier changed after approval")
-        rule = rules.resolve(session, "DMN-01", company_code=pr.company_code, plant=pr.plant)
-        lines = _lines(session, pr)
-        # The budget commitment follows the changed value: release the old one and book the new one (same soft/hard rules).
+        # The budget commitments follow the changed value: release the old ones and book the new ones with the same
+        # soft/hard rules (a soft stop takes the change's justification); the category plan is checked again as well.
         _release_budget(session, pr)
-        rebooked = _budget_check(session, pr, lines, rules.resolve(session, "BUDGET", company_code=pr.company_code), None)
-        pr.budget_result = {**rebooked, "categoryBudget": (pr.budget_result or {}).get("categoryBudget"), "rebookedOnChange": True}
-        chain = rules.requisition_chain(rule, pr.total_minor, "OTHER", line.account_assignment_type, line.purchase_type)
+        category_result, _ = category_budget_check(session, pr, lines, justification)
+        rebooked = _budget_check(session, pr, lines, rules.resolve(session, "BUDGET", company_code=pr.company_code), justification)
+        pr.budget_result = {**rebooked, "categoryBudget": category_result, "rebookedOnChange": True}
+        # The same DMN-01 aggregation as on submit (whole requisition, full rule scope); a changed approved
+        # requisition always goes to at least the cost-object owner.
+        rule, chain = _route(session, pr, lines)
+        chain = chain or ["COST_OBJECT_OWNER"]
+        pr.approval_chain = chain
         instance = workflow.start(session, PROCESS, "REQUISITION", pr.id, pr.number, {"reapproval": True})
-        workflow.start_approval(session, instance, "REQ_APPROVAL", object_type="REQUISITION", object_id=pr.id,
-                                object_ref=pr.number, chain=chain or ["COST_OBJECT_OWNER"], step_id="F2-08",
-                                initiator_id=pr.requester_id, scopes=_scopes(lines, chain or ["COST_OBJECT_OWNER"]),
-                                rule_set_version=rule.ref)
+        _start_route(session, pr, instance, lines, chain, rule)
     return {"status": pr.status, "reapproval": restart}
+
+
+# ---------------------------------------------------------------- cancel / withdraw
+def cancel(session: Session, pr: Requisition, reason: str) -> Requisition:
+    """Withdraw a requisition: the requester while DRAFT, RETURNED, IN_APPROVAL or APPROVED (not yet ordered), a buyer once APPROVED.
+    Releases the budget commitments, cancels the open approval tasks and their timers and ends the process."""
+    from app.pic.models import PoLine, PurchaseOrder, Timer
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise rule_violation("A reason is required to cancel a requisition", "REQ-02")
+    if not SM.can(pr.status, "cancel"):
+        raise illegal_transition("Requisition", pr.number, pr.status, "cancel")
+    p = principal(session)
+    if p.user_id != pr.requester_id and not (pr.status == "APPROVED" and "BUYER" in p.roles):
+        raise Problem(403, "FORBIDDEN", "Only the requester can cancel this requisition" +
+                      (" (or a buyer once it is approved)" if pr.status == "APPROVED" else ""))
+    ordered = session.execute(select(PurchaseOrder.number).join(PoLine, PoLine.po_id == PurchaseOrder.id).where(
+        PoLine.requisition_id == pr.id, PurchaseOrder.status != "CANCELLED")).scalars().first()
+    if ordered:
+        raise Problem(409, "REQUISITION_ORDERED", f"{pr.number} is on purchase order {ordered}; cancel the purchase order first",
+                      rule_ref="REQ-02")
+    lines = _lines(session, pr)
+    if any(l.ordered_qty > 0 for l in lines):
+        raise Problem(409, "REQUISITION_ORDERED", f"{pr.number} is partly ordered; cancel the purchase order first", rule_ref="REQ-02")
+    if any(l.sourcing_status == "IN_SOURCING" for l in lines):
+        raise Problem(409, "REQUISITION_IN_SOURCING", f"{pr.number} is bundled into a sourcing event; remove it there first",
+                      rule_ref="REQ-02")
+    before = pr.status
+    _release_budget(session, pr)
+    cancelled = 0
+    for task in session.execute(select(Task).where(Task.object_id == pr.id, Task.status == "OPEN")).scalars():
+        task.status = "CANCELLED"
+        cancelled += 1
+        for timer in session.execute(select(Timer).where(Timer.object_id == task.id, Timer.fired_at.is_(None))).scalars():
+            timer.fired_at = clock.now()
+            timer.payload = {**(timer.payload or {}), "cancelled": True}
+    for timer in session.execute(select(Timer).where(Timer.object_id == pr.id, Timer.fired_at.is_(None))).scalars():
+        timer.fired_at = clock.now()
+        timer.payload = {**(timer.payload or {}), "cancelled": True}
+    instance = workflow.find(session, "REQUISITION", pr.id, PROCESS)
+    if instance is not None:
+        if (instance.variables or {}).get("reqStages"):
+            instance.variables = {**instance.variables, "reqStages": []}
+        if instance.status == "RUNNING":
+            workflow.end(session, instance, "F2-09", outcome=f"cancelled by {p.actor}: {reason}", status="CANCELLED")
+    SM.apply(session, pr, "cancel", reason=reason, extra_after={"tasksCancelled": cancelled, "cancelledBy": p.actor})
+    outbox.emit(session, "requisition.cancelled", "REQUISITION", pr.id, pr.number, {"reason": reason, "previousStatus": before})
+    return pr
 
 
 def buyer_queue(session: Session, origin: Optional[str] = None) -> list[dict]:

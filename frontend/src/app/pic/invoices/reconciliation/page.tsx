@@ -19,6 +19,11 @@ const KIND_TEXT: Record<string, string> = {
   MISSING_IN_PLATFORM: 'ERP document with no matching platform posting',
   AMOUNT_MISMATCH: 'Amounts differ (platform gross net of credit notes vs ERP)',
   DOCUMENT_MISMATCH: 'ERP document number differs from the one recorded',
+  PAYMENT_MISSING_IN_ERP: 'Payment made in a run, no ERP clearing document yet',
+  PAYMENT_AMOUNT_MISMATCH: 'Payment amount differs from the ERP clearing document',
+  PAYMENT_NOT_IN_PLATFORM: 'ERP payment with no matching platform payment',
+  MEMO_MISSING_IN_ERP: 'Credit note received after posting, no ERP credit memo yet',
+  MEMO_AMOUNT_MISMATCH: 'Credit memo amount differs from the credit note',
 };
 
 export default function Reconciliation() {

@@ -107,14 +107,20 @@ export function UsageDecisionDialog({ lot, onClose }: { lot: InspectionLot; onCl
   const [rejected, setRejected] = useState('0');
   const [defect, setDefect] = useState('');
   const [reason, setReason] = useState('');
+  const [replacement, setReplacement] = useState(false);
   const numeric = isNumber(accepted) && isNumber(rejected) && Number(accepted) >= 0 && Number(rejected) >= 0;
   const balanced = numeric && Math.abs(Number(accepted) + Number(rejected) - Number(lot.qty)) < 1e-9;
   const rejecting = numeric && Number(rejected) > 0;
   const missing = rejecting && (!defect.trim() || !reason.trim());
-  const decide = useCommand(() => api.post<{ status: string; returnDelivery: string | null }>(`/inspection-lots/${encodeURIComponent(lot.number)}/usage-decision`, {
-    accepted, rejected, defect_code: rejecting ? defect.trim().toUpperCase() : undefined, reason: rejecting ? reason.trim() : undefined,
-  }), {
-    success: (r) => `Usage decision recorded · ${r.status.replace(/_/g, ' ').toLowerCase()}${r.returnDelivery ? ` · return ${r.returnDelivery} created` : ''}`,
+  const decide = useCommand(() => api.post<{ status: string; returnDelivery: string | null; openLots?: string[]; replacement?: boolean }>(
+    `/inspection-lots/${encodeURIComponent(lot.number)}/usage-decision`, {
+      accepted, rejected, defect_code: rejecting ? defect.trim().toUpperCase() : undefined, reason: rejecting ? reason.trim() : undefined,
+      replacement: rejecting && replacement,
+    }), {
+    // A receipt with several quality-managed lines is decided when its last lot is: until then it stays on quality hold.
+    success: (r) => `Usage decision recorded · ${r.status.replace(/_/g, ' ').toLowerCase()}`
+      + `${r.returnDelivery ? ` · return ${r.returnDelivery} created${r.replacement ? ' for replacement' : ''}` : ''}`
+      + `${r.openLots?.length ? ` · still to decide: ${r.openLots.join(', ')}` : ''}`,
     onSuccess: onClose,
   });
   const setAcc = (v: string) => { setAccepted(v); if (isNumber(v)) setRejected(minus(lot.qty, v)); };
@@ -135,12 +141,16 @@ export function UsageDecisionDialog({ lot, onClose }: { lot: InspectionLot; onCl
             <div className="md:col-span-2">
               <Field label="Reason (required when rejecting)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field>
             </div>
+            <label className="flex items-start gap-2 text-sm md:col-span-2">
+              <input type="checkbox" className="mt-0.5 h-4 w-4" checked={replacement} onChange={(e) => setReplacement(e.target.checked)} />
+              <span>Return for replacement: the rejected quantity is open again on the order for a new ASN and receipt (no credit note)</span>
+            </label>
           </>
         )}
       </div>
       {!balanced && <p className="mt-2 text-xs text-amber-700" role="status">Accepted + rejected must equal the lot quantity {qty(lot.qty)}.</p>}
       {balanced && missing && <p className="mt-2 text-xs text-amber-700" role="status">Rejections need a defect code and a reason.</p>}
-      <p className="mt-3 text-xs text-slate-500">Accepted stock moves to unrestricted (321). Rejected stock is blocked (350) and returned to the supplier (122) with a credit note requested.</p>
+      <p className="mt-3 text-xs text-slate-500">Accepted stock moves to unrestricted (321). Rejected stock is blocked (350) and returned to the supplier (122) with a credit note requested, or for replacement when ticked.</p>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!balanced || missing} busy={decide.isPending} onClick={() => decide.mutate()}>Record decision</Button>

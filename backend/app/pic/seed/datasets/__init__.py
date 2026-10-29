@@ -8,6 +8,8 @@ Every pack is a module in this package with:
     TENANTS: tuple       tenant codes the pack writes to; ("*",) = every existing tenant
     CREATES_TENANT: bool True when the pack creates its tenant (industry demo tenants)
     READY: bool          False while the pack is still a stub; apply_all() skips it
+    REQUIRES: dict       optional {dataset key: version} that must be loaded for the tenant first, e.g. the AXN signature
+                         case of the current seed release; otherwise the pack is SKIPPED before it writes anything
     def apply(tenant_code: str, password: str) -> dict
                          creates the data for one tenant and returns a JSON summary {"notes": [...], "counts": {...}}
 
@@ -29,10 +31,10 @@ from app.pic.platform import clock
 
 log = logging.getLogger(__name__)
 
-# Order matters only for readability of the setup output: packs do not depend on each other.
+# Packs do not depend on each other, but reference_data runs last: it covers every tenant, including the industry demo
+# tenants created above, and its plant holidays must not shift the dates of the AXN cases (same order as the test suite).
 PACKS = (
-    "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
-    "branches",               # D1  operating cases 9–n: the unexercised gateway branches of F1–F9 (AXN, April 2027)
+    "branches",              # D1  operating cases 9–n: the unexercised gateway branches of F1–F9 (AXN, April 2027)
     "module_cases",           # D1  cases for the operations modules: amendments, auctions, EDI, payment files, … (AXN, May 2027)
     "purchase_types",         # D2  expense, capital asset, consignment, subcontracting (AXN, June 2027)
     "industry_construction",  # D3  tenant CON
@@ -41,6 +43,7 @@ PACKS = (
     "industry_healthcare",    # D6  tenant HLT
     "industry_general",       # D7  tenant GEN
     "ai_eval",                # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
+    "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
 )
 
 
@@ -66,6 +69,18 @@ def loaded(tenant_code: str, key: str) -> Optional[DatasetLoad]:
         return row
 
 
+def _unmet(tenant_code: str, requires: dict) -> list[str]:
+    reasons = []
+    for key, version in (requires or {}).items():
+        row = loaded(tenant_code, key)
+        if row is None:
+            reasons.append(f"needs {key} {version}, which this database does not have (seeded by an older release: "
+                           f"rebuild the tenant from the current seed)")
+        elif row.version != version:
+            reasons.append(f"needs {key} {version}, found {row.version} (rebuild the tenant from the current seed)")
+    return reasons
+
+
 def _record(tenant_code: str, pack: ModuleType, summary: dict) -> None:
     tenant_id = _tenants()[tenant_code]
     with tenant_tx(tenant_id) as s:
@@ -84,6 +99,11 @@ def apply_pack(name: str, password: str, tenants: Optional[Iterable[str]] = None
             continue
         if loaded(code, pack.KEY):
             results.append({"pack": name, "tenant": code, "status": "ALREADY_LOADED"})
+            continue
+        unmet = _unmet(code, getattr(pack, "REQUIRES", {}))
+        if unmet:
+            results.append({"pack": name, "tenant": code, "status": "SKIPPED", "reason": "; ".join(unmet)})
+            log.warning("dataset %s skipped for %s: %s", pack.KEY, code, "; ".join(unmet))
             continue
         try:
             summary = pack.apply(code, password) or {}

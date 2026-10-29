@@ -5,18 +5,18 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
 from app.pic.models import (
     BudgetCommitment, CreditNote, Invoice, InvoiceException, InvoiceLine, Payment, PoLine, PurchaseOrder, ReturnDelivery, Supplier,
-    SupplierBankAccount,
+    SupplierBankAccount, Task,
 )
 from app.pic.platform import agents, audit, clock, crypto, integration, outbox, rules, sod, workflow
 from app.pic.platform.core import StateMachine, link, next_number
-from app.pic.platform.errors import Problem, illegal_transition, rule_violation
-from app.pic.platform.money import D, fmt_inr, line_amount, pct_of, tax_amount
+from app.pic.platform.errors import Problem, illegal_transition, not_found, rule_violation
+from app.pic.platform.money import D, fmt_inr, line_amount, pct_of, tax_amount, to_minor
 from app.pic.platform.serialize import jsonable
 from app.pic.services import einvoice
 from app.pic.services import order as order_svc
@@ -33,6 +33,9 @@ SM = StateMachine("INVOICE", {
     ("MATCHING", "exception"): "EXCEPTION",
     ("EXCEPTION", "rematch"): "MATCHING",
     ("MATCHED", "approve"): "APPROVED",
+    # Re-check at approval / posting (another invoice or a reversal used up the receipt meanwhile): back to matching.
+    ("MATCHED", "rematch"): "MATCHING",
+    ("APPROVED", "rematch"): "MATCHING",
     ("APPROVED", "post"): "POSTED",
     ("POSTED", "pay"): "PAID",
     ("EXCEPTION", "reject"): "REJECTED",
@@ -54,11 +57,60 @@ def _lines(session: Session, invoice: Invoice) -> list[InvoiceLine]:
 
 
 def _credited_qty(session: Session, invoice: Invoice) -> dict[int, Decimal]:
+    """Quantity credited per invoice line (quantity credit notes; a value credit note credits a price difference and
+    leaves the quantity invoiced unchanged)."""
     credited: dict[int, Decimal] = {}
     for note in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars():
         for entry in note.lines:
+            if entry.get("unitCreditMinor") is not None:
+                continue
             credited[int(entry["invoice_line"])] = credited.get(int(entry["invoice_line"]), Decimal(0)) + D(entry["qty"])
     return credited
+
+
+def _credited_value(session: Session, invoice: Invoice) -> dict[int, int]:
+    """Net value credited per invoice line by value (price-difference) credit notes."""
+    credited: dict[int, int] = {}
+    for note in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars():
+        for entry in note.lines:
+            if entry.get("unitCreditMinor") is not None:
+                line_no = int(entry["invoice_line"])
+                credited[line_no] = credited.get(line_no, 0) + line_amount(D(entry["qty"]), int(entry["unitCreditMinor"]))
+    return credited
+
+
+# Unposted invoices that already claim a PO line's receipt / open quantity (F7-03): matching or matched, approved, or held in
+# EXCEPTION with this line matched OK. Posted invoices are in po_line.invoiced_qty / invoiced_minor already.
+CLAIMING_STATUSES = ("MATCHING", "MATCHED", "APPROVED")
+
+
+def pending_on_line(session: Session, po_line_id: uuid.UUID, exclude_invoice_id: Optional[uuid.UUID] = None) -> tuple[Decimal, int]:
+    """Quantity and value of other non-rejected, unposted invoices on the PO line (net of their credit notes)."""
+    query = select(InvoiceLine, Invoice).join(Invoice, Invoice.id == InvoiceLine.invoice_id).where(
+        InvoiceLine.po_line_id == po_line_id,
+        or_(Invoice.status.in_(CLAIMING_STATUSES), and_(Invoice.status == "EXCEPTION", InvoiceLine.match_status == "OK")))
+    if exclude_invoice_id is not None:
+        query = query.where(Invoice.id != exclude_invoice_id)
+    qty, value = Decimal(0), 0
+    credits: dict[uuid.UUID, tuple[dict, dict]] = {}
+    for line, inv in session.execute(query).all():
+        if inv.id not in credits:
+            credits[inv.id] = (_credited_qty(session, inv), _credited_value(session, inv))
+        net = line.qty - credits[inv.id][0].get(line.line_no, Decimal(0))
+        qty += net
+        value += line_amount(net, line.unit_price_minor) - credits[inv.id][1].get(line.line_no, 0)
+    return qty, value
+
+
+def _lock_po_lines(session: Session, invoice: Invoice) -> dict[uuid.UUID, PoLine]:
+    """Row-lock the invoice's PO lines (in id order, so concurrent matches cannot deadlock) before reading what is left
+    to invoice: two invoices for the same receipt are matched one after the other."""
+    ids = sorted({l.po_line_id for l in _lines(session, invoice) if l.po_line_id}, key=str)
+    if not ids:
+        return {}
+    rows = session.execute(select(PoLine).where(PoLine.id.in_(ids)).order_by(PoLine.id).with_for_update()
+                           .execution_options(populate_existing=True)).scalars().all()
+    return {row.id: row for row in rows}
 
 
 def retention_by_po(session: Session, invoice: Invoice) -> dict[uuid.UUID, int]:
@@ -68,6 +120,7 @@ def retention_by_po(session: Session, invoice: Invoice) -> dict[uuid.UUID, int]:
     if invoice.match_type == RETENTION:
         return {}
     credited = _credited_qty(session, invoice)
+    value_credited = _credited_value(session, invoice)
     base: dict[uuid.UUID, int] = {}
     pct: dict[uuid.UUID, Decimal] = {}
     for line in _lines(session, invoice):
@@ -78,11 +131,41 @@ def retention_by_po(session: Session, invoice: Invoice) -> dict[uuid.UUID, int]:
             pct[po_line.po_id] = D(session.get(PurchaseOrder, po_line.po_id).retention_pct or 0)
         if pct[po_line.po_id] > 0:
             net_qty = line.qty - credited.get(line.line_no, Decimal(0))
-            base[po_line.po_id] = base.get(po_line.po_id, 0) + line_amount(net_qty, line.unit_price_minor)
+            base[po_line.po_id] = (base.get(po_line.po_id, 0) + line_amount(net_qty, line.unit_price_minor)
+                                   - value_credited.get(line.line_no, 0))
     return {po_id: pct_of(amount, pct[po_id]) for po_id, amount in base.items() if pct_of(amount, pct[po_id]) > 0}
 
 
 # ---------------------------------------------------------------- capture & duplicate check (F7-01/02)
+NUMBER_LENGTH = 30  # invoice.number
+
+
+def _internal_number(session: Session, supplier_code: str, supplier_invoice_no: str, fiscal_year: str) -> str:
+    """Collision-free internal invoice number: the supplier's number, else <supplier>/<number>, else
+    <supplier>/<fiscal year>/<number>, else that with a running suffix; never truncated into another document's number
+    (a number too long for the column becomes <supplier>-<digest>). Serialised per tenant."""
+    session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"invoice-number:{current_tenant(session)}"})
+
+    def taken(number: str) -> bool:
+        return session.execute(select(Invoice.id).where(Invoice.number == number)).first() is not None
+
+    bases = [b for b in (supplier_invoice_no, f"{supplier_code}/{supplier_invoice_no}", f"{supplier_code}/{fiscal_year}/{supplier_invoice_no}")
+             if len(b) <= NUMBER_LENGTH]
+    for base in bases:
+        if not taken(base):
+            return base
+    stem = bases[-1] if bases else f"{supplier_code}-{hashlib.sha256(f'{fiscal_year}|{supplier_invoice_no}'.encode()).hexdigest()[:12].upper()}"
+    if not bases and not taken(stem):
+        return stem
+    index = 2
+    while True:
+        suffix = f"-{index}"
+        candidate = stem[:NUMBER_LENGTH - len(suffix)] + suffix
+        if not taken(candidate):
+            return candidate
+        index += 1
+
+
 def capture(session: Session, *, supplier: str, supplier_invoice_no: str, invoice_date: date, channel: str, lines: list[dict],
             irn: Optional[str] = None, company_code: str = "1000", signed_qr: Optional[str] = None) -> Invoice:
     p = principal(session)
@@ -94,11 +177,21 @@ def capture(session: Session, *, supplier: str, supplier_invoice_no: str, invoic
     if existing:
         raise Problem(409, "DUPLICATE_INVOICE", f"{supplier_invoice_no} from {supplier_row.code} is already captured as {existing.number}",
                       rule_ref="§5.2", duplicateOf=existing.number)
-    po_numbers = {l["po"] for l in lines}
-    pos = {n: session.execute(select(PurchaseOrder).where(PurchaseOrder.number == n)).scalar_one() for n in po_numbers}
-    taken = session.execute(select(Invoice.id).where(Invoice.number == supplier_invoice_no)).first()
+    if supplier_row.status in ("BLOCKED", "MERGED"):
+        raise Problem(409, "SUPPLIER_BLOCKED", f"{supplier_row.code} is {supplier_row.status.lower()}: no invoices are accepted until it is "
+                      "unblocked", rule_ref="F8-08")
+    if not lines:
+        raise Problem(422, "VALIDATION_FAILED", "An invoice needs at least one line", rule_ref="F7-01")
+    po_numbers = sorted({str(l["po"]) for l in lines})
+    pos = {}
+    for n in po_numbers:
+        # Only the supplier's own orders in this company code can be invoiced (another supplier's PO is "not found").
+        pos[n] = session.execute(select(PurchaseOrder).where(PurchaseOrder.number == n, PurchaseOrder.supplier_id == supplier_row.id,
+                                                             PurchaseOrder.company_code == company_code)).scalar_one_or_none()
+        if pos[n] is None:
+            raise not_found("Purchase order", f"{n} of supplier {supplier_row.code} in company code {company_code}")
     invoice = Invoice(
-        tenant_id=current_tenant(session), number=supplier_invoice_no if not taken else f"{supplier_row.code}/{supplier_invoice_no}",
+        tenant_id=current_tenant(session), number=_internal_number(session, supplier_row.code, supplier_invoice_no, fiscal_year),
         supplier_invoice_no=supplier_invoice_no, fiscal_year=fiscal_year, company_code=company_code, supplier_id=supplier_row.id,
         po_id=list(pos.values())[0].id if len(pos) == 1 else None, invoice_date=invoice_date, channel=channel.upper(), irn=irn,
         currency="INR", net_minor=0, tax_minor=0, gross_minor=0, status="CAPTURED", created_by=p.user_id,
@@ -107,14 +200,19 @@ def capture(session: Session, *, supplier: str, supplier_invoice_no: str, invoic
     session.flush()
     net_total = tax_total = 0
     for index, data in enumerate(lines, start=1):
-        po = pos[data["po"]]
-        po_line = session.execute(select(PoLine).where(PoLine.po_id == po.id, PoLine.line_no == int(data["po_line"]))).scalar_one()
+        po = pos[str(data["po"])]
+        po_line = session.execute(select(PoLine).where(PoLine.po_id == po.id, PoLine.line_no == int(data["po_line"]))).scalar_one_or_none()
+        if po_line is None:
+            raise not_found("PO line", f"{po.number}/{data['po_line']}")
         if not po_line.ir_required:
             # P08: consignment is settled by self-billing (ERS) on withdrawal; the supplier does not invoice the order line.
             raise rule_violation(f"{po.number}/{po_line.line_no} is a {po_line.purchase_type.lower()} line: it is settled by self-billing "
                                  "(ERS) on withdrawal, not by a supplier invoice", "P08")
         qty = D(data["qty"])
-        price = int(D(data["unit_price"]) * 100)
+        price = to_minor(data["unit_price"])
+        if qty <= 0 or price <= 0:
+            raise Problem(422, "VALIDATION_FAILED", f"Line {index}: quantity and unit price must be positive (a credit is a credit note)",
+                          rule_ref="F7-01")
         net = line_amount(qty, price)
         rate = D(data.get("gst_rate", po_line.gst_rate))
         tax = int(data["tax_minor"]) if "tax_minor" in data else tax_amount(net, rate)
@@ -145,6 +243,16 @@ def capture(session: Session, *, supplier: str, supplier_invoice_no: str, invoic
         einvoice.record(session, invoice, verification)
     _duplicate_check(session, invoice, instance)
     return invoice
+
+
+def supplier_blocked(session: Session, invoice: Invoice) -> bool:
+    supplier = session.get(Supplier, invoice.supplier_id)
+    return supplier is not None and supplier.status in ("BLOCKED", "MERGED")
+
+
+def open_duplicate_hold(session: Session, invoice: Invoice) -> Optional[InvoiceException]:
+    return session.execute(select(InvoiceException).where(InvoiceException.invoice_id == invoice.id, InvoiceException.type == "DUPLICATE",
+                                                          InvoiceException.status == "OPEN").limit(1)).scalar_one_or_none()
 
 
 def _duplicate_check(session: Session, invoice: Invoice, instance) -> None:
@@ -212,22 +320,36 @@ def _freight_audit(session: Session, rule, line: InvoiceLine, po_line: PoLine, n
 def match(session: Session, invoice: Invoice) -> dict:
     p = principal(session)
     rule = rules.resolve(session, "DMN-03", company_code=invoice.company_code)
-    if invoice.status == "EXCEPTION":
+    held = open_duplicate_hold(session, invoice)
+    if held is not None:
+        # A possible duplicate stays held until AP resolves it as NOT_DUPLICATE (or rejects the invoice): re-running the
+        # match must not release it.
+        raise Problem(409, "DUPLICATE_HOLD", f"{invoice.number} is held as a possible duplicate of {held.delta.get('similarTo')}: resolve the "
+                      "hold (not a duplicate) or reject the invoice", rule_ref="DMN-03", similarTo=held.delta.get("similarTo"))
+    if invoice.status in ("EXCEPTION", "MATCHED", "APPROVED"):
         SM.apply(session, invoice, "rematch")
     else:
         SM.apply(session, invoice, "match")
     credited = _credited_qty(session, invoice)
+    value_credited = _credited_value(session, invoice)
+    locked = _lock_po_lines(session, invoice)
     exceptions, results = [], []
     match_types = set()
     for line in _lines(session, invoice):
-        po_line = session.get(PoLine, line.po_line_id)
+        po_line = locked.get(line.po_line_id) or session.get(PoLine, line.po_line_id)
         net_qty = line.qty - credited.get(line.line_no, Decimal(0))
+        # F7-03: other unposted invoices already claiming this line (matched, approved, or held with the line matched)
+        pending_qty, pending_value = pending_on_line(session, po_line.id, invoice.id)
         detail = {"invoicedQty": str(line.qty), "creditedQty": str(credited.get(line.line_no, 0)), "netQty": str(net_qty),
                   "poQty": str(po_line.qty), "poPriceMinor": po_line.unit_price_minor, "invoicePriceMinor": line.unit_price_minor}
+        if pending_qty or pending_value:
+            detail.update({"pendingInvoicedQty": jsonable(pending_qty), "pendingInvoicedMinor": pending_value})
+        if value_credited.get(line.line_no):
+            detail["valueCreditedMinor"] = value_credited[line.line_no]
         if po_line.ses_required:
             match_types.add("SES")
-            available = po_line.ses_approved_minor - po_line.invoiced_minor
-            net_value = line_amount(net_qty, line.unit_price_minor)
+            available = po_line.ses_approved_minor - po_line.invoiced_minor - pending_value
+            net_value = line_amount(net_qty, line.unit_price_minor) - value_credited.get(line.line_no, 0)
             detail["sesApprovedMinor"] = po_line.ses_approved_minor
             if net_value > available:
                 exceptions.append((line, "SERVICE", {"valueMinor": net_value - available},
@@ -238,7 +360,7 @@ def match(session: Session, invoice: Invoice) -> dict:
             from app.pic.services.receiving import consignment_withdrawn
             match_types.add("ERS")
             withdrawn = consignment_withdrawn(session, [po_line.id]).get(po_line.id, Decimal(0))
-            available = withdrawn - po_line.invoiced_qty
+            available = withdrawn - po_line.invoiced_qty - pending_qty
             detail.update({"receivedQty": str(po_line.received_qty), "withdrawnQty": str(withdrawn),
                            "alreadyInvoicedQty": str(po_line.invoiced_qty), "matchBasis": "CONSIGNMENT_WITHDRAWN"})
             if net_qty > available:
@@ -252,7 +374,7 @@ def match(session: Session, invoice: Invoice) -> dict:
             four_way = po_line.quality_managed
             match_types.add("4WAY" if four_way else "3WAY")
             basis = po_line.accepted_qty if four_way else po_line.received_qty - po_line.rejected_qty
-            available = basis - po_line.invoiced_qty
+            available = basis - po_line.invoiced_qty - pending_qty
             in_inspection = max(po_line.received_qty - po_line.accepted_qty - po_line.rejected_qty, Decimal(0)) if four_way else Decimal(0)
             detail.update({"receivedQty": str(po_line.received_qty), "acceptedQty": str(po_line.accepted_qty),
                            "alreadyInvoicedQty": str(po_line.invoiced_qty), "matchBasis": "INSPECTION_ACCEPTED" if four_way else "RECEIVED",
@@ -264,6 +386,8 @@ def match(session: Session, invoice: Invoice) -> dict:
                 delta = net_qty - available
                 rejected = po_line.rejected_qty
                 cause = f"; {rejected} rejected at quality inspection" if rejected else ""
+                if pending_qty:
+                    cause += f"; {pending_qty} already on other invoices not yet posted"
                 if in_inspection:
                     cause += f"; {in_inspection} still in quality inspection"
                 exceptions.append((line, "QUANTITY", {"qty": jsonable(delta)},
@@ -272,15 +396,22 @@ def match(session: Session, invoice: Invoice) -> dict:
                                    else f"Request credit note for {delta} units"))
         else:
             match_types.add("2WAY")
-            available = po_line.qty - po_line.invoiced_qty
+            available = po_line.qty - po_line.invoiced_qty - pending_qty
             if net_qty > available:
                 exceptions.append((line, "QUANTITY", {"qty": jsonable(net_qty - available)}, f"Billed {net_qty} vs open PO {available}",
                                    "Amend the PO or request a credit note"))
-        price_tol = min(Decimal(po_line.unit_price_minor) * D(rule.body["pricePct"]) / 100, Decimal(rule.body["priceAbsMinor"]))
-        if abs(Decimal(line.unit_price_minor - po_line.unit_price_minor)) > price_tol:
-            exceptions.append((line, "PRICE", {"perUnitMinor": line.unit_price_minor - po_line.unit_price_minor},
-                               f"Unit price {line.unit_price_minor/100:.2f} vs PO {po_line.unit_price_minor/100:.2f} (tolerance {price_tol/100:.2f})",
-                               "Request a credit note or obtain buyer price-variance approval"))
+        # DMN-03 price: the line-level variance (net quantity × price difference, less value credit notes) against
+        # pricePct of the line value at the PO price, capped at priceAbsMinor per line ("±1% or ₹500, whichever is lower").
+        po_value = line_amount(net_qty, po_line.unit_price_minor)
+        variance = line_amount(net_qty, line.unit_price_minor) - value_credited.get(line.line_no, 0) - po_value
+        price_tol = min(pct_of(po_value, D(rule.body["pricePct"])), int(rule.body["priceAbsMinor"]))
+        detail.update({"priceVarianceMinor": variance, "priceToleranceMinor": price_tol})
+        if abs(variance) > price_tol:
+            exceptions.append((line, "PRICE", {"perUnitMinor": line.unit_price_minor - po_line.unit_price_minor, "lineVarianceMinor": variance},
+                               f"Unit price {line.unit_price_minor/100:.2f} vs PO {po_line.unit_price_minor/100:.2f}: line variance "
+                               f"{fmt_inr(variance)}" + (f" after value credits of {fmt_inr(value_credited[line.line_no])}" if value_credited.get(line.line_no) else "")
+                               + f" (tolerance {fmt_inr(price_tol)})",
+                               "Request a value credit note for the price difference or obtain buyer price-variance approval"))
         freight = _freight_rule(session, invoice.company_code) if po_line.ses_required and po_line.contract_line_id else None
         freight_audit = _freight_audit(session, freight, line, po_line, net_qty) if freight is not None else None
         if freight_audit is not None:
@@ -316,7 +447,7 @@ def match(session: Session, invoice: Invoice) -> dict:
     invoice.match_type = ("SES" if match_types == {"SES"} else "ERS" if match_types == {"ERS"} else "4WAY" if "4WAY" in match_types
                           else "3WAY" if "3WAY" in match_types else "2WAY")
     for old in session.execute(select(InvoiceException).where(InvoiceException.invoice_id == invoice.id,
-                                                              InvoiceException.status == "OPEN")).scalars():
+                                                              InvoiceException.status == "OPEN", InvoiceException.type != "DUPLICATE")).scalars():
         old.status = "SUPERSEDED"
     instance = _instance(session, invoice)
     first_attempt = invoice.first_pass_matched is None
@@ -346,7 +477,7 @@ def match(session: Session, invoice: Invoice) -> dict:
         workflow.step(session, instance, "F7-04", outcome="no: outside tolerance → payment block")
         workflow.wait(session, instance, "F7-05", outcome="; ".join(e.suggested_action for e in created))
     else:
-        invoice.payment_block = False
+        invoice.payment_block = supplier_blocked(session, invoice)  # a blocked supplier's invoices stay payment-blocked
         if first_attempt:
             invoice.first_pass_matched = True
         SM.apply(session, invoice, "matched", rule_set_version=rule.ref)
@@ -360,28 +491,84 @@ def match(session: Session, invoice: Invoice) -> dict:
 # ---------------------------------------------------------------- exceptions (F7-05)
 def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_note_no: str, note_date: date, reason: str,
                        lines: list[dict]) -> CreditNote:
+    """Supplier credit note against an invoice. A line is a quantity credit ({invoice_line, qty}: qty × invoice price,
+    reducing the quantity matched) or a value credit ({invoice_line, qty, unit_credit_minor}: qty × price difference,
+    netted in the price check). Quantities are positive, at most what is invoiced and not yet credited; the note never
+    exceeds the invoice's gross less earlier credit notes."""
     p = principal(session)
     require_supplier_user(session, invoice.supplier_id)
+    if invoice.status == "REJECTED":
+        raise illegal_transition("Invoice", invoice.number, invoice.status, "credit")
+    if not (reason or "").strip():
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for the credit note", rule_ref="DMN-03")
+    if not lines:
+        raise Problem(422, "VALIDATION_FAILED", "A credit note needs at least one line", rule_ref="DMN-03")
     inv_lines = {l.line_no: l for l in _lines(session, invoice)}
+    credited_qty = _credited_qty(session, invoice)
+    credited_value = _credited_value(session, invoice)
     net = tax = 0
+    stored, errors = [], []
     for entry in lines:
-        line = inv_lines[int(entry["invoice_line"])]
-        amount = line_amount(D(entry["qty"]), line.unit_price_minor)
+        try:
+            line_no = int(entry["invoice_line"])
+            qty = D(entry["qty"])
+            unit_credit = entry.get("unit_credit_minor")
+            unit_credit = None if unit_credit in (None, "") else int(unit_credit)
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            raise Problem(422, "VALIDATION_FAILED", "Each line needs invoice_line and qty (and unit_credit_minor for a value credit)",
+                          rule_ref="DMN-03")
+        line = inv_lines.get(line_no)
+        if line is None:
+            errors.append(f"invoice line {line_no} does not exist")
+            continue
+        if not qty.is_finite() or qty <= 0:
+            errors.append(f"line {line_no}: credit quantity must be positive")
+            continue
+        open_qty = line.qty - credited_qty.get(line_no, Decimal(0))
+        if qty > open_qty:
+            errors.append(f"line {line_no}: credit quantity {jsonable(qty)} exceeds invoiced and not yet credited {jsonable(open_qty)}")
+            continue
+        if unit_credit is None:
+            amount = line_amount(qty, line.unit_price_minor)
+            credited_qty[line_no] = credited_qty.get(line_no, Decimal(0)) + qty
+            stored.append({"invoice_line": line_no, "qty": str(entry["qty"])})
+        else:
+            # Value credit: never more than the line's remaining value (net quantity × invoice price, less earlier value credits).
+            if unit_credit <= 0 or unit_credit > line.unit_price_minor:
+                errors.append(f"line {line_no}: price credit per unit must be positive and at most the invoice price")
+                continue
+            amount = line_amount(qty, unit_credit)
+            remaining = line_amount(open_qty, line.unit_price_minor) - credited_value.get(line_no, 0)
+            if amount > remaining:
+                errors.append(f"line {line_no}: value credit {fmt_inr(amount)} exceeds the line's remaining value {fmt_inr(remaining)}")
+                continue
+            credited_value[line_no] = credited_value.get(line_no, 0) + amount
+            stored.append({"invoice_line": line_no, "qty": str(entry["qty"]), "unitCreditMinor": unit_credit})
         net += amount
         tax += tax_amount(amount, line.gst_rate)
+    if errors:
+        raise Problem(422, "INVALID_CREDIT_NOTE", "; ".join(errors), rule_ref="DMN-03", errors=errors)
+    already = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
+    if net + tax > invoice.gross_minor - already:
+        raise Problem(422, "INVALID_CREDIT_NOTE", f"Credit note {fmt_inr(net + tax)} exceeds the invoice's open gross "
+                      f"{fmt_inr(invoice.gross_minor - already)}", rule_ref="DMN-03")
+    target = None
+    if invoice.posting_key and invoice.status in ("POSTED", "PAID"):
+        target = integration.target_system(session, invoice.company_code)
+        from app.pic.platform import connectors
+        connectors.require_mapped(target, "SUPPLIER_CREDIT_MEMO")
     note = CreditNote(tenant_id=invoice.tenant_id, number=supplier_credit_note_no, supplier_credit_note_no=supplier_credit_note_no,
                       supplier_id=invoice.supplier_id, invoice_id=invoice.id, note_date=note_date, reason=reason, net_minor=net,
-                      tax_minor=tax, gross_minor=net + tax, lines=[{"invoice_line": int(e["invoice_line"]), "qty": str(e["qty"])} for e in lines],
-                      created_by=p.user_id)
+                      tax_minor=tax, gross_minor=net + tax, lines=stored, created_by=p.user_id)
     session.add(note)
     session.flush()
     link(session, "INVOICE", invoice.id, invoice.number, "CREDIT_NOTE", note.id, note.number, "credited_by")
     memo = None
-    if invoice.posting_key and invoice.status in ("POSTED", "PAID"):
+    if target is not None:
         # The invoice is already in the ERP for its gross amount: the credit note goes there as a vendor credit memo, posted by
         # the connector worker (exactly-once key), so the ERP liability and the platform (gross net of credit notes) agree again.
         supplier = session.get(Supplier, invoice.supplier_id)
-        memo = integration.enqueue(session, target_system=integration.target_system(session, invoice.company_code),
+        memo = integration.enqueue(session, target_system=target,
                                    message_type="SUPPLIER_CREDIT_MEMO", idempotency_key=f"{invoice.posting_key}|CN|{note.number}",
                                    object_type="INVOICE", object_id=invoice.id, object_ref=invoice.number,
                                    payload={"creditNote": note.number, "invoice": invoice.supplier_invoice_no, "invoiceErp": invoice.erp_doc_no,
@@ -389,8 +576,26 @@ def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_no
                                             "fiscalYear": invoice.fiscal_year})
     audit.record(session, "INVOICE", invoice.id, "CREDIT_NOTE_RECEIVED", object_ref=invoice.number,
                  after={"creditNote": note.number, "grossMinor": note.gross_minor,
+                        **({"valueCredit": True} if any("unitCreditMinor" in e for e in stored) else {}),
                         **({"erpCreditMemo": memo.idempotency_key} if memo is not None else {})}, reason=reason)
     return note
+
+
+# Which resolution may close which exception type (DMN-03). A possible duplicate is released only as NOT_DUPLICATE (or the
+# invoice is rejected); an accepted price variance is a buyer decision (PRICE_VARIANCE task), not an AP resolution.
+RESOLUTIONS = {
+    "DUPLICATE": {"NOT_DUPLICATE", "DISPUTE"},
+    "PRICE": {"CREDIT_NOTE_RECEIVED", "PRICE_ACCEPTED", "DISPUTE"},
+}
+DEFAULT_RESOLUTIONS = {"CREDIT_NOTE_RECEIVED", "DISPUTE", "GR_POSTED"}
+PRICE_TASK = "PRICE_VARIANCE"
+
+
+def _open_price_task(session: Session, invoice: Invoice, exc: InvoiceException) -> Optional[Task]:
+    for task in session.execute(select(Task).where(Task.kind == PRICE_TASK, Task.object_id == invoice.id, Task.status == "OPEN")).scalars():
+        if (task.evidence or {}).get("invoiceLineId") == str(exc.invoice_line_id):
+            return task
+    return None
 
 
 def resolve_exception(session: Session, invoice: Invoice, exception_id: uuid.UUID, resolution: str, note: str,
@@ -403,6 +608,9 @@ def resolve_exception(session: Session, invoice: Invoice, exception_id: uuid.UUI
     allowed = {"CREDIT_NOTE_RECEIVED", "PRICE_ACCEPTED", "NOT_DUPLICATE", "DISPUTE", "GR_POSTED"}
     if resolution not in allowed:
         raise Problem(422, "INVALID_RESOLUTION", f"resolution must be one of {sorted(allowed)}")
+    fits = RESOLUTIONS.get(exc.type, DEFAULT_RESOLUTIONS)
+    if resolution not in fits:
+        raise Problem(422, "INVALID_RESOLUTION", f"A {exc.type} exception is resolved with {', '.join(sorted(fits))}", rule_ref="DMN-03")
     if resolution == "CREDIT_NOTE_RECEIVED":
         if not credit_note or not session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id,
                                                                            CreditNote.number == credit_note)).first():
@@ -424,29 +632,95 @@ def resolve_exception(session: Session, invoice: Invoice, exception_id: uuid.UUI
         if instance is not None and instance.status == "RUNNING":
             workflow.wait(session, instance, "F7-05", outcome=f"{exc.type.lower()} disputed with supplier: {note}")
         return {"invoice": invoice.number, "status": invoice.status, "dispute": True, "exception": str(exc.id)}
+    if resolution == "PRICE_ACCEPTED":
+        return _request_price_acceptance(session, invoice, exc, po_line, note)
     before = {"status": "EXCEPTION", "exception": exc.type}
     exc.status, exc.resolution, exc.resolution_note, exc.resolved_by = "RESOLVED", resolution, note, p.user_id
-    if resolution == "PRICE_ACCEPTED" and po_line is not None:
-        line = session.get(InvoiceLine, exc.invoice_line_id)
-        po_line.unit_price_minor = line.unit_price_minor  # accepted variance becomes the price to match against
     if resolution == "NOT_DUPLICATE":
         invoice.duplicate_of = None
     audit.record(session, "INVOICE", invoice.id, "EXCEPTION_RESOLVED", object_ref=invoice.number, before=before,
                  after={"resolution": resolution, "creditNote": credit_note}, reason=note, ai_ref=exc.ai_ref,
                  rule_set_version=invoice.rule_set_version)
+    return _rematch_when_clear(session, invoice, f"{resolution.lower().replace('_', ' ')}" + (f" {credit_note}" if credit_note else ""))
+
+
+def _rematch_when_clear(session: Session, invoice: Invoice, outcome: str) -> dict:
     still_open = session.execute(select(InvoiceException).where(InvoiceException.invoice_id == invoice.id,
                                                                 InvoiceException.status == "OPEN")).first()
     if still_open:
         return {"invoice": invoice.number, "status": invoice.status}
     instance = _instance(session, invoice)
-    workflow.step(session, instance, "F7-05", outcome=f"{resolution.lower().replace('_', ' ')}" + (f" {credit_note}" if credit_note else ""))
+    workflow.step(session, instance, "F7-05", outcome=outcome)
     result = match(session, invoice)
     return {"invoice": invoice.number, "status": invoice.status, "match": result}
 
 
+def _request_price_acceptance(session: Session, invoice: Invoice, exc: InvoiceException, po_line: Optional[PoLine], note: str) -> dict:
+    """PRICE_ACCEPTED by AP opens a BUYER approval (PRICE_VARIANCE): the exception stays open until a buyer other than the PO
+    creator accepts the new price; the approval then re-prices the PO line (audited on the PO) and re-runs the match."""
+    if po_line is None:
+        raise rule_violation("Only a price exception on a PO line can be accepted", "DMN-03")
+    if not (note or "").strip():
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for accepting the price variance", rule_ref="DMN-03")
+    existing = _open_price_task(session, invoice, exc)
+    if existing is not None:
+        raise Problem(409, "APPROVAL_PENDING", f"Price acceptance for {invoice.number} is already waiting for a buyer", rule_ref="DMN-03")
+    line = session.get(InvoiceLine, exc.invoice_line_id)
+    po = session.get(PurchaseOrder, po_line.po_id)
+    p = principal(session)
+    net_qty = line.qty - _credited_qty(session, invoice).get(line.line_no, Decimal(0))
+    evidence = {"exception": str(exc.id), "invoiceLineId": str(line.id), "invoiceLine": line.line_no, "po": po.number, "poLine": po_line.line_no,
+                "poPriceMinor": po_line.unit_price_minor, "invoicePriceMinor": line.unit_price_minor, "qty": jsonable(net_qty),
+                "varianceMinor": line_amount(net_qty, line.unit_price_minor - po_line.unit_price_minor), "requestedBy": p.name, "note": note}
+    tasks = workflow.start_approval(session, _instance(session, invoice), PRICE_TASK, object_type="INVOICE", object_id=invoice.id,
+                                    object_ref=invoice.number, chain=["BUYER"], step_id=None, initiator_id=p.user_id,
+                                    exclude=[po.created_by] if po.created_by else None, rule_set_version=invoice.rule_set_version,
+                                    evidence=evidence)
+    exc.resolution, exc.resolution_note = "PRICE_APPROVAL_PENDING", note
+    audit.record(session, "INVOICE", invoice.id, "PRICE_ACCEPTANCE_REQUESTED", object_ref=invoice.number, reason=note,
+                 after={k: evidence[k] for k in ("po", "poLine", "poPriceMinor", "invoicePriceMinor", "varianceMinor")},
+                 rule_set_version=invoice.rule_set_version)
+    return {"invoice": invoice.number, "status": invoice.status, "priceApproval": [str(t.id) for t in tasks], "exception": str(exc.id)}
+
+
+@workflow.on_task(PRICE_TASK)
+def _price_variance_decided(session: Session, task: Task, outcome: str) -> None:
+    invoice = session.get(Invoice, task.object_id)
+    evidence = task.evidence or {}
+    line = session.get(InvoiceLine, uuid.UUID(evidence["invoiceLineId"]))
+    exc = session.execute(select(InvoiceException).where(InvoiceException.invoice_id == invoice.id, InvoiceException.type == "PRICE",
+                                                         InvoiceException.invoice_line_id == line.id, InvoiceException.status == "OPEN")
+                          .limit(1)).scalar_one_or_none()
+    if outcome != "APPROVED":
+        if exc is not None:
+            exc.resolution = "PRICE_REJECTED"
+            exc.resolution_note = task.comment
+        audit.record(session, "INVOICE", invoice.id, "PRICE_ACCEPTANCE_REJECTED", object_ref=invoice.number, reason=task.comment,
+                     after={"po": evidence.get("po"), "poLine": evidence.get("poLine")})
+        return
+    if exc is None or invoice.status != "EXCEPTION":
+        return  # rejected or re-captured meanwhile: nothing left to accept
+    po_line = session.get(PoLine, line.po_line_id)
+    po = session.get(PurchaseOrder, po_line.po_id)
+    before = po_line.unit_price_minor
+    po_line.unit_price_minor = line.unit_price_minor  # the accepted price is what this and later invoices match against
+    audit.record(session, "PURCHASE_ORDER", po.id, "PRICE_VARIANCE_ACCEPTED", object_ref=po.number, reason=task.comment,
+                 before={"line": po_line.line_no, "unitPriceMinor": before},
+                 after={"line": po_line.line_no, "unitPriceMinor": line.unit_price_minor, "invoice": invoice.number,
+                        "approvedBy": str(task.completed_by), "requestedBy": evidence.get("requestedBy")},
+                 rule_set_version=invoice.rule_set_version)
+    exc.status, exc.resolution, exc.resolved_by = "RESOLVED", "PRICE_ACCEPTED", task.completed_by
+    exc.resolution_note = evidence.get("note") or task.comment
+    audit.record(session, "INVOICE", invoice.id, "EXCEPTION_RESOLVED", object_ref=invoice.number,
+                 before={"status": "EXCEPTION", "exception": "PRICE"},
+                 after={"resolution": "PRICE_ACCEPTED", "approvedBy": str(task.completed_by), "creditNote": None},
+                 reason=exc.resolution_note, ai_ref=exc.ai_ref, rule_set_version=invoice.rule_set_version)
+    _rematch_when_clear(session, invoice, "price variance accepted by buyer")
+
+
 def reject(session: Session, invoice: Invoice, reason: str) -> Invoice:
     """Reject a held invoice (e.g. a confirmed duplicate). Open exceptions close with it; nothing is posted or paid."""
-    if not reason:
+    if not (reason or "").strip():
         raise rule_violation("A rejection reason is required", "DMN-03")
     SM.apply(session, invoice, "reject", reason=reason)
     invoice.payment_block = True
@@ -454,14 +728,51 @@ def reject(session: Session, invoice: Invoice, reason: str) -> Invoice:
                                                               InvoiceException.status == "OPEN")).scalars():
         exc.status, exc.resolution, exc.resolution_note = "RESOLVED", "REJECTED", reason
         exc.resolved_by = principal(session).user_id
+    for task in session.execute(select(Task).where(Task.kind == PRICE_TASK, Task.object_id == invoice.id, Task.status == "OPEN")).scalars():
+        task.status = "CANCELLED"  # nothing left to accept on a rejected invoice
     instance = _instance(session, invoice)
     if instance and instance.status == "RUNNING":
         workflow.end(session, instance, "F7-09", outcome=f"rejected: {reason}")
     return invoice
 
 
+def over_claimed(session: Session, invoice: Invoice) -> list[str]:
+    """Re-check before approval and posting that the receipt / open quantity / approved service value this invoice was
+    matched against is still there, after posted invoices and other unposted invoices that claim the same PO lines."""
+    rule = rules.resolve(session, "DMN-03", company_code=invoice.company_code)
+    credited, value_credited = _credited_qty(session, invoice), _credited_value(session, invoice)
+    locked = _lock_po_lines(session, invoice)
+    problems = []
+    for line in _lines(session, invoice):
+        po_line = locked.get(line.po_line_id)
+        if po_line is None:
+            continue
+        net_qty = line.qty - credited.get(line.line_no, Decimal(0))
+        pending_qty, pending_value = pending_on_line(session, po_line.id, invoice.id)
+        if po_line.ses_required:
+            available = po_line.ses_approved_minor - po_line.invoiced_minor - pending_value
+            if line_amount(net_qty, line.unit_price_minor) - value_credited.get(line.line_no, 0) > available:
+                problems.append(f"line {line.line_no}: approved service value left {fmt_inr(available)}")
+            continue
+        if po_line.ers:
+            from app.pic.services.receiving import consignment_withdrawn
+            basis = consignment_withdrawn(session, [po_line.id]).get(po_line.id, Decimal(0))
+            limit = basis - po_line.invoiced_qty - pending_qty
+        elif po_line.gr_required:
+            basis = po_line.accepted_qty if po_line.quality_managed else po_line.received_qty - po_line.rejected_qty
+            limit = (basis - po_line.invoiced_qty - pending_qty) * (1 + D(rule.body["qtyPct"]) / 100)
+        else:
+            limit = po_line.qty - po_line.invoiced_qty - pending_qty
+        if net_qty > limit:
+            problems.append(f"line {line.line_no}: {jsonable(net_qty)} invoiced, {jsonable(max(limit, Decimal(0)))} left to invoice")
+    return problems
+
+
 def approve(session: Session, invoice: Invoice) -> Invoice:
     sod.guard(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
+    if invoice.status == "MATCHED" and over_claimed(session, invoice):
+        match(session, invoice)  # back through the match: the over-claim is raised as an exception (payment block)
+        return invoice
     SM.apply(session, invoice, "approve", rule_set_version=invoice.rule_set_version)
     invoice.approved_by = principal(session).user_id
     return invoice
@@ -484,6 +795,12 @@ def post(session: Session, invoice: Invoice, idempotency_key: Optional[str]) -> 
     if session.execute(select(InvoiceException).where(InvoiceException.invoice_id == invoice.id, InvoiceException.status == "OPEN")).first():
         raise rule_violation("Open exceptions block posting", "DMN-03")
     sod.guard(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
+    target = integration.target_system(session, invoice.company_code)
+    from app.pic.platform import connectors
+    connectors.require_mapped(target, "SUPPLIER_INVOICE")
+    if problems := over_claimed(session, invoice):
+        match(session, invoice)  # the receipt was used up meanwhile: back to matching, raised as an exception
+        return {"status": invoice.status, "rematched": True, "problems": problems}
     sod.record(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
     invoice.posting_key = expected
     credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
@@ -493,7 +810,7 @@ def post(session: Session, invoice: Invoice, idempotency_key: Optional[str]) -> 
     invoice.retention_minor = sum(retention_by_po(session, invoice).values())
     retention = ({"retentionMinor": invoice.retention_minor, "netPayableMinor": invoice.gross_minor - credit - invoice.retention_minor}
                  if invoice.retention_minor else {})
-    message = integration.enqueue(session, target_system=integration.target_system(session, invoice.company_code), message_type="SUPPLIER_INVOICE",
+    message = integration.enqueue(session, target_system=target, message_type="SUPPLIER_INVOICE",
                                   idempotency_key=expected,
                                   object_type="INVOICE", object_id=invoice.id, object_ref=invoice.number,
                                   payload={"invoice": invoice.supplier_invoice_no, "supplier": supplier.code, "companyCode": invoice.company_code,
@@ -514,16 +831,18 @@ def _invoice_posted(session: Session, message) -> None:
     SM.apply(session, invoice, "post", rule_set_version=invoice.rule_set_version, extra_after={"erpDocument": message.erp_doc_no})
     invoice.erp_doc_no = message.erp_doc_no
     invoice.posted_at = clock.now()
-    invoice.payment_block = False
+    invoice.payment_block = supplier_blocked(session, invoice)
     supplier = session.get(Supplier, invoice.supplier_id)
-    invoice.due_date = invoice.invoice_date + timedelta(days=days_from_terms(supplier.payment_terms))
+    terms = payment_terms_of(session, invoice)
+    invoice.due_date = invoice.invoice_date + timedelta(days=days_from_terms(terms))
     credited = _credited_qty(session, invoice)
+    value_credited = _credited_value(session, invoice)
     touched_pos = set()
     by_requisition: dict[uuid.UUID, int] = {}
     for line in _lines(session, invoice):
         po_line = session.get(PoLine, line.po_line_id)
         net_qty = line.qty - credited.get(line.line_no, Decimal(0))
-        value = line_amount(net_qty, line.unit_price_minor)
+        value = line_amount(net_qty, line.unit_price_minor) - value_credited.get(line.line_no, 0)
         po_line.invoiced_qty += net_qty
         po_line.invoiced_minor += value
         touched_pos.add(po_line.po_id)
@@ -542,7 +861,37 @@ def _invoice_posted(session: Session, message) -> None:
                 {"invoiceId": str(invoice.id), "erpDocument": message.erp_doc_no, "supplier": supplier.code, "grossMinor": invoice.gross_minor})
     instance = _instance(session, invoice)
     workflow.step(session, instance, "F7-06", outcome=f"posted as ERP document {message.erp_doc_no} (key {message.idempotency_key})")
-    workflow.wait(session, instance, "F7-07", outcome=f"due {invoice.due_date.isoformat()} ({supplier.payment_terms})")
+    workflow.wait(session, instance, "F7-07", outcome=f"due {invoice.due_date.isoformat()} ({terms})")
+
+
+@integration.on_posted("PAYMENT")
+def _payment_posted(session: Session, message) -> None:
+    """F7-09: the ERP posted (cleared) the payment: only now is the invoice PAID and its process reconciled."""
+    invoice = session.get(Invoice, message.object_id)
+    if invoice is None or invoice.status != "POSTED":
+        return
+    payment = session.execute(select(Payment).where(Payment.number == (message.payload or {}).get("payment"))).scalar_one_or_none()
+    SM.apply(session, invoice, "pay", extra_after={"payment": payment.number if payment else None, "clearingDocument": message.erp_doc_no})
+    invoice.payment_status = "PAID"
+    outbox.emit(session, "payment.completed", "INVOICE", invoice.id, invoice.number,
+                {"payment": payment.number if payment else None, "amountMinor": payment.amount_minor if payment else None,
+                 "clearingDocument": message.erp_doc_no})
+    instance = _instance(session, invoice)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.end(session, instance, "F7-09", outcome=f"paid; ERP clearing {message.erp_doc_no}; reconciled")
+
+
+def payment_terms_of(session: Session, invoice: Invoice) -> str:
+    """The terms the invoice is due under: the purchase order's (inherited from the contract or agreed on the PO), the
+    supplier master's only when the invoice has no PO."""
+    po = session.get(PurchaseOrder, invoice.po_id) if invoice.po_id else None
+    if po is None:
+        first = next((l for l in _lines(session, invoice) if l.po_line_id), None)
+        po_line = session.get(PoLine, first.po_line_id) if first is not None else None
+        po = session.get(PurchaseOrder, po_line.po_id) if po_line is not None else None
+    if po is not None and po.payment_terms:
+        return po.payment_terms
+    return session.get(Supplier, invoice.supplier_id).payment_terms
 
 
 def _consume_budget(session: Session, amounts_by_requisition: dict[uuid.UUID, int]) -> None:
@@ -564,15 +913,45 @@ def _consume_budget(session: Session, amounts_by_requisition: dict[uuid.UUID, in
 
 
 # ---------------------------------------------------------------- payment run (F7-07/09)
-def payment_run(session: Session, run_date: date, include_not_due: bool = False) -> dict:
+def payment_run(session: Session, run_date: date, include_not_due: bool = False,
+                supplier_codes: Optional[list[str]] = None, invoice_numbers: Optional[list[str]] = None) -> dict:
+    """Pay the posted, unblocked invoices due by run_date; supplier_codes / invoice_numbers narrow the run (F7-07)."""
     p = principal(session)
-    run_ref = next_number(session, "PAYMENT_RUN")
     query = select(Invoice).where(Invoice.status == "POSTED", Invoice.payment_status == "UNPAID", Invoice.payment_block.is_(False))
     if not include_not_due:
         query = query.where(Invoice.due_date <= run_date)
+    selection = {}
+    if supplier_codes:
+        codes = sorted(set(supplier_codes))
+        known = set(session.execute(select(Supplier.code).where(Supplier.code.in_(codes))).scalars())
+        if missing := [c for c in codes if c not in known]:
+            raise Problem(404, "SUPPLIER_NOT_FOUND", f"No supplier {', '.join(missing)}")
+        query = query.where(Invoice.supplier_id.in_(select(Supplier.id).where(Supplier.code.in_(codes))))
+        selection["suppliers"] = codes
+    if invoice_numbers:
+        numbers = sorted(set(invoice_numbers))
+        known = set(session.execute(select(Invoice.number).where(Invoice.number.in_(numbers))).scalars())
+        if missing := [n for n in numbers if n not in known]:
+            raise Problem(404, "INVOICE_NOT_FOUND", f"No invoice {', '.join(missing)}")
+        query = query.where(Invoice.number.in_(numbers))
+        selection["invoices"] = numbers
+    run_ref = next_number(session, "PAYMENT_RUN")
     paid, skipped = [], []
+    from app.pic.platform import connectors
     for invoice in session.execute(query.order_by(Invoice.due_date)).scalars().all():
         supplier = session.get(Supplier, invoice.supplier_id)
+        if supplier.status in ("BLOCKED", "MERGED"):
+            skipped.append({"invoice": invoice.number, "reason": f"supplier {supplier.code} is {supplier.status.lower()}"})
+            continue
+        credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
+        amount = invoice.gross_minor - credit - (invoice.retention_minor or 0)
+        if amount <= 0:
+            skipped.append({"invoice": invoice.number, "reason": f"nothing payable: net {fmt_inr(amount)} after credit notes and retention"})
+            continue
+        target = integration.target_system(session, invoice.company_code)
+        if not connectors.maps(target, "PAYMENT"):
+            skipped.append({"invoice": invoice.number, "reason": f"the {target} connector does not map PAYMENT: pay and clear it in the ERP"})
+            continue
         account = session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == supplier.id,
                                                                     SupplierBankAccount.active.is_(True))).scalar_one_or_none()
         if account is None:
@@ -589,31 +968,29 @@ def payment_run(session: Session, run_date: date, include_not_due: bool = False)
         if account.verified_on and (run_date - account.verified_on).days <= 30:
             audit.record(session, "INVOICE", invoice.id, "BANK_CHANGE_RECENT_ALERT", object_ref=invoice.number,
                          reason="Bank details changed within 30 days of this payment", after={"verifiedOn": account.verified_on.isoformat()})
-        credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
         payment = Payment(tenant_id=invoice.tenant_id, number=next_number(session, "PAYMENT"), invoice_id=invoice.id, supplier_id=supplier.id,
-                          bank_account_id=account.id, amount_minor=invoice.gross_minor - credit - (invoice.retention_minor or 0),
+                          bank_account_id=account.id, amount_minor=amount,
                           value_date=run_date, status="COMPLETED", run_ref=run_ref, approved_by=p.user_id, created_by=p.user_id)
         session.add(payment)
         session.flush()
         sod.record(session, "PAYMENT_APPROVE", {"supplier_id": supplier.id})
-        SM.apply(session, invoice, "pay", extra_after={"payment": payment.number})
-        invoice.payment_status = "PAID"
-        message = integration.enqueue(session, target_system=integration.target_system(session, invoice.company_code), message_type="PAYMENT",
+        # Paid in the run (the payment record and its unique index stop a second payment); the invoice becomes PAID and the
+        # process ends "reconciled" only when the ERP has posted the payment (_payment_posted).
+        invoice.payment_status = "IN_PAYMENT"
+        message = integration.enqueue(session, target_system=target, message_type="PAYMENT",
                                       idempotency_key=f"PAY|{payment.number}",
                                       object_type="INVOICE", object_id=invoice.id, object_ref=invoice.number,
                                       payload={"payment": payment.number, "invoiceErp": invoice.erp_doc_no, "amountMinor": payment.amount_minor,
                                                "companyCode": invoice.company_code, **_retention_payment_refs(session, invoice)})
-        integration.process(session, message)
         link(session, "INVOICE", invoice.id, invoice.number, "PAYMENT", payment.id, payment.number, "paid_by")
-        outbox.emit(session, "payment.completed", "INVOICE", invoice.id, invoice.number,
-                    {"payment": payment.number, "amountMinor": payment.amount_minor, "clearingDocument": message.erp_doc_no})
         instance = _instance(session, invoice)
         workflow.step(session, instance, "F7-07", outcome=f"{run_ref}: {payment.number} {fmt_inr(payment.amount_minor)}")
-        workflow.end(session, instance, "F7-09", outcome=f"paid; ERP clearing {message.erp_doc_no}; reconciled")
-        paid.append({"invoice": invoice.number, "payment": payment.number, "amountMinor": payment.amount_minor, "clearing": message.erp_doc_no})
+        integration.process(session, message)
+        paid.append({"invoice": invoice.number, "payment": payment.number, "amountMinor": payment.amount_minor, "clearing": message.erp_doc_no,
+                     "integrationStatus": message.status, **({"error": message.last_error} if message.status != "POSTED" else {})})
     audit.record(session, "PAYMENT_RUN", uuid.uuid5(uuid.NAMESPACE_URL, run_ref), "EXECUTED", object_ref=run_ref,
-                 after={"paid": len(paid), "skipped": skipped})
-    return {"run": run_ref, "paid": paid, "skipped": skipped}
+                 after={"paid": len(paid), "skipped": skipped, **({"selection": selection} if selection else {})})
+    return {"run": run_ref, "paid": paid, "skipped": skipped, **({"selection": selection} if selection else {})}
 
 
 # ---------------------------------------------------------------- retention (construction / subcontract orders, BP §23)
@@ -842,14 +1219,60 @@ def reconcile(session: Session, company_code: str, target_system: str = "SAP_S4"
     for key, doc in docs.items():
         if key not in seen:
             items.append(("MISSING_IN_PLATFORM", key, doc.doc_no, None, doc.amount_minor))
-    for kind, ref, doc_no, platform_minor, erp_minor in items:
-        session.add(ReconciliationItem(tenant_id=run.tenant_id, run_id=run.id, kind=kind, object_type="INVOICE", object_ref=ref, erp_doc_no=doc_no,
-                                       platform_minor=platform_minor, erp_minor=erp_minor, created_by=p.user_id))
+    items = [(*item, "INVOICE") for item in items] + _reconcile_payments_and_memos(session, company_code, target_system)
+    for kind, ref, doc_no, platform_minor, erp_minor, object_type in items:
+        session.add(ReconciliationItem(tenant_id=run.tenant_id, run_id=run.id, kind=kind, object_type=object_type, object_ref=ref[:60],
+                                       erp_doc_no=doc_no, platform_minor=platform_minor, erp_minor=erp_minor, created_by=p.user_id))
     run.differences = len(items)
     session.flush()
     audit.record(session, "RECONCILIATION_RUN", run.id, "EXECUTED", object_ref=run.number,
                  after={"companyCode": company_code, "platform": run.platform_count, "erp": run.erp_count, "differences": run.differences})
     return reconciliation_view(session, run)
+
+
+def _reconcile_payments_and_memos(session: Session, company_code: str, target_system: str) -> list[tuple]:
+    """Payments (clearing documents, key PAY|<payment>) and vendor credit memos (key <posting key>|CN|<note>) of the company
+    code against the ERP: not cleared / not posted in the ERP, a different amount, or an ERP payment the platform does not know."""
+    from app.pic.models import ErpDocument, IntegrationMessage
+
+    def amount(doc) -> Optional[int]:
+        return doc.amount_minor if doc.amount_minor is not None else (doc.payload or {}).get("amountMinor")
+
+    items = []
+    pay_docs = {d.external_ref: d for d in session.execute(select(ErpDocument).where(
+        ErpDocument.system == target_system, ErpDocument.doc_type == integration.DOC_TYPES["PAYMENT"][0],
+        ErpDocument.company_code == company_code)).scalars()}
+    seen = set()
+    for payment, invoice in session.execute(select(Payment, Invoice).join(Invoice, Invoice.id == Payment.invoice_id).where(
+            Invoice.company_code == company_code, Payment.status == "COMPLETED", Payment.run_ref != "LEGACY").order_by(Payment.number)).all():
+        key = f"PAY|{payment.number}"
+        seen.add(key)
+        doc = pay_docs.get(key)
+        if doc is None:
+            items.append(("PAYMENT_MISSING_IN_ERP", payment.number, None, payment.amount_minor, None, "PAYMENT"))
+        elif amount(doc) != payment.amount_minor:
+            items.append(("PAYMENT_AMOUNT_MISMATCH", payment.number, doc.doc_no, payment.amount_minor, amount(doc), "PAYMENT"))
+    for key, doc in pay_docs.items():
+        # Only clearing documents carrying a platform payment key (PAY|<payment>) are the platform's; payments booked
+        # natively in the ERP are not platform postings.
+        if key.startswith("PAY|") and key not in seen:
+            items.append(("PAYMENT_NOT_IN_PLATFORM", key, doc.doc_no, None, amount(doc), "PAYMENT"))
+    memo_docs = {d.external_ref: d for d in session.execute(select(ErpDocument).where(
+        ErpDocument.system == target_system, ErpDocument.doc_type == integration.DOC_TYPES["SUPPLIER_CREDIT_MEMO"][0],
+        ErpDocument.company_code == company_code)).scalars()}
+    for message in session.execute(select(IntegrationMessage).where(IntegrationMessage.target_system == target_system,
+                                                                    IntegrationMessage.message_type == "SUPPLIER_CREDIT_MEMO")
+                                   .order_by(IntegrationMessage.created_at)).scalars():
+        if (message.payload or {}).get("companyCode", "1000") != company_code:
+            continue
+        note_no = (message.payload or {}).get("creditNote") or message.idempotency_key
+        expected = (message.payload or {}).get("grossMinor")
+        doc = memo_docs.get(message.idempotency_key)
+        if doc is None:
+            items.append(("MEMO_MISSING_IN_ERP", note_no, None, expected, None, "CREDIT_NOTE"))
+        elif doc.amount_minor != expected:
+            items.append(("MEMO_AMOUNT_MISMATCH", note_no, doc.doc_no, expected, doc.amount_minor, "CREDIT_NOTE"))
+    return items
 
 
 def reconciliation_view(session: Session, run) -> dict:
@@ -858,7 +1281,7 @@ def reconciliation_view(session: Session, run) -> dict:
     return {"number": run.number, "system": run.target_system, "companyCode": run.company_code, "asOf": run.as_of.isoformat(),
             "platformCount": run.platform_count, "erpCount": run.erp_count, "platformMinor": run.platform_minor, "erpMinor": run.erp_minor,
             "differences": run.differences,
-            "items": [{"id": str(i.id), "kind": i.kind, "ref": i.object_ref, "erpDocNo": i.erp_doc_no, "platformMinor": i.platform_minor,
+            "items": [{"id": str(i.id), "kind": i.kind, "objectType": i.object_type, "ref": i.object_ref, "erpDocNo": i.erp_doc_no, "platformMinor": i.platform_minor,
                        "erpMinor": i.erp_minor, "status": i.status, "resolution": i.resolution} for i in items]}
 
 

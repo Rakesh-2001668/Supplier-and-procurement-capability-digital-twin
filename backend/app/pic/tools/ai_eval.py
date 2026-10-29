@@ -24,6 +24,7 @@ Sets (backend/data/eval):
 """
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -317,6 +318,7 @@ def evaluate_dedup(sc) -> dict:
 
     from app.pic.models import Supplier
     from app.pic.services import spend, supplier as supplier_svc
+    from app.pic.services.master_changes import gstin_check_char
 
     _, pairs = read_csv("supplier_dedup_pairs.csv")
     predicted = {"F8_SCREENING": {}, "SPD_CLUSTERS": {}}
@@ -333,10 +335,16 @@ def evaluate_dedup(sc) -> dict:
                     missing.append(code)
                     continue
                 gstin, pan = pair[f"{side}_gstin"], pair[f"{side}_pan"]
+                if not gstin:  # registration needs well-formed tax IDs; synthetic ones, unmatched because their hashes are cleared below
+                    pan = f"EVALX{int(hashlib.sha256(code.encode()).hexdigest(), 16) % 10_000:04d}Z"
+                    gstin = f"33{pan}1Z" + gstin_check_char(f"33{pan}1Z")
+                    name_only = True
+                else:
+                    name_only = False
                 made[code] = supplier_svc.register(
-                    s, code=code, legal_name=name, gstin=gstin or f"EVAL-NO-GSTIN-{code}", pan=pan or f"EVAL-NO-PAN-{code}",
-                    state_code=(gstin or "33")[:2], contact_email=f"{code.lower()}@eval.example", categories=[])
-                if not gstin:  # a name-only request: no tax identifiers to match on
+                    s, code=code, legal_name=name, gstin=gstin, pan=pan,
+                    state_code=gstin[:2], contact_email=f"{code.lower()}@eval.example", categories=[])
+                if name_only:  # a name-only request: no tax identifiers to match on
                     made[code].gstin_hash = made[code].pan_hash = None
         s.flush()
         masters = {**existing, **made}

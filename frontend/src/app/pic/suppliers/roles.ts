@@ -19,3 +19,10 @@ export function useSupplierManager(): boolean {
   if (raw === '') return false;
   return raw === '-' || raw.split(',').includes('SUPPLIER_MANAGER');
 }
+
+/** True for a supplier manager or quality inspector: the roles that verify certificates (F8-04). */
+export function useCertificateVerifier(): boolean {
+  const raw = useSyncExternalStore(noSubscription, rolesSnapshot, () => '');
+  if (raw === '') return false;
+  return raw === '-' || raw.split(',').some((r) => r === 'SUPPLIER_MANAGER' || r === 'QUALITY_INSPECTOR');
+}

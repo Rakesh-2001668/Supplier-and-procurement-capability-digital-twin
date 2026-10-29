@@ -208,11 +208,21 @@ def mfa_confirm(body: CodeIn, request: Request, p: Principal = Depends(enrolment
                 with system_tx() as ts:
                     tenant = ts.get(Tenant, p.tenant_id)
                 result.update(token_response(user, tenant, amr=["pwd", "otp"]))
+                http.clear_login_failures(request)
             return result
     except Problem as exc:
         if exc.code == "MFA_CODE_INVALID":
             _count_failure(request, None)
+            _audit_failure(p, request, "enrolment")
         raise
+
+
+def _audit_failure(p: Principal, request: Request, context: str) -> None:
+    """MFA_FAILED in its own transaction: the request's transaction is rolled back with the error."""
+    with tenant_tx(p.tenant_id, p.user_id, p) as s:
+        user = s.get(AppUser, p.user_id)
+        if user is not None:
+            mfa.record_failure(s, user, context, http._client_ip(request))
 
 
 @router.delete("/me/mfa/totp", tags=["Identity"])
@@ -220,11 +230,13 @@ def mfa_disable(request: Request, body: Optional[CodeIn] = Body(default=None), p
     _throttle(request)
     try:
         with uow(p) as s:
+            mfa.ensure_not_locked(s, p.user_id)
             mfa.disable(s, _app_user(s, p), body.code if body else "")
             return {"enrolled": False}
     except Problem as exc:
         if exc.code == "MFA_CODE_INVALID":
             _count_failure(request, None)
+            _audit_failure(p, request, "disable")
         raise
 
 
@@ -241,11 +253,16 @@ def mfa_login(body: MfaLogin, request: Request):
         raise Problem(401, "MFA_CHALLENGE_INVALID", "Unknown organisation")
     with tenant_tx(tenant.id) as s:
         user = s.get(AppUser, uuid.UUID(claims["sub"]))
+        if user is not None:
+            mfa.ensure_not_locked(s, user.id)  # per-account counter in the database: holds across replicas and fresh challenges
         factor = mfa.confirmed_factor(s, user.id) if user is not None and user.active else None
         ok = factor is not None and mfa.verify(s, factor, body.code)
         if ok:
+            mfa.record_success(s, user)
             http.clear_login_failures(request)
             return token_response(user, tenant, amr=["pwd", "otp"])
+        if user is not None:
+            mfa.record_failure(s, user, "login", http._client_ip(request))  # committed with this transaction
     attempts = _count_failure(request, claims)
     raise Problem(401, "MFA_CODE_INVALID", "The code is not valid or was already used. Enter the current code from your authenticator app.",
                   attemptsLeft=max(MAX_CODE_ATTEMPTS - attempts, 0))

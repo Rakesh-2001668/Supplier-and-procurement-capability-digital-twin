@@ -67,6 +67,8 @@ USERS = [
     ("buyer.lead", "Pooja Nair", ["BUYER"], {"plants": ["BLR1", "HYD1"]}),
     ("category.manager", "Sandeep Rao", ["CATEGORY_MANAGER"], {"categories": ["*"]}),
     ("contract.manager", "Meera Iyengar", ["CONTRACT_MANAGER"], {}),
+    # second contract manager: the submitter of a contract never approves it (four-eyes, contract.submit)
+    ("contract.manager2", "Girish Shenoy", ["CONTRACT_MANAGER"], {}),
     ("procurement.head", "Arvind Bhat", ["PROCUREMENT_HEAD"], {}),
     ("supplier.manager", "Divya Prakash", ["SUPPLIER_MANAGER"], {"categories": ["*"]}),
     ("finance.controller", "Ramya Krishnan", ["FINANCE_CONTROLLER"], {}),
@@ -80,7 +82,7 @@ USERS = [
 ]
 ROLE_USER = {
     "COST_OBJECT_OWNER": ["it.manager", "admin.manager"], "DEPT_HEAD": "coo", "BUYER": "buyer.lead", "CATEGORY_MANAGER": "category.manager",
-    "CONTRACT_MANAGER": "contract.manager", "PROCUREMENT_HEAD": "procurement.head",
+    "CONTRACT_MANAGER": ["contract.manager", "contract.manager2"], "PROCUREMENT_HEAD": "procurement.head",
     "FINANCE_CONTROLLER": ["finance.controller", "finance.controller2"], "SERVICE_OWNER": "facilities.manager",
     "MDM_STEWARD": ["mdm.purchasing", "mdm.quality", "mdm.finance", "mdm.plant"],
 }

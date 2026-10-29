@@ -72,7 +72,10 @@ def get_transmission(ref: str, transmission_id: uuid.UUID, p: Principal = Depend
 
 
 MEDIA = {"EDIFACT_ORDERS": ("application/EDIFACT", "edi"), "EDIFACT_ORDCHG": ("application/EDIFACT", "edi"),
-         "HTML_EMAIL": ("text/html; charset=utf-8", "html"), "PORTAL": ("application/json", "json")}
+         "HTML_EMAIL": ("text/html; charset=utf-8", "html"), "PORTAL": ("application/json", "json"),
+         # cancellation notices (transmission.CANCEL_FORMATS)
+         "EDIFACT_CANCEL": ("application/EDIFACT", "edi"), "HTML_EMAIL_CANCEL": ("text/html; charset=utf-8", "html"),
+         "PORTAL_CANCEL": ("application/json", "json")}
 
 
 @router.get("/purchase-orders/{ref}/transmissions/{transmission_id}/document", tags=["F5 Purchase Order"])

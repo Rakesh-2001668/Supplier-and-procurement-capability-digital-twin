@@ -146,6 +146,7 @@ def onboard(sc: Scenario, spec: dict, password: str, day: date) -> uuid.UUID:
         change_id = change.id
     sc.approve_all(change_id, at(day + days(1), 15), "Cancelled cheque and bank letter on letterhead verified")
     with sc.act("supplier.manager", at(day + days(2), 10)) as s:
+        svc.verify_certificates(s, s.get(Supplier, supplier_id), "Insurance policy and national permit checked with the insurer and VAHAN")
         for category in spec["categories"]:
             q = svc.start_qualification(s, s.get(Supplier, supplier_id), category)
             svc.record_assessment(s, q, questionnaire=spec.get("questionnaire", {}), questionnaire_score=Decimal(spec["scores"][0]),
@@ -219,6 +220,8 @@ USERS = [
     ("buyer.lead", "Joseph Antony", ["BUYER"], {"plants": ["CHE1", "PNQ1"]}),
     ("category.manager", "Lakshmi Sundar", ["CATEGORY_MANAGER"], {"categories": ["LOGISTICS"]}),
     ("contract.manager", "Senthil Kumar", ["CONTRACT_MANAGER"], {}),
+    # second contract manager: the submitter of a contract never approves it (four-eyes, contract.submit)
+    ("contract.manager2", "Malathi Ganesan", ["CONTRACT_MANAGER"], {}),
     ("procurement.head", "Usha Rangarajan", ["PROCUREMENT_HEAD"], {}),
     ("supplier.manager", "Farida Begum", ["SUPPLIER_MANAGER"], {"categories": ["*"]}),
     ("finance.controller", "Venkatesh Iyer", ["FINANCE_CONTROLLER"], {}),
@@ -232,7 +235,7 @@ USERS = [
 ]
 ROLE_USER = {
     "COST_OBJECT_OWNER": ["linehaul.manager", "hub.manager"], "DEPT_HEAD": "ops.head", "BUYER": "buyer.lead",
-    "CATEGORY_MANAGER": "category.manager", "CONTRACT_MANAGER": "contract.manager", "PROCUREMENT_HEAD": "procurement.head",
+    "CATEGORY_MANAGER": "category.manager", "CONTRACT_MANAGER": ["contract.manager", "contract.manager2"], "PROCUREMENT_HEAD": "procurement.head",
     "FINANCE_CONTROLLER": ["finance.controller", "finance.controller2"], "SERVICE_OWNER": "control.tower",
     "MDM_STEWARD": ["mdm.purchasing", "mdm.quality", "mdm.finance", "mdm.plant"],
 }
@@ -477,7 +480,8 @@ def _spot_trip(sc: Scenario, state: dict):
                                         "description": "Spot FTL Pune (Chakan) → Chennai (Sriperumbudur), 32 ft MXL – returnable racks",
                                         "material_group": "LOG-SPOT", "category": "LOGISTICS", "qty": "1", "uom": "TRIP",
                                         "price_est_minor": 6_600_000, "account_assignment_type": "COST_CENTER", "account_assignment_code": "5200",
-                                        "need_date": "2026-12-15", "quotes_attached": 1, "plant": "PNQ1"}])
+                                        "need_date": "2026-12-15", "plant": "PNQ1",
+                                        "quotes": [{"supplier": "WGC02", "reference": "WGC-Q-2612", "date": "2026-12-14"}]}])
         requisition.submit(s, pr)
         pr_id, pr_no = pr.id, pr.number
     t = at(date(2026, 12, 14), 11, 30)

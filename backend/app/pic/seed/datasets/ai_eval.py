@@ -24,6 +24,8 @@ TITLE = "D9 AI evaluation sets: labelled spend lines, forecast actuals, duplicat
 TENANTS = ('AXN',)
 CREATES_TENANT = False
 READY = True
+from app.pic.seed.axion import SIGNATURE_KEY, SIGNATURE_VERSION  # noqa: E402
+REQUIRES = {SIGNATURE_KEY: SIGNATURE_VERSION}  # the current signature case (users, documents, identifiers)
 
 NS = uuid.UUID("0b8f7a52-6c0e-4d8e-9a43-5f2f3c9e1d17")
 RECORDED_AT = (date(2027, 7, 1), 9)

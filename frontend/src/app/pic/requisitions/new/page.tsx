@@ -10,7 +10,10 @@ import { useApi, useCommand } from '@/lib/pic/hooks';
 import { AccountAssignment, NEEDS_ACCOUNT, PolicyProblem, PURCHASE_TYPES, Reference, Requisition, SubmitPanel, useReference } from '../_components';
 import { PunchOut } from './punchout';
 
-type ContractHit = { channel: 'CONTRACT'; contract: string; line: number; description: string; unitPriceMinor: number | null; score: number };
+type ContractHit = {
+  channel: 'CONTRACT'; contract: string; line: number; contractLineId: string; material: string | null; uom: string; description: string;
+  unitPriceMinor: number | null; score: number;
+};
 type CatalogueHit = { channel: 'CATALOGUE'; id: string; supplierPartNo: string | null; description: string; unitPriceMinor: number; uom: string; score: number };
 type MaterialHit = { channel: 'MATERIAL'; material: string; description: string; uom: string; score: number };
 type Search = {
@@ -19,11 +22,13 @@ type Search = {
 };
 type MaterialRow = { number: string; material_group: string | null; category: string | null };
 
-type ItemType = 'MATERIAL' | 'CATALOGUE' | 'FREE_TEXT';
+type ItemType = 'MATERIAL' | 'CATALOGUE' | 'CONTRACT' | 'FREE_TEXT';
+/** One supplier quote for the quote policy: supplier, the supplier's quote reference and the quote date. */
+type QuoteRef = { supplier: string; reference: string; date: string };
 type DraftLine = {
-  key: string; item_type: ItemType; source: string; material?: string; catalogue_item_id?: string;
+  key: string; item_type: ItemType; source: string; material?: string; catalogue_item_id?: string; contract_line_id?: string;
   description: string; material_group: string; category: string; purchase_type: string; qty: string; uom: string;
-  price: string; priceFixed: boolean; aat: string; aac: string; need_date: string; quotes: string; reusable: boolean; mpn: string;
+  price: string; priceFixed: boolean; aat: string; aac: string; need_date: string; quotes: QuoteRef[]; reusable: boolean; mpn: string;
 };
 
 const ORIGINS = ['MANUAL', 'PROJECT', 'CATALOGUE'];
@@ -67,8 +72,9 @@ function NewRequisition() {
     origin, plant: effectivePlant, purpose_code: purposeCode.trim(), purpose_text: purposeText.trim() || undefined,
     lines: lines.map((l) => ({
       item_type: l.item_type, purchase_type: l.purchase_type,
-      material: l.item_type === 'MATERIAL' ? l.material : undefined,
+      material: l.item_type === 'MATERIAL' || l.item_type === 'CONTRACT' ? l.material : undefined,
       catalogue_item_id: l.item_type === 'CATALOGUE' ? l.catalogue_item_id : undefined,
+      contract_line_id: l.item_type === 'CONTRACT' ? l.contract_line_id : undefined,
       description: l.item_type === 'FREE_TEXT' ? l.description.trim() : undefined,
       material_group: l.item_type === 'FREE_TEXT' ? l.material_group.trim() : undefined,
       category: l.item_type === 'FREE_TEXT' ? (l.category.trim() || undefined) : undefined,
@@ -76,7 +82,7 @@ function NewRequisition() {
       price_est_minor: l.priceFixed ? undefined : rupeesToMinor(l.price),
       account_assignment_type: l.aat || undefined, account_assignment_code: l.aac || undefined,
       need_date: l.need_date,
-      quotes_attached: l.item_type === 'FREE_TEXT' ? Number(l.quotes || 0) : 0,
+      quotes: l.item_type === 'FREE_TEXT' ? l.quotes.map((q) => ({ supplier: q.supplier.trim(), reference: q.reference.trim(), date: q.date })) : [],
       reusable: l.item_type === 'FREE_TEXT' ? l.reusable : false,
       mpn: l.item_type === 'FREE_TEXT' && l.reusable && l.mpn.trim() ? l.mpn.trim() : undefined,
     })),
@@ -85,7 +91,7 @@ function NewRequisition() {
   const addLine = (line: Partial<DraftLine> & Pick<DraftLine, 'item_type' | 'source'>) =>
     setLines((prev) => [...prev, {
       key: newKey(), description: '', material_group: '', category: '', purchase_type: 'NON_STOCK', qty: '1', uom: 'EA', price: '',
-      priceFixed: false, aat: '', aac: '', need_date: inDays(14), quotes: '0', reusable: false, mpn: '', ...line,
+      priceFixed: false, aat: '', aac: '', need_date: inDays(14), quotes: [], reusable: false, mpn: '', ...line,
     }]);
   const update = (key: string, patch: Partial<DraftLine>) => setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const remove = (key: string) => setLines((prev) => prev.filter((l) => l.key !== key));
@@ -95,6 +101,14 @@ function NewRequisition() {
     if (!m) return;
     addLine({ item_type: 'MATERIAL', source, material: m.number, description: m.description, uom: m.uom,
       purchase_type: m.type === 'STOCK' ? 'STOCK' : 'NON_STOCK', price: minorToRupees(m.standardPriceMinor) });
+  };
+  // P03 channel 1: a contract item is ordered as a CONTRACT line; the API prices it from the contract's price validity.
+  const addContract = (hit: ContractHit) => {
+    const m = reference?.materials.find((x) => x.number === hit.material);
+    if (!m) return;
+    addLine({ item_type: 'CONTRACT', source: `Contract ${hit.contract} line ${hit.line}`, material: m.number, contract_line_id: hit.contractLineId,
+      description: hit.description, uom: hit.uom || m.uom, purchase_type: m.type === 'STOCK' ? 'STOCK' : 'NON_STOCK',
+      price: minorToRupees(hit.unitPriceMinor ?? m.standardPriceMinor), priceFixed: hit.unitPriceMinor != null });
   };
   const addCatalogue = (id: string, description: string, priceMinor: number, uom: string) => {
     const item = reference?.catalogue.find((c) => c.id === id);
@@ -114,6 +128,8 @@ function NewRequisition() {
       if (!l.priceFixed && !(Number(l.price) > 0)) out.push(`${n}: an estimated unit price is required.`);
       if (l.item_type === 'FREE_TEXT' && !l.description.trim()) out.push(`${n}: description is required.`);
       if (l.item_type === 'FREE_TEXT' && !l.material_group.trim()) out.push(`${n}: material group is required (P04).`);
+      if (l.quotes.some((q) => !q.supplier.trim() || !q.reference.trim() || !q.date)) out.push(`${n}: every quote needs the supplier, its reference and date.`);
+      if (l.purchase_type === 'STOCK' && !l.material) out.push(`${n}: stock purchases need a material master.`);
       if (NEEDS_ACCOUNT.includes(l.purchase_type) && (!l.aat || !l.aac)) out.push(`${n}: ${label(l.purchase_type).toLowerCase()} purchases need an account assignment.`);
     });
     return out;
@@ -175,7 +191,7 @@ function NewRequisition() {
         cookie={params.get('punchout')} error={params.get('punchoutError')} onConverted={(r) => setCreated(r)} />
 
       <GuidedSearch plant={effectivePlant} reference={reference}
-        onMaterial={(n, source) => addMaterial(n, source)} onCatalogue={addCatalogue}
+        onMaterial={(n, source) => addMaterial(n, source)} onContract={addContract} onCatalogue={addCatalogue}
         onFreeText={(description) => addLine({ item_type: 'FREE_TEXT', source: 'Free text', description })} />
 
       <Card title={`Lines (${lines.length})`} actions={<MaterialPicker reference={reference} onAdd={(n) => addMaterial(n, 'Material master')} />}>
@@ -208,9 +224,10 @@ function NewRequisition() {
 }
 
 // ---------------------------------------------------------------- REQ-01 guided search (contract → catalogue → material → free text)
-function GuidedSearch({ plant, reference, onMaterial, onCatalogue, onFreeText }: {
+function GuidedSearch({ plant, reference, onMaterial, onContract, onCatalogue, onFreeText }: {
   plant: string; reference: Reference;
   onMaterial: (number: string, source: string) => void;
+  onContract: (hit: ContractHit) => void;
   onCatalogue: (id: string, description: string, priceMinor: number, uom: string) => void;
   onFreeText: (description: string) => void;
 }) {
@@ -220,16 +237,14 @@ function GuidedSearch({ plant, reference, onMaterial, onCatalogue, onFreeText }:
   const data = search.data;
   const go = () => setQ(text.trim());
 
-  const materialFor = (description: string) => reference.materials.find((m) => m.description.toLowerCase() === description.toLowerCase());
-
   const groupBody = (channel: string) => {
     if (!data) return null;
     if (channel === 'CONTRACT') {
       return data.results.contract.length ? data.results.contract.map((h) => {
-        const m = materialFor(h.description);
+        const m = h.material ? reference.materials.find((x) => x.number === h.material) : undefined;
         return (
           <Hit key={`${h.contract}-${h.line}`} title={h.description} meta={`Contract ${h.contract} line ${h.line} · ${h.unitPriceMinor != null ? inr(h.unitPriceMinor) : 'price per validity period'} · match ${Math.round(h.score * 100)}%`}
-            action={m ? <Button type="button" onClick={() => onMaterial(m.number, `Contract ${h.contract} line ${h.line}`)}>Add {m.number}</Button>
+            action={m ? <Button type="button" onClick={() => onContract(h)}>Add {m.number} at contract price</Button>
               : <span className="text-xs text-slate-500">No material master for this contract item</span>} />
         );
       }) : <NoHits />;
@@ -319,7 +334,7 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
 }) {
   const free = line.item_type === 'FREE_TEXT';
   const needsAccount = NEEDS_ACCOUNT.includes(line.purchase_type);
-  const typeOptions = line.item_type === 'MATERIAL' ? ['STOCK', ...PURCHASE_TYPES] : PURCHASE_TYPES;
+  const typeOptions = line.item_type === 'MATERIAL' || line.item_type === 'CONTRACT' ? ['STOCK', ...PURCHASE_TYPES] : PURCHASE_TYPES;
   const value = (Number(line.qty) || 0) * (Number(line.price) || 0);
   return (
     <fieldset className="rounded-lg border border-slate-200 p-4">
@@ -350,7 +365,7 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
         )}</Field>
         <Field label="Quantity *">{(id) => <Input id={id} type="number" min="0" step="any" value={line.qty} onChange={(e) => onChange({ qty: e.target.value })} />}</Field>
         <Field label="Unit of measure">{(id) => <Input id={id} value={line.uom} disabled={!free} onChange={(e) => onChange({ uom: e.target.value.toUpperCase() })} />}</Field>
-        <Field label={`Estimated unit price (₹)${line.priceFixed ? '' : ' *'}`} hint={line.priceFixed ? 'Catalogue price' : undefined}>{(id) => (
+        <Field label={`Estimated unit price (₹)${line.priceFixed ? '' : ' *'}`} hint={line.priceFixed ? (line.item_type === 'CONTRACT' ? 'Contract price' : 'Catalogue price') : undefined}>{(id) => (
           <Input id={id} type="number" min="0" step="0.01" value={line.price} disabled={line.priceFixed} onChange={(e) => onChange({ price: e.target.value })} />
         )}</Field>
         <Field label="Need date *">{(id) => <Input id={id} type="date" value={line.need_date} onChange={(e) => onChange({ need_date: e.target.value })} />}</Field>
@@ -360,9 +375,7 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
         )}
         {free && (
           <>
-            <Field label="Quotes attached" hint="Free text above the quote threshold needs 1 or 3 quotes (checked on submit)">{(id) => (
-              <Input id={id} type="number" min="0" step="1" value={line.quotes} onChange={(e) => onChange({ quotes: e.target.value })} />
-            )}</Field>
+            <QuoteRefs quotes={line.quotes} onChange={(quotes) => onChange({ quotes })} />
             <div className="flex flex-col justify-end gap-2 md:col-span-2">
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" className="mt-0.5" checked={line.reusable} onChange={(e) => onChange({ reusable: e.target.checked })} />
@@ -377,6 +390,29 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
       </div>
       {line.item_type !== 'FREE_TEXT' && line.qty && <p className="mt-2 text-xs text-slate-500">{fmtQty(line.qty, line.uom)} at {line.price ? inr(rupeesToMinor(line.price)) : '–'}</p>}
     </fieldset>
+  );
+}
+
+// ---------------------------------------------------------------- quote references (quote policy, checked on submit)
+function QuoteRefs({ quotes, onChange }: { quotes: QuoteRef[]; onChange: (quotes: QuoteRef[]) => void }) {
+  const set = (index: number, patch: Partial<QuoteRef>) => onChange(quotes.map((q, i) => (i === index ? { ...q, ...patch } : q)));
+  return (
+    <div className="md:col-span-4">
+      <p className="text-sm font-medium text-slate-700">Supplier quotes</p>
+      <p className="text-xs text-slate-500">From ₹25,000 one quote; above ₹2 lakh three quotes from different suppliers (or a sourcing event on submit).
+        Record each quote with the supplier, its reference and date.</p>
+      <div className="mt-2 space-y-2">
+        {quotes.map((q, i) => (
+          <div key={i} className="grid gap-2 md:grid-cols-[1fr_1fr_10rem_auto] md:items-end">
+            <Field label={`Quote ${i + 1} supplier *`}>{(id) => <Input id={id} value={q.supplier} onChange={(e) => set(i, { supplier: e.target.value })} />}</Field>
+            <Field label="Quote reference *">{(id) => <Input id={id} value={q.reference} onChange={(e) => set(i, { reference: e.target.value })} />}</Field>
+            <Field label="Quote date *">{(id) => <Input id={id} type="date" max={inDays(0)} value={q.date} onChange={(e) => set(i, { date: e.target.value })} />}</Field>
+            <Button type="button" variant="ghost" onClick={() => onChange(quotes.filter((_, j) => j !== i))} aria-label={`Remove quote ${i + 1}`}>Remove</Button>
+          </div>
+        ))}
+        <Button type="button" onClick={() => onChange([...quotes, { supplier: '', reference: '', date: inDays(0) }])}>Add quote</Button>
+      </div>
+    </div>
   );
 }
 

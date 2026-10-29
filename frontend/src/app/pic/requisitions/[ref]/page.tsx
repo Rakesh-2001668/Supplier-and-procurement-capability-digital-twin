@@ -3,24 +3,29 @@
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { ObjectPage } from '@/components/pic/object';
-import { Button, DataTable, Dialog, Facts, Field, Input, StatusChip } from '@/components/pic/ui';
-import { api, Paged } from '@/lib/pic/api';
+import { Button, DataTable, Dialog, Facts, Field, Input, StatusChip, Textarea } from '@/components/pic/ui';
+import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
-import { AccountAssignment, NEEDS_ACCOUNT, PolicyProblem, PrLine, Requisition, SubmitPanel, useReference } from '../_components';
+import { AccountAssignment, isUnstructured, NEEDS_ACCOUNT, PolicyProblem, PrLine, Requisition, SubmitPanel, useReference } from '../_components';
 
-const EDITABLE = ['DRAFT', 'RETURNED', 'APPROVED'];
+type Me = { userId: string; roles: string[] };
+/** The requester may withdraw in these states; a buyer only an approved requisition (not yet ordered). */
+const REQUESTER_CANCELS = ['DRAFT', 'RETURNED', 'IN_APPROVAL', 'APPROVED'];
 
 export default function RequisitionPage() {
   const { ref } = useParams<{ ref: string }>();
   const { data: pr, isLoading, error } = useApi<Requisition>(`/requisitions/${encodeURIComponent(ref)}`);
   const submittable = !!pr && ['DRAFT', 'RETURNED'].includes(pr.status);
-  // The API only lets the requester submit; "mine" tells us whether that is the signed-in user.
-  const mine = useApi<Paged<Requisition>>(submittable ? `/requisitions?mine=true&status=${pr.status}&limit=200` : null);
-  const isRequester = !!pr && !!mine.data?.items.some((r) => r.id === pr.id);
-  const [dialog, setDialog] = useState<'submit' | null>(null);
+  // The API lets only the requester submit, edit a draft or withdraw it; a buyer may edit or cancel once approved.
+  const me = useApi<Me>('/me');
+  const isRequester = !!pr && !!me.data && me.data.userId === pr.requester_id;
+  const isBuyer = !!me.data?.roles.includes('BUYER');
+  const [dialog, setDialog] = useState<'submit' | 'cancel' | null>(null);
   const [editing, setEditing] = useState<PrLine | null>(null);
-  const canEdit = !!pr && EDITABLE.includes(pr.status);
+  const canEdit = !!pr && ((submittable && isRequester) || (pr.status === 'APPROVED' && (isRequester || isBuyer)));
+  const ordered = (pr?.lines ?? []).some((l) => Number(l.ordered_qty) > 0);
+  const canCancel = !!pr && !ordered && ((REQUESTER_CANCELS.includes(pr.status) && isRequester) || (pr.status === 'APPROVED' && isBuyer));
 
   const budget = pr?.budget_result;
   return (
@@ -29,7 +34,12 @@ export default function RequisitionPage() {
         type="REQUISITION" docRef={pr?.number ?? ref} eyebrow="REQ-02 · Purchase requisition" loading={isLoading} error={error}
         title={<>{pr?.number} <span className="text-base font-normal text-slate-500">{label(pr?.origin)} · plant {pr?.plant}</span></>}
         status={pr?.status}
-        actions={submittable && isRequester ? <Button variant="primary" onClick={() => setDialog('submit')}>Submit for approval</Button> : undefined}
+        actions={(submittable && isRequester) || canCancel ? (
+          <>
+            {canCancel && <Button variant="danger" onClick={() => setDialog('cancel')}>{pr?.status === 'APPROVED' ? 'Cancel requisition' : 'Withdraw'}</Button>}
+            {submittable && isRequester && <Button variant="primary" onClick={() => setDialog('submit')}>Submit for approval</Button>}
+          </>
+        ) : undefined}
         facts={pr && (
           <div className="space-y-4">
             <Facts items={[
@@ -74,7 +84,9 @@ export default function RequisitionPage() {
             { key: 'value', header: 'Value', align: 'right', render: (l) => inr(Math.round(Number(l.qty) * l.price_est_minor)) },
             { key: 'account', header: 'Account', render: (l) => l.account_assignment_code ? `${label(l.account_assignment_type)} ${l.account_assignment_code}` : '–' },
             { key: 'need_date', header: 'Need', render: (l) => date(l.need_date) },
-            { key: 'quotes_attached', header: 'Quotes', align: 'right', render: (l) => (l.item_type === 'FREE_TEXT' ? l.quotes_attached : '–') },
+            { key: 'quotes_attached', header: 'Quotes', align: 'right', render: (l) => (isUnstructured(l)
+              ? <span title={(l.source_determination?.quotes ?? []).map((q) => `${q.supplier} ${q.reference} (${q.date})`).join('\n') || 'No quotes recorded'}>{l.quotes_attached}</span>
+              : '–') },
             { key: 'source', header: 'Source', render: (l) => l.source_determination?.method
               ? <span className="text-xs">{label(l.source_determination.method)}{(l.source_determination.allocations ?? []).map((a) => ` · ${a.supplier}`).join('')}</span> : '–' },
             { key: 'ordered_qty', header: 'Ordered', align: 'right', render: (l) => qty(l.ordered_qty) },
@@ -88,8 +100,32 @@ export default function RequisitionPage() {
           <SubmitPanel pr={pr} />
         </Dialog>
       )}
+      {pr && dialog === 'cancel' && <CancelDialog pr={pr} onClose={() => setDialog(null)} />}
       {pr && editing && <EditLineDialog pr={pr} line={editing} onClose={() => setEditing(null)} />}
     </>
+  );
+}
+
+function CancelDialog({ pr, onClose }: { pr: Requisition; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const cancel = useCommand(() => api.post<Requisition>(`/requisitions/${pr.number}/cancel`, { reason: reason.trim() }), {
+    success: (r) => `${r.number} cancelled — budget released`, onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`${pr.status === 'APPROVED' ? 'Cancel' : 'Withdraw'} ${pr.number}`} onClose={onClose}>
+      <p className="text-sm text-slate-700">
+        The budget commitment is released{pr.status === 'IN_APPROVAL' ? ', the open approval tasks are cancelled' : ''} and the requisition is closed as cancelled.
+        A requisition already on a purchase order or in a sourcing event cannot be cancelled here.
+      </p>
+      <div className="mt-3">
+        <Field label="Reason *">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field>
+      </div>
+      <div className="mt-3"><PolicyProblem error={cancel.error} /></div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Keep it</Button>
+        <Button variant="danger" busy={cancel.isPending} disabled={!reason.trim()} onClick={() => cancel.mutate()}>Cancel requisition</Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -101,6 +137,7 @@ function EditLineDialog({ pr, line, onClose }: { pr: Requisition; line: PrLine; 
   const [aac, setAac] = useState(line.account_assignment_code ?? '');
   const [needDate, setNeedDate] = useState(line.need_date);
   const [description, setDescription] = useState(line.description);
+  const [justification, setJustification] = useState('');
 
   const changes: Record<string, unknown> = {};
   if (qtyValue !== line.qty && Number(qtyValue) !== Number(line.qty)) changes.qty = qtyValue;
@@ -110,6 +147,7 @@ function EditLineDialog({ pr, line, onClose }: { pr: Requisition; line: PrLine; 
   if (needDate !== line.need_date) changes.need_date = needDate;
   if (description.trim() !== line.description) changes.description = description.trim();
   const touchesApproval = 'qty' in changes || 'price_est_minor' in changes || 'account_assignment_code' in changes || 'account_assignment_type' in changes;
+  if (pr.status === 'APPROVED' && touchesApproval && justification.trim()) changes.justification = justification.trim();
   const invalid = !(Number(qtyValue) > 0) || !(Number(price) > 0) || !needDate || !description.trim()
     || (NEEDS_ACCOUNT.includes(line.purchase_type) && (!aat || !aac));
 
@@ -127,6 +165,13 @@ function EditLineDialog({ pr, line, onClose }: { pr: Requisition; line: PrLine; 
         <AccountAssignment type={aat} code={aac} costObjects={ref.data?.costObjects ?? []} required={NEEDS_ACCOUNT.includes(line.purchase_type)}
           onChange={(t, c) => { setAat(t); setAac(c); }} />
         <Field label="Need date">{(id) => <Input id={id} type="date" value={needDate} onChange={(e) => setNeedDate(e.target.value)} />}</Field>
+        {pr.status === 'APPROVED' && touchesApproval && (
+          <div className="md:col-span-2">
+            <Field label="Budget justification (optional)" hint="Needed only when the changed value goes over a soft budget; hard stops cannot be justified.">{(id) => (
+              <Textarea id={id} value={justification} onChange={(e) => setJustification(e.target.value)} />
+            )}</Field>
+          </div>
+        )}
       </div>
       <div className={`mt-4 rounded-lg border px-3 py-2 text-sm ${pr.status === 'APPROVED' && touchesApproval ? 'border-amber-300 bg-amber-50 text-amber-900' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
         {pr.status === 'APPROVED'

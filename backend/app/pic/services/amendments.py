@@ -217,8 +217,16 @@ def plan(session: Session, contract: Contract, kind: str, changes: dict, effecti
         extra["openPurchaseOrders"] = [{"number": po.number, "status": po.status, "totalMinor": po.total_minor}
                                        for po in open_purchase_orders(session, contract)]
 
+    non_standard = [c["code"] for c in (normalised.get("clauses") or []) if c.get("position") == "NON_STANDARD"]
     if kind == "TERMINATION":
         band, chain = "termination", list(rule.body["termination"])
+    elif non_standard:
+        # A NON_STANDARD clause (new or changed text) always needs LEGAL, like contract.submit does for the original contract.
+        band = "non_standard"
+        chain = list(rule.body.get("nonStandard") or rule.body["above"])
+        if "LEGAL" not in chain:
+            chain = ["LEGAL", *chain]
+        extra["nonStandardClauses"] = non_standard
     elif abs(delta) >= int(rule.body["thresholdMinor"]):
         band, chain = "above", list(rule.body["above"])
     else:

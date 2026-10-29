@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { readSessionUser, SessionUser, signOut } from '@/lib/pic/api';
+import { legacyDemoEnabled } from '@/lib/pic/deployment';
 import { dateTime } from '@/lib/pic/format';
 import { NotificationBell } from '@/app/pic/notifications/_notifications';
 import { ToastProvider } from './toast';
@@ -167,9 +168,11 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                   </ul>
                 </div>
               ))}
-              <div className="mt-6 border-t border-white/10 pt-3">
-                <Link href="/command-centre" className="block rounded-md px-2 py-1.5 text-xs text-slate-500 hover:text-slate-300">Legacy demo screens ↗</Link>
-              </div>
+              {legacyDemoEnabled && (
+                <div className="mt-6 border-t border-white/10 pt-3">
+                  <Link href="/command-centre" className="block rounded-md px-2 py-1.5 text-xs text-slate-500 hover:text-slate-300">Legacy demo screens ↗</Link>
+                </div>
+              )}
             </nav>
           </aside>
           <div className="min-w-0 flex-1">

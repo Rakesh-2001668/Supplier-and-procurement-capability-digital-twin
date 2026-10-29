@@ -49,7 +49,7 @@ Paths are relative to the repository root. Tests in `backend/tests/pic/test_prod
 | V8.1 | No sensitive data in caches | Done | `Cache-Control: no-store` on API responses |
 | V9 Communications | TLS everywhere, HSTS | Done / Needs environment | DB `sslmode=require` enforced in production; HSTS from API (`PIC_HSTS`) and web (`next.config.ts`); TLS at GCLB with ManagedCertificate, MODERN SSL policy |
 | V10 Malicious code | Dependency and secret hygiene | Done | gitleaks, CodeQL (`security.yml`), pip-audit gate with justified ignores (`.github/scripts/pip_audit_gate.py`, `backend/pip-audit-ignore.txt`), npm audit (`ci.yml`) |
-| V10 (finding) | python-jose GHSA-3qf3-8w2g-rqmx (critical, no fix) | Gap (owner: platform/auth.py) | Not exploitable (HS256 pinned, symmetric key); ignore expires 2027-01-31; replace with PyJWT |
+| V10 (finding) | python-jose GHSA-3qf3-8w2g-rqmx (critical, no fix) | Done (29 Oct 2026) | Replaced by PyJWT 2.15.1 (HS256 pinned, issuer/audience checked); ignore entries removed |
 | V11 Business logic | Anti-automation, sequential steps, limits | Done | Workflow state machines, SoD, idempotency keys, value limits, rate limits |
 | V12 Files | Upload size and type limits | Done | Body limit 10 MiB / uploads 25 MiB (`PIC_MAX_*`), per-endpoint limits (CSV 5 MB, OCR) |
 | V13 API | Authn on every endpoint, schema, rate limits | Done | Bearer tokens; OpenAPI disabled in production (`PIC_API_DOCS`); 429 with `Retry-After` |

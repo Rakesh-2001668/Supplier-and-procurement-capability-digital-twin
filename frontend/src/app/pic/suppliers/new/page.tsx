@@ -36,7 +36,7 @@ export default function RegisterSupplier() {
   const errors: Record<string, string> = {};
   if (!legalName.trim()) errors.legal = 'Legal name is required.';
   if (gstin.length !== 15) errors.gstin = 'GSTIN has 15 characters.';
-  else if (!GSTIN.test(gstin)) errors.gstin = 'GSTIN format looks wrong (e.g. 33AABCT1234F1Z5).';
+  else if (!GSTIN.test(gstin)) errors.gstin = 'GSTIN format looks wrong (e.g. 33AABCT1234F1ZX).';
   if (pan.length !== 10) errors.pan = 'PAN has 10 characters.';
   else if (!PAN.test(pan)) errors.pan = 'PAN format looks wrong (e.g. AABCT1234F).';
   else if (gstin.length === 15 && gstin.slice(2, 12) !== pan) errors.pan = 'PAN should match characters 3–12 of the GSTIN.';

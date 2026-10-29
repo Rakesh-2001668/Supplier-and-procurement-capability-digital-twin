@@ -58,7 +58,7 @@ def require_visible(session: Session, event: SourcingEvent) -> Optional[Invitee]
     if not is_supplier(p):
         return None
     invitee = _invitee(session, event, p.supplier_id)
-    if event.status == "DRAFT" or invitee is None:
+    if event.status == "DRAFT" or event.published_at is None or invitee is None:  # cancelled drafts stay invisible
         raise not_found("Sourcing event", event.number)
     return invitee
 
@@ -333,9 +333,11 @@ def place_bid(session: Session, event: SourcingEvent, supplier: Supplier, price_
     return bid
 
 
-def _bid_row(b: AuctionBid, codes: dict, with_supplier: bool) -> dict:
+def _bid_row(b: AuctionBid, codes: dict, with_supplier: bool, show_rank: bool = True) -> dict:
     out = {"id": str(b.id), "priceMinor": b.price_minor, "rankAtSubmit": b.rank_at_submit, "submittedAt": b.submitted_at.isoformat(),
            "extendedClose": b.extended_close}
+    if not show_rank:
+        out.pop("rankAtSubmit")  # suppliers see their rank only when the auction shows ranks (setting showRank)
     if with_supplier:
         out["supplier"] = codes.get(b.supplier_id)
     return out
@@ -361,7 +363,7 @@ def view(session: Session, event: SourcingEvent) -> dict:
     if is_supplier(p):
         own = [b for b in bids if b.supplier_id == p.supplier_id]
         rank = next((i for i, b in enumerate(ladder, start=1) if b.supplier_id == p.supplier_id), None)
-        return {**base, "myBids": [_bid_row(b, {}, False) for b in reversed(own)],
+        return {**base, "myBids": [_bid_row(b, {}, False, bool(settings.get("showRank"))) for b in reversed(own)],
                 "myLastPriceMinor": own[-1].price_minor if own else None,
                 "myRank": rank if settings.get("showRank") else None,
                 "nextMaxPriceMinor": max_next_price(settings, own[-1].price_minor if own else None),

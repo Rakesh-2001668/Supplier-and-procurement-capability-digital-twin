@@ -10,7 +10,7 @@ alembic==1.20.0
 python-multipart==0.0.32  # file uploads (invoice documents, ERP CSV imports)
 
 # Security: tokens, password hashing, field-level encryption
-python-jose==3.5.0
+PyJWT==2.15.1
 bcrypt==5.0.0
 cryptography==50.0.2
 

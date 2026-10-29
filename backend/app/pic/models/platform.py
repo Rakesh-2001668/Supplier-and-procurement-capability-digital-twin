@@ -185,7 +185,10 @@ class OutboxEvent(Base):
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[Optional[str]] = mapped_column(Text)
-    __table_args__ = (Index("ix_outbox_event_unpublished", "tenant_id", "published_at"),)
+    # Back-off after a failed consumer (NULL: due now); outbox.relay_tenant skips events not yet due.
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (Index("ix_outbox_event_unpublished", "tenant_id", "published_at"),
+                      Index("ix_outbox_event_due", "tenant_id", "published_at", "next_attempt_at"))
 
 
 class ProcessedEvent(Base):

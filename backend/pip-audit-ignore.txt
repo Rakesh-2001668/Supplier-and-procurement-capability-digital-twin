@@ -1,5 +1,4 @@
 # Python dependency vulnerabilities accepted temporarily (read by .github/scripts/pip_audit_gate.py).
 # Format: <ID> | <justification: why it is not exploitable here or what mitigates it> | <review-by YYYY-MM-DD>
 # Entries without a justification or past their review date fail the build. Prefer upgrading the pin over adding a line.
-GHSA-3qf3-8w2g-rqmx | python-jose algorithm confusion with DER-encoded public keys (no fixed release). PIC only verifies HS256 tokens with a symmetric secret and algorithms pinned to ["HS256"] (platform/auth.py); OIDC id_tokens are verified with cryptography, not jose. Not exploitable here. Plan: replace python-jose with PyJWT (owner: platform/auth.py). | 2027-01-31
-PYSEC-2026-4298 | Same python-jose advisory as GHSA-3qf3-8w2g-rqmx (PyPA id). | 2027-01-31
+# (python-jose GHSA-3qf3-8w2g-rqmx / PYSEC-2026-4298 removed: replaced by PyJWT on 2026-10-29.)

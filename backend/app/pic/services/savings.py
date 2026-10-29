@@ -69,6 +69,15 @@ def _identified(session: Session, event) -> None:
                  after={"baselineMethod": initiative.baseline_method, "baselineMinor": initiative.baseline_price_minor})
 
 
+@outbox.consumer("sourcing.event.cancelled", "savings-lost")
+def _event_cancelled(session: Session, event) -> None:
+    """A cancelled event will not deliver the savings it was tracked for."""
+    initiative = _by_event(session, event.object_id)
+    if initiative is None or not SM.can(initiative.stage, "lose"):
+        return
+    SM.apply(session, initiative, "lose", reason=f"sourcing event {event.object_ref} cancelled: {event.payload.get('reason')}")
+
+
 @outbox.consumer("sourcing.event.awarded", "savings-negotiated")
 def _negotiated(session: Session, event) -> None:
     initiative = _by_event(session, event.object_id)

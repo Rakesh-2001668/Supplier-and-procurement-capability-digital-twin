@@ -224,6 +224,8 @@ def register(session: Session, invitation: SupplierInvitation, tenant: Tenant, *
                         roles=["SUPPLIER_USER"], attributes={}, supplier_id=supplier.id, mfa_enrolled=False, active=True, created_by=user_id))
     session.flush()
     screening = supplier_svc.screen(session, supplier)
+    # Qualification may start on a REVIEW screening (possible duplicate, provider outage), but no category is decided
+    # QUALIFIED / CONDITIONAL and no ERP vendor is created until a supplier manager disposes it (supplier.screening_gate).
     qualifications = [] if supplier.status == "BLOCKED" else [
         supplier_svc.start_qualification(session, supplier, category).category for category in invitation.categories or []]
     invitation.status = "REGISTERED"
@@ -235,5 +237,6 @@ def register(session: Session, invitation: SupplierInvitation, tenant: Tenant, *
                 {"supplierCode": supplier.code, "channel": "SELF_REGISTRATION", "categories": list(invitation.categories or []),
                  "screening": screening["outcome"]})
     return {"supplier": supplier.code, "legalName": supplier.legal_name, "status": supplier.status, "screening": screening["outcome"],
-            "qualifications": qualifications, "login": {"tenant": tenant.code, "email": email, "mfaEnrolled": False},
+            "qualifications": qualifications, "screeningReviewRequired": screening["outcome"] == "REVIEW",
+            "login": {"tenant": tenant.code, "email": email, "mfaEnrolled": False},
             "next": "Sign in to the supplier portal to add bank details and certificates (F8-02)."}

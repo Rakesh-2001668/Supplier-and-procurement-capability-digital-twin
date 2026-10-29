@@ -50,6 +50,7 @@ from app.pic.platform.auth import hash_password
 from app.pic.platform.errors import Problem
 from app.pic.seed import reference
 from app.pic.seed.axion import ROLE_USER, Scenario, at, email
+from app.pic.seed.datasets._tenant_kit import AXN_BUDGETS_2027_28
 
 KEY = "axn-module-cases"
 VERSION = "1"
@@ -57,6 +58,8 @@ TITLE = "D1 operations-module cases: amendments, auction, EDI, payment files, MD
 TENANTS = ('AXN',)
 CREATES_TENANT = False
 READY = True
+from app.pic.seed.axion import SIGNATURE_KEY, SIGNATURE_VERSION  # noqa: E402
+REQUIRES = {SIGNATURE_KEY: SIGNATURE_VERSION}  # the current signature case (users, documents, identifiers)
 
 D = date
 MAY = 2027, 5
@@ -151,9 +154,9 @@ def _masters(sc: Scenario, password: str) -> None:
                            if category == "ALU-DIECAST" else {"elastomer": "FKM/EPDM"}, mrp_type="ND", planned_delivery_days=10,
                            gr_processing_days=1, quality_managed=qm, standard_price_minor=price, status="ACTIVE", erp_synced=True))
             loaded.append(number)
-        # FY 2027-28 controlling budget for cost centre 4100 (the ERP loads one per fiscal year); created only if missing.
+        # FY 2027-28 controlling budgets (the ERP loads one per fiscal year); created only if missing.
         budgets = []
-        for type_, code, control, lakh in (("COST_CENTER", "4100", "SOFT", 50),):
+        for type_, code, control, lakh in AXN_BUDGETS_2027_28:
             if not s.execute(select(Budget.id).where(Budget.cost_object_type == type_, Budget.cost_object_code == code,
                                                      Budget.fiscal_year == "2027-28")).first():
                 s.add(Budget(tenant_id=sc.tenant_id, cost_object_type=type_, cost_object_code=code, fiscal_year="2027-28", control=control,
@@ -214,6 +217,7 @@ def _onboard_apc(sc: Scenario, ctx: dict):
     sc.approve_all(change_id, at(D(*MAY, 4), 15), "Cancelled cheque and bank letter verified")
     yield at(D(*MAY, 5), 10)
     with sc.act("supplier.manager", at(D(*MAY, 5), 10)) as s:
+        svc.verify_certificates(s, s.get(Supplier, sup_id), "IATF 16949 and ISO 14001 checked against the IATF database and the CB register")
         q = svc.start_qualification(s, s.get(Supplier, sup_id), "ALU-DIECAST")
         svc.record_assessment(s, q, questionnaire={"capacity": "2 x 800 t HPDC cells", "ppap": "level 3"}, questionnaire_score=Decimal(82),
                               audit_score=Decimal(81), sample_approval="PPAP_APPROVED")
@@ -654,7 +658,7 @@ def _reconcile_and_pay(sc: Scenario, ctx: dict):
 
     yield at(D(*MAY, 28), 10)
     with sc.act("finance.controller", at(D(*MAY, 28), 10)) as s:
-        run = payables.payment_run(s, D(*MAY, 28))
+        run = payables.payment_run(s, D(*MAY, 28), supplier_codes=["APC007"])
     sc.relay(at(D(*MAY, 28), 10, 30))
     yield at(D(*MAY, 28), 11)
     with sc.act("finance.controller", at(D(*MAY, 28), 11)) as s:

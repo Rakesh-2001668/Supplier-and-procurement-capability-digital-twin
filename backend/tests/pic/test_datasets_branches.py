@@ -292,7 +292,9 @@ def test_bridge_contract_rejected_consumed_renewal_declined_and_expired(pack):
         assert [st.outcome[:2] for st in steps if st.step_id == "F4-05"] == ["no", "no"]
         assert steps[-1].step_id == "F4-10" and steps[-1].outcome.startswith("expired")
         line = s.execute(select(ContractLine).where(ContractLine.contract_id == bridge.id)).scalar_one()
-        assert line.released_qty == line.target_qty == Decimal(1000)
+        # The 80/90/100 % alerts fired on release; PO-B's lot was rejected in full, returned and the order closed, so
+        # consumption is recomputed to what was delivered (contract.recompute_consumption): 800 + 0 + 100 of 1,000.
+        assert line.target_qty == Decimal(1000) and line.released_qty == Decimal(900)
 
 
 def test_value_contract_renewal_approved_extends_to_next_year(pack):
@@ -461,8 +463,8 @@ def test_cancelling_a_contract_call_off_gives_back_consumption(pack):
                 line.invoiced_minor = 0
                 _principal_for(s, "buyer@axion.example")
                 order.cancel(s, po_c, "Test: call-off withdrawn")
-                assert contract_line.released_qty == before - line.qty
-                # A release event relayed after the cancellation consumes nothing.
+                # Consumption is recomputed from the live PO lines by the consumer (contract.recompute_consumption):
+                # a release event relayed after the cancellation consumes nothing.
                 event = type("E", (), {"object_id": po_c.id})()
                 contract_svc._consume(s, event)
                 assert contract_line.released_qty == before - line.qty

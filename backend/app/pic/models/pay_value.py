@@ -18,6 +18,8 @@ class Invoice(TenantScoped, Base):
     __table_args__ = (
         # §5.2: hard duplicate key per supplier invoice number and fiscal year.
         UniqueConstraint("tenant_id", "company_code", "supplier_id", "supplier_invoice_no", "fiscal_year"),
+        # Internal document number (payables._internal_number) is the key every screen, payment run and lookup uses.
+        UniqueConstraint("tenant_id", "number", name="uq_invoice_tenant_number"),
     )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     supplier_invoice_no: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -81,7 +83,8 @@ class InvoiceException(TenantScoped, Base):
 
 class CreditNote(TenantScoped, Base):
     __tablename__ = "credit_note"
-    __table_args__ = (UniqueConstraint("tenant_id", "supplier_id", "supplier_credit_note_no"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "supplier_id", "supplier_credit_note_no"),
+                      UniqueConstraint("tenant_id", "supplier_id", "number", name="uq_credit_note_supplier_number"))
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     supplier_credit_note_no: Mapped[str] = mapped_column(String(40), nullable=False)
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)

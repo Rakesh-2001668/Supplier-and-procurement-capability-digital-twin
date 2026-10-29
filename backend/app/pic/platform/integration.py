@@ -12,6 +12,7 @@ table. Replace ``post``/``lookup`` with OData calls for a real system.
 """
 import hashlib
 import json
+import logging
 import uuid
 from datetime import timedelta
 from typing import Callable, Optional
@@ -24,6 +25,8 @@ from app.pic.models import ErpDocument, IntegrationMessage
 from app.pic.platform import audit, clock
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import jsonable
+
+log = logging.getLogger("pic.integration")
 
 MAX_ATTEMPTS = 8
 _on_posted: dict[str, Callable[[Session, IntegrationMessage], None]] = {}
@@ -191,9 +194,36 @@ def run_pending(tenant_id: uuid.UUID, principal) -> int:
             .order_by(IntegrationMessage.created_at).with_for_update(skip_locked=True)
         ).scalars().all()
         for message in messages:
-            process(session, message)
+            process_isolated(session, message)
             processed += 1
     return processed
+
+
+def process_isolated(session: Session, message: IntegrationMessage) -> IntegrationMessage:
+    """``process`` in a savepoint. Any other error (a connector bug, unreadable answer, an on_posted handler raising) rolls
+    back only this message's work and counts as a failed attempt, recorded outside the savepoint: RETRY with back-off,
+    DEAD_LETTER after MAX_ATTEMPTS. The other messages of the run are unaffected and the queue is never poisoned."""
+    attempts = message.attempts or 0
+    try:
+        with session.begin_nested():
+            return process(session, message)
+    except Exception as exc:  # noqa: BLE001 - isolation boundary
+        log.exception("integration message %s (%s %s) failed", message.id, message.target_system, message.message_type)
+        _attempt_failed(session, message, attempts + 1, f"{type(exc).__name__}: {getattr(exc, 'detail', None) or exc}"[:2000])
+        return message
+
+
+def _attempt_failed(session: Session, message: IntegrationMessage, attempts: int, error: str) -> None:
+    message.attempts = attempts
+    message.last_error = error
+    if attempts >= MAX_ATTEMPTS:
+        message.status = "DEAD_LETTER"
+        audit.record(session, message.object_type, message.object_id, "INTEGRATION_DEAD_LETTER",
+                     object_ref=message.object_ref, after={"attempts": attempts}, reason=error)
+    else:
+        message.status = "RETRY"
+        message.next_attempt_at = clock.now() + timedelta(minutes=2 ** attempts)
+    session.flush()
 
 
 def replay(session: Session, message_id: uuid.UUID) -> IntegrationMessage:
@@ -206,4 +236,4 @@ def replay(session: Session, message_id: uuid.UUID) -> IntegrationMessage:
     message.attempts = 0
     message.next_attempt_at = clock.now()
     audit.record(session, message.object_type, message.object_id, "INTEGRATION_REPLAY", object_ref=message.object_ref)
-    return process(session, message)
+    return process_isolated(session, message)

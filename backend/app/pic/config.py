@@ -87,9 +87,15 @@ class Settings(BaseSettings):
     worker_heartbeat_file: str = Field(default="/tmp/pic-worker.heartbeat", alias="PIC_WORKER_HEARTBEAT_FILE")
     worker_interval_seconds: float = Field(default=2.0, alias="PIC_WORKER_INTERVAL_SECONDS")
     worker_stale_seconds: int = Field(default=60, alias="PIC_WORKER_STALE_SECONDS")
+    # Serverless hosting (Vercel) has no long-running worker process. A scheduler calls GET /internal/worker/tick with
+    # "Authorization: Bearer <CRON_SECRET>" (Vercel Cron sends exactly that), and with PIC_INLINE_WORKER every successful
+    # write under /v1 drains the outbox, connectors and due timers after its response. Unset CRON_SECRET: the endpoint is off.
+    cron_secret: Optional[str] = Field(default=None, alias="CRON_SECRET")
+    inline_worker: bool = Field(default=False, alias="PIC_INLINE_WORKER")
+    worker_tick_budget_seconds: float = Field(default=50.0, alias="PIC_WORKER_TICK_BUDGET_SECONDS")
 
     @field_validator("enable_legacy_demo", "api_docs", "rate_limit_per_ip", "rate_limit_per_user", "metrics_token", "log_format",
-                     mode="before")
+                     "cron_secret", mode="before")
     @classmethod
     def _blank_is_unset(cls, value):
         # docker compose / env files often pass VAR= ; treat an empty value as "not set" so the defaults apply.
@@ -157,6 +163,8 @@ class Settings(BaseSettings):
                 problems.append("PIC_CORS_ORIGINS must not contain localhost origins")
         if self.metrics_token and len(self.metrics_token) < 24:
             problems.append("PIC_METRICS_TOKEN must be at least 24 characters when set")
+        if self.cron_secret and len(self.cron_secret) < 24:
+            problems.append("CRON_SECRET must be at least 24 characters when set")
         if self.hsts.lower() not in ("auto", "always", "off"):
             problems.append("PIC_HSTS must be auto, always or off")
         return problems

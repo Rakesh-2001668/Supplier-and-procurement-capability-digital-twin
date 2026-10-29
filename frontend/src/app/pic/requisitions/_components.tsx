@@ -40,11 +40,16 @@ export type Allocation = { qty: string; share: string | number | null; supplier:
 
 export type PrLine = {
   id: string; line_no: number; item_type: string; purchase_type: string; material_id: string | null; catalogue_item_id: string | null;
-  description: string; material_group: string | null; category: string | null; qty: string; uom: string; price_est_minor: number;
+  contract_line_id: string | null; description: string; material_group: string | null; category: string | null; qty: string; uom: string; price_est_minor: number;
   account_assignment_type: string | null; account_assignment_code: string | null; need_date: string; plant: string;
   quotes_attached: number; reusable: boolean; mdm_request_id: string | null; ordered_qty: string; sourcing_status: string | null;
-  source_determination: { method?: string; allocations?: Allocation[] } | null; planned_order_id: string | null;
+  source_determination: { method?: string; allocations?: Allocation[]; quotes?: { supplier: string; reference: string; date: string }[] } | null;
+  planned_order_id: string | null;
 };
+
+/** Free-text and free-service lines (no material, catalogue item or contract line): the quote policy applies. */
+export const isUnstructured = (l: Pick<PrLine, 'material_id' | 'catalogue_item_id' | 'contract_line_id'>) =>
+  !l.material_id && !l.catalogue_item_id && !l.contract_line_id;
 
 export type Requisition = {
   id: string; number: string; origin: string; origin_ref: string | null; purpose_code: string | null; purpose_text: string | null;
@@ -131,7 +136,8 @@ export function SubmitPanel({ pr, onDone }: { pr: Pick<Requisition, 'number' | '
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-600">
-        Submitting runs the policy checks (purpose code, account assignment, quote policy for free text), checks budget for {inr(pr.total_minor)} and
+        Submitting runs the policy checks (purpose code, account assignment, stock needs a material, quote policy for free-text and service lines
+        without a material, catalogue item or contract), checks budget for {inr(pr.total_minor)} and
         routes the requisition for approval.
       </p>
       <Field label={`Budget justification${needsJustification ? ' *' : ' (optional)'}`}

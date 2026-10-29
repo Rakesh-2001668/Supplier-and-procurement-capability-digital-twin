@@ -19,7 +19,9 @@ export function hasRole(user: SessionUser | null | undefined, ...roles: string[]
   return !!user && roles.some((r) => user.roles.includes(r));
 }
 
-export const today = () => new Date().toISOString().slice(0, 10);
+/** Today's business date in India (IST), YYYY-MM-DD; toISOString() would give the UTC date before 05:30 IST. */
+export const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' })
+  .format(new Date());
 
 export function isNumber(v: string) {
   return v.trim() !== '' && !Number.isNaN(Number(v));

@@ -92,7 +92,8 @@ export default function NewSourcingEvent() {
   const problems: string[] = [];
   if (!title.trim()) problems.push('Give the event a title.');
   if (!category.trim()) problems.push('Choose the category being sourced.');
-  if (!lines.length) problems.push('Add at least one requirement line from an approved requisition.');
+  if (!lines.length) problems.push('Add the requirement line from an approved requisition.');
+  if (lines.length > 1) problems.push('One requirement line per event: TCO evaluation, award scenarios and the award contract work per item (SRC-ONE-LINE). Run one event per item.');
   lines.forEach((l) => {
     if (!(num(l.annual_qty) > 0) || !(num(l.monthly_qty) > 0)) problems.push(`${l.requisition}/${l.line}: annual and monthly quantity must be positive.`);
   });
@@ -181,7 +182,7 @@ export default function NewSourcingEvent() {
         </div>
       </Card>
 
-      <Card title="2 · Requirement lines (approved requisitions only)">
+      <Card title="2 · Requirement line (approved requisitions only, one item per event)">
         <RequirementPicker lines={lines} onAdd={(l) => setLines((prev) => [...prev, l])} />
         {lines.length > 0 && (
           <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
@@ -350,7 +351,7 @@ function RequirementPicker({ lines, onAdd }: { lines: LineSel[]; onAdd: (l: Line
                   <span className="text-slate-600">· {qty(l.qty, l.uom)} · {l.plant}{l.category ? ` · ${l.category}` : ''}</span>
                   {inSourcing && <span className="ml-2 text-xs text-amber-700">sourcing status: {label(l.sourcing_status)}</span>}
                 </div>
-                <Button disabled={added} onClick={() => {
+                <Button disabled={added || (lines.length > 0)} title={!added && lines.length > 0 ? 'One requirement line per event – remove the current line first' : undefined} onClick={() => {
                   const annual = Number(l.qty);
                   onAdd({ key: `${selected}-${l.line_no}`, requisition: selected, line: l.line_no, description: l.description, uom: l.uom,
                     annual_qty: String(annual), monthly_qty: String(Math.max(1, Math.round(annual / 12))) });

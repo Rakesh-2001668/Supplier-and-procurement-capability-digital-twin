@@ -49,6 +49,7 @@ def test_legacy_routers_and_docs_off_in_production():
     ({"PIC_CORS_ORIGINS": "*"}, "'*'"),
     ({"PIC_CORS_ORIGINS": "https://pic.example.com,http://localhost:3000"}, "localhost"),
     ({"PIC_METRICS_TOKEN": "short"}, "PIC_METRICS_TOKEN"),
+    ({"CRON_SECRET": "short"}, "CRON_SECRET"),
 ])
 def test_production_refuses_unsafe_configuration(override, fragment):
     settings = production(**override)
@@ -361,3 +362,81 @@ def test_simulation_po_touchless_and_compare(client, login):
     assert client.post("/v1/admin/rules/simulate", json={"key": "DMN-01", "inputs": {}}, headers=login("admin")).status_code == 422
     assert client.post("/v1/admin/rules/simulate", json={"key": "DMN-01", "inputs": {"valueMinor": 1}},
                        headers=login("buyer")).status_code == 403
+
+
+# ---------------------------------------------------------------- serverless worker (Vercel Cron + inline drain)
+@pytest.fixture
+def fake_tick(monkeypatch):
+    """Replace the real tick: running it here would fire every due timer of the shared signature case."""
+    from app.pic import worker
+    calls = []
+    queue = [{"events": 2, "integration": 1, "timers": 0}, {"events": 1, "integration": 0, "timers": 0}]
+
+    def tick():
+        calls.append(1)
+        return queue.pop(0) if queue else {"events": 0, "integration": 0, "timers": 0}
+    monkeypatch.setattr(worker, "tick", tick)
+    return calls
+
+
+def test_worker_tick_endpoint_needs_the_cron_secret(client, limits, fake_tick):
+    limits(cron_secret=None)
+    assert client.get("/internal/worker/tick").status_code == 404
+    secret = secrets.token_urlsafe(32)
+    limits(cron_secret=secret)
+    assert client.get("/internal/worker/tick", headers={"Authorization": "Bearer not-the-secret"}).status_code == 404
+    assert not fake_tick
+    ok = client.get("/internal/worker/tick", headers={"Authorization": f"Bearer {secret}"})
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["rounds"] == 3 and body["events"] == 3 and body["integration"] == 1, "ticks until a tick finds no work"
+    assert "/internal/worker/tick" not in client.get("/openapi.json").text
+
+
+def test_drain_respects_the_time_budget_and_runs_once_per_process(fake_tick):
+    from app.pic import worker
+    assert worker.drain(budget_seconds=0)["rounds"] == 0
+    assert worker._drain_lock.acquire(blocking=False)
+    try:
+        assert "skipped" in worker.drain()
+    finally:
+        worker._drain_lock.release()
+    assert not fake_tick
+
+
+def test_inline_worker_drains_after_successful_writes_only(client, login, limits, fake_tick):
+    limits(inline_worker=False)
+    _simulate(client, login, key="DMN-01", inputs={"valueMinor": 1, "channel": "OTHER"})
+    assert not fake_tick, "off unless PIC_INLINE_WORKER"
+    limits(inline_worker=True)
+    client.get("/v1/me", headers=login("admin"))
+    assert not fake_tick, "reads do not drain"
+    bad = client.post("/v1/admin/rules/simulate", json={"key": "NOT-A-RULE"}, headers=login("admin"))
+    assert bad.status_code == 422 and not fake_tick, "failed writes do not drain"
+    _simulate(client, login, key="DMN-01", inputs={"valueMinor": 1, "channel": "OTHER"})
+    assert len(fake_tick) == 3, "the drain ran after the response"
+
+
+# ---------------------------------------------------------------- token revocation
+def test_deactivation_and_role_changes_revoke_existing_tokens(client, login):
+    """A signed-in user who is deactivated, or whose roles change, is refused on the next request (not after 8 hours)."""
+    from app.pic.db import tenant_tx
+    from app.pic.models import AppUser
+    from tests.pic.conftest import PASSWORD
+    tenant_id = _tenant_id(client, login)
+    email = f"revoke.{uuid.uuid4().hex[:6]}@axion.example"
+    user_id = _new_user(tenant_id, ["REQUESTER"], email)
+    headers = login(email)
+    assert client.get("/v1/tasks", headers=headers).status_code == 200
+
+    with tenant_tx(tenant_id) as s:
+        s.get(AppUser, user_id).roles = ["REQUESTER", "BUYER"]
+    outdated = client.get("/v1/tasks", headers=headers)
+    assert outdated.status_code == 401 and outdated.json()["code"] == "SESSION_OUTDATED"
+
+    fresh = {"Authorization": "Bearer " + client.post("/v1/auth/token", json={"tenant": "AXN", "email": email, "password": PASSWORD}).json()["access_token"]}
+    assert client.get("/v1/tasks", headers=fresh).status_code == 200
+    with tenant_tx(tenant_id) as s:
+        s.get(AppUser, user_id).active = False
+    disabled = client.get("/v1/tasks", headers=fresh)
+    assert disabled.status_code == 401 and disabled.json()["code"] == "ACCOUNT_DISABLED"

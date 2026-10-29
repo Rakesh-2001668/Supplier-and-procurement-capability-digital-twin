@@ -76,7 +76,11 @@ RULE_SETS = {
                  "valueAboveBandPts": 15, "splitPts": 25, "acctChangedPts": 12, "valueBandMinor": 25 * L, "splitWindowDays": 7,
                  "splitBandMinor": 2 * L}, "Additive explainable PO risk score"),
     "PO-APPROVAL": ({"bands": [{"upTo": 5 * L, "chain": ["BUYER"]}, {"upTo": None, "chain": ["BUYER", "PROCUREMENT_HEAD"]}],
-                     "deviationChain": ["BUYER"], "confirmationSlaHours": 24}, "PO approval strategy (buyer lead = second buyer)"),
+                     "deviationChain": ["BUYER"], "confirmationSlaHours": 24,
+                     # BP §14.1 approval by value and deviation: a change order that deviates from the contract price, or
+                     # raises the PO into a higher band, is approved before the new version is sent.
+                     "changeApproval": {"onPriceDeviation": True, "onBandIncrease": True}},
+                    "PO approval strategy (buyer lead = second buyer)"),
     "DMN-03": ({"pricePct": 1, "priceAbsMinor": 500 * 100, "qtyPct": 0, "sesPct": 0, "dupAmountMinor": 100, "dupDays": 3},
                "Invoice tolerances"),
     "RCV-TOLERANCE": ({"over_pct": "0", "under_pct": "0", "price_pct": "0"}, "Default receipt tolerance without contract"),
@@ -134,12 +138,20 @@ RULE_SETS = {
     "PUNCHOUT": ({"sessionMinutes": 30, "protocols": ["CXML", "OCI"]}, "Punch-out session rules (M04)"),
     "NOTIFICATIONS": ({"email": False, "kinds": ["TASK_ASSIGNED", "TASK_ESCALATED", "RECOMMENDATION", "PO_TRANSMITTED", "INVOICE_EXCEPTION",
                                                  "CHANGE_REQUEST", "CLARIFICATION_ANSWERED", "CONTRACT_EXPIRING",
-                                                 "CONTRACT_AMENDED", "CONTRACT_TERMINATED"]},
+                                                 "CONTRACT_AMENDED", "CONTRACT_TERMINATED", "SOURCING_CANCELLED", "PO_CANCELLED",
+                                                 "SOURCING_AWARDED", "SOURCING_NOT_AWARDED", "CONTRACT_CONSUMPTION"]},
                       "In-app notifications; e-mail delivery switches on when SMTP is configured"),
     "ERP-TARGET": ({"system": "SAP_S4"}, "ERP every posting goes to (connector registry); add a company-code-scoped version to route one company elsewhere"),
     "MFA": ({"enforce": False, "requiredRoles": ["TENANT_ADMIN", "FINANCE_CONTROLLER", "CPO", "PROCUREMENT_HEAD", "COST_OBJECT_OWNER", "DEPT_HEAD",
                                                  "CAPEX_COMMITTEE", "AP_CLERK"], "issuer": "AlphaHelion PIC"},
             "MFA (TOTP) for approvers, finance and admins (§14); set enforce=true per tenant once users have enrolled"),
+    "ESCALATION": ({"managerAtLevel": 2, "managers": {
+        "COST_OBJECT_OWNER": "DEPT_HEAD", "DEPT_HEAD": "PROCUREMENT_HEAD", "PROCUREMENT_HEAD": "CPO", "FINANCE_CONTROLLER": "CPO",
+        "BUYER": "PROCUREMENT_HEAD", "CATEGORY_MANAGER": "CPO", "SUPPLIER_MANAGER": "PROCUREMENT_HEAD", "CONTRACT_MANAGER": "PROCUREMENT_HEAD",
+        "SERVICE_OWNER": "DEPT_HEAD", "AP_CLERK": "FINANCE_CONTROLLER", "RECEIVER": "DEPT_HEAD", "QUALITY_INSPECTOR": "DEPT_HEAD"},
+        "keepScopeFor": ["DEPT_HEAD"]},
+        "Approval SLA escalation (TD §8): level 1 reminds the approvers; from managerAtLevel each further breach adds the manager role "
+        "as a candidate (four-eyes exclusions kept)"),
 }
 
 SOD_RULES = [

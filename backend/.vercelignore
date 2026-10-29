@@ -1,0 +1,15 @@
+# Uploaded by `vercel deploy` from this folder; Git deployments only see committed files anyway.
+.env
+.env.*
+!.env.example
+venv/
+.pytest_cache/
+__pycache__/
+*.db
+tests/
+data/legacy/
+data/eval/
+evals/
+verify_*.py
+test_*.py
+check_*.py

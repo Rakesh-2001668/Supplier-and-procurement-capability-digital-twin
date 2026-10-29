@@ -17,7 +17,7 @@ type InvLine = { id: string; line_no: number; description: string; qty: string; 
 type InvException = { id: string; invoice_line_id: string | null; type: string; delta: Record<string, string | number>; detail: string;
   suggested_action: string; status: string; resolution: string | null; resolution_note: string | null; ai_ref: string | null; created_at: string };
 type CreditNote = { id: string; number: string; supplier_credit_note_no: string; note_date: string; reason: string; net_minor: number; tax_minor: number;
-  gross_minor: number; lines: { invoice_line: number; qty: string }[] };
+  gross_minor: number; lines: { invoice_line: number; qty: string; unitCreditMinor?: number }[] };
 type Payment = { id: string; number: string; amount_minor: number; value_date: string; status: string; run_ref: string | null };
 type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal_year: string; company_code: string; invoice_date: string; channel: string;
   irn: string | null; irn_valid: boolean | null; net_minor: number; tax_minor: number; gross_minor: number; status: string; match_type: string | null;
@@ -35,6 +35,17 @@ const RESOLUTIONS = [
   { value: 'DISPUTE', label: 'Dispute with supplier' },
 ];
 const DEFAULT_RESOLUTION: Record<string, string> = { QUANTITY: 'CREDIT_NOTE_RECEIVED', PRICE: 'PRICE_ACCEPTED', MISSING_GR: 'GR_POSTED', DUPLICATE: 'NOT_DUPLICATE' };
+// Which resolution closes which exception type (DMN-03, mirrors payables.RESOLUTIONS).
+const ALLOWED: Record<string, string[]> = {
+  DUPLICATE: ['NOT_DUPLICATE', 'DISPUTE'],
+  PRICE: ['CREDIT_NOTE_RECEIVED', 'PRICE_ACCEPTED', 'DISPUTE'],
+};
+const DEFAULT_ALLOWED = ['CREDIT_NOTE_RECEIVED', 'GR_POSTED', 'DISPUTE'];
+const PENDING_RESOLUTIONS = ['DISPUTE', 'PRICE_APPROVAL_PENDING', 'PRICE_REJECTED'];
+
+function creditLine(l: { invoice_line: number; qty: string; unitCreditMinor?: number }) {
+  return l.unitCreditMinor ? `line ${l.invoice_line}: ${qty(l.qty)} × ${inr(l.unitCreditMinor)} price credit` : `line ${l.invoice_line}: ${qty(l.qty)}`;
+}
 
 function irnText(inv: Invoice) {
   if (!inv.irn) return inv.channel === 'E_INVOICE' ? 'missing' : 'not applicable';
@@ -52,6 +63,7 @@ export default function InvoicePage() {
   const user = useSessionUser();
   const { data: inv, isLoading, error } = useApi<Invoice>(`/invoices/${ref}`);
   const [resolving, setResolving] = useState<InvException | null>(null);
+  const [rejecting, setRejecting] = useState(false);
   const [posted, setPosted] = useState<(PostResult & { key: string }) | null>(null);
 
   const ap = hasRole(user, 'AP_CLERK');
@@ -69,6 +81,7 @@ export default function InvoicePage() {
 
   const lineNo = (lineId: string | null) => inv?.lines.find((l) => l.id === lineId)?.line_no;
   const openExceptions = inv?.exceptions.filter((e) => e.status === 'OPEN') ?? [];
+  const duplicateHold = openExceptions.some((e) => e.type === 'DUPLICATE');
 
   return (
     <>
@@ -78,8 +91,11 @@ export default function InvoicePage() {
         status={inv?.status}
         actions={inv && (
           <>
-            {ap && ['EXCEPTION', 'DUPLICATE_CHECK'].includes(inv.status) && (
+            {ap && inv.status === 'EXCEPTION' && !duplicateHold && (
               <Button busy={rematch.isPending} onClick={() => rematch.mutate()}>Re-run match</Button>
+            )}
+            {ap && ['CAPTURED', 'EXCEPTION'].includes(inv.status) && (
+              <Button variant="danger" onClick={() => setRejecting(true)}>Reject invoice</Button>
             )}
             {approver && inv.status === 'MATCHED' && <Button variant="primary" busy={approve.isPending} onClick={() => approve.mutate()}>Approve</Button>}
             {ap && inv.status === 'APPROVED' && <Button variant="primary" busy={post.isPending} disabled={!postingKey} onClick={() => post.mutate()}>Post to ERP</Button>}
@@ -121,6 +137,12 @@ export default function InvoicePage() {
             ]} />
             {inv.irn && <p className="break-all font-mono text-[11px] text-slate-500">IRN {inv.irn}</p>}
             {inv.duplicate_of && <p className="text-sm text-amber-800">Suspected duplicate of {inv.duplicate_of}</p>}
+            {duplicateHold && (
+              <p className="text-sm text-amber-800">Held as a possible duplicate: resolve the hold as &ldquo;not a duplicate&rdquo; or reject the invoice. Re-running the match does not release it.</p>
+            )}
+            {inv.payment_status === 'IN_PAYMENT' && (
+              <p className="text-sm text-amber-800">Paid in a payment run and waiting for the ERP to post the payment (clearing). The invoice is marked paid and reconciled once it does.</p>
+            )}
             {inv.status === 'APPROVED' && ap && (
               <p className="text-xs text-slate-500">Posting key: <span className="font-mono">{postingKey}</span> — tenant | company code | supplier | invoice number.</p>
             )}
@@ -162,7 +184,12 @@ export default function InvoicePage() {
                     <p className="mt-2 text-sm">{e.detail}</p>
                     <p className="mt-1 text-sm text-slate-700"><span className="text-xs font-semibold uppercase text-slate-500">Delta</span> {deltaText(e.delta)}</p>
                     <p className="mt-1 text-sm text-slate-700"><span className="text-xs font-semibold uppercase text-slate-500">Suggested</span> {e.suggested_action}</p>
-                    {e.resolution && <p className="mt-1 text-sm text-emerald-800">Resolved: {label(e.resolution)}{e.resolution_note ? ` — ${e.resolution_note}` : ''}</p>}
+                    {e.resolution && (
+                      <p className={`mt-1 text-sm ${e.status === 'OPEN' && PENDING_RESOLUTIONS.includes(e.resolution) ? 'text-amber-800' : 'text-emerald-800'}`}>
+                        {e.status === 'OPEN' ? 'Pending' : 'Resolved'}: {e.resolution === 'PRICE_APPROVAL_PENDING' ? 'price acceptance waiting for a buyer' : label(e.resolution)}
+                        {e.resolution_note ? ` — ${e.resolution_note}` : ''}
+                      </p>
+                    )}
                     <p className="mt-1 font-mono text-[11px] text-slate-400">{[e.ai_ref, dateTime(e.created_at)].filter(Boolean).join(' · ')}</p>
                   </div>
                 ))}
@@ -174,7 +201,7 @@ export default function InvoicePage() {
               { key: 'number', header: 'Credit note' },
               { key: 'note_date', header: 'Date', render: (n) => date(n.note_date) },
               { key: 'reason', header: 'Reason' },
-              { key: 'lines', header: 'Lines', render: (n) => n.lines.map((l) => `line ${l.invoice_line}: ${qty(l.qty)}`).join(', ') },
+              { key: 'lines', header: 'Lines', render: (n) => n.lines.map(creditLine).join(', ') },
               { key: 'net_minor', header: 'Net', align: 'right', render: (n) => inr(n.net_minor) },
               { key: 'tax_minor', header: 'Tax', align: 'right', render: (n) => inr(n.tax_minor) },
               { key: 'gross_minor', header: 'Gross', align: 'right', render: (n) => inr(n.gross_minor) },
@@ -192,19 +219,24 @@ export default function InvoicePage() {
         ] : []}
       />
       {inv && resolving && <ResolveDialog inv={inv} exc={resolving} onClose={() => setResolving(null)} />}
+      {inv && rejecting && <RejectDialog inv={inv} onClose={() => setRejecting(false)} />}
     </>
   );
 }
 
 function ResolveDialog({ inv, exc, onClose }: { inv: Invoice; exc: InvException; onClose: () => void }) {
-  const [resolution, setResolution] = useState(DEFAULT_RESOLUTION[exc.type] ?? 'DISPUTE');
+  const allowed = ALLOWED[exc.type] ?? DEFAULT_ALLOWED;
+  const options = RESOLUTIONS.filter((r) => allowed.includes(r.value));
+  const [resolution, setResolution] = useState(allowed.includes(DEFAULT_RESOLUTION[exc.type]) ? DEFAULT_RESOLUTION[exc.type] : allowed[0]);
   const [note, setNote] = useState('');
   const [creditNote, setCreditNote] = useState(inv.creditNotes[0]?.number ?? '');
   const needsNote = resolution === 'CREDIT_NOTE_RECEIVED';
-  const resolve = useCommand(() => api.post<{ status: string; dispute?: boolean }>(`/invoices/${inv.id}/exceptions/${exc.id}/resolve`, {
+  const resolve = useCommand(() => api.post<{ status: string; dispute?: boolean; priceApproval?: string[] }>(`/invoices/${inv.id}/exceptions/${exc.id}/resolve`, {
     resolution, note: note.trim(), credit_note: needsNote ? creditNote : undefined,
   }), {
-    success: (r) => r.dispute ? 'Dispute recorded; the payment block stays' : `Exception resolved · invoice ${r.status.toLowerCase()}`,
+    success: (r) => r.dispute ? 'Dispute recorded; the payment block stays'
+      : r.priceApproval ? 'Sent to a buyer for price-variance approval; the exception stays open until approved'
+        : `Exception resolved · invoice ${r.status.toLowerCase()}`,
     onSuccess: onClose,
   });
   return (
@@ -215,14 +247,14 @@ function ResolveDialog({ inv, exc, onClose }: { inv: Invoice; exc: InvException;
       </Card>
       <div className="grid gap-3 md:grid-cols-2">
         <Field label="Resolution">
-          {(id) => <Select id={id} value={resolution} onChange={(e) => setResolution(e.target.value)} options={RESOLUTIONS} />}
+          {(id) => <Select id={id} value={resolution} onChange={(e) => setResolution(e.target.value)} options={options} />}
         </Field>
         {needsNote && (
           <Field label="Credit note" hint={inv.creditNotes.length ? undefined : 'No credit note has been received for this invoice yet'}>
             {(id) => (
               <Select id={id} value={creditNote} onChange={(e) => setCreditNote(e.target.value)}
                 options={inv.creditNotes.length
-                  ? inv.creditNotes.map((n) => ({ value: n.number, label: `${n.number} · ${inr(n.gross_minor)} · ${n.lines.map((l) => `${qty(l.qty)} on line ${l.invoice_line}`).join(', ')}` }))
+                  ? inv.creditNotes.map((n) => ({ value: n.number, label: `${n.number} · ${inr(n.gross_minor)} · ${n.lines.map(creditLine).join(', ')}` }))
                   : [{ value: '', label: 'None received' }]} />
             )}
           </Field>
@@ -233,10 +265,37 @@ function ResolveDialog({ inv, exc, onClose }: { inv: Invoice; exc: InvException;
           </Field>
         </div>
       </div>
-      <p className="mt-3 text-xs text-slate-500">When the last open exception is resolved the invoice is matched again automatically. A dispute keeps the payment block.</p>
+      <p className="mt-3 text-xs text-slate-500">
+        When the last open exception is resolved the invoice is matched again automatically. A dispute keeps the payment block.
+        {resolution === 'PRICE_ACCEPTED' && ' Accepting a price variance opens a buyer approval (not the PO creator); the PO price changes only when the buyer approves.'}
+      </p>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!note.trim() || (needsNote && !creditNote)} busy={resolve.isPending} onClick={() => resolve.mutate()}>Resolve</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function RejectDialog({ inv, onClose }: { inv: Invoice; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const reject = useCommand(() => api.post(`/invoices/${inv.id}/reject`, { reason: reason.trim() }), {
+    success: `Invoice ${inv.number} rejected; nothing is posted or paid`, onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`Reject ${inv.number}`} onClose={onClose}>
+      <p className="text-sm text-slate-700">
+        Rejecting closes the open exceptions and ends the invoice process. Use it for a confirmed duplicate or an invoice the supplier will
+        cancel and re-issue.
+      </p>
+      <div className="mt-3">
+        <Field label="Reason (required)">
+          {(id) => <Textarea id={id} required value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. duplicate of KD/2702-118, confirmed with the supplier" />}
+        </Field>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="danger" disabled={reason.trim().length < 3} busy={reject.isPending} onClick={() => reject.mutate()}>Reject invoice</Button>
       </div>
     </Dialog>
   );

@@ -86,7 +86,7 @@ class BidLineIn(BaseModel):
 
 
 class BidIn(BaseModel):
-    lines: list[BidLineIn]
+    lines: list[BidLineIn] = Field(min_length=1)  # exactly one line per event line (checked in sourcing.submit_bid)
 
 
 @router.post("/sourcing/events/{ref}/bids", status_code=201, tags=["F3 Sourcing"])
@@ -154,6 +154,23 @@ def award(ref: str, body: AwardIn, p: Principal = Depends(require("sourcing:mana
         return views.sourcing_event(s, event)
 
 
+class EventCancelIn(BaseModel):
+    reason: str = ""
+
+
+@router.post("/sourcing/events/{ref}/cancel", tags=["F3 Sourcing"])
+def cancel_event(ref: str, body: EventCancelIn, p: Principal = Depends(require("sourcing:manage")),
+                 key: Optional[str] = Depends(idempotency_key)):
+    """Cancel an event that is not awarded yet; invited suppliers are notified and see it as cancelled in the portal."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/sourcing/events/{ref}/cancel", key, body)
+        if idem.replay:
+            return idem.replay
+        event = by_ref(s, SourcingEvent, ref, lock=True)
+        sourcing.cancel(s, event, body.reason)
+        return idem.store(views.sourcing_event(s, event))
+
+
 @router.get("/sourcing/events/{ref}", tags=["F3 Sourcing"])
 def get_event(ref: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
     with uow(p) as s:
@@ -161,11 +178,14 @@ def get_event(ref: str, p: Principal = Depends(require_any(READ, "supplier:porta
         view = views.sourcing_event(s, event)
         if "SUPPLIER_USER" in p.roles:
             mine = s.get(Supplier, p.supplier_id)
-            if event.status == "DRAFT" or mine.code not in {i["code"] for i in view["invitees"]}:
+            # never published (a draft, or a draft cancelled before publishing): invisible to suppliers
+            if event.status == "DRAFT" or event.published_at is None or mine.code not in {i["code"] for i in view["invitees"]}:
                 raise not_found("Sourcing event", ref)
             # Suppliers see the requirement and their own bid status, not competitors, scores or award scenarios.
             view = {k: v for k, v in view.items() if k not in ("invitees", "scenarios", "awardDecisions", "lineage", "process", "should_cost",
                                                               "baseline_price_minor", "constraints", "tco_params")}
+            # nor the buyer's savings target or internal users
+            view = {k: v for k, v in view.items() if k not in ("savings_target_pct", "owner_id", "created_by", "updated_by")}
             view["bids"] = [b for b in view["bids"] if b["supplier"] == mine.code]
         return view
 
@@ -177,7 +197,11 @@ def get_contract(ref: str, p: Principal = Depends(require_any(READ, "supplier:po
         contract = by_ref(s, Contract, ref)
         if "SUPPLIER_USER" in p.roles and contract.supplier_id != p.supplier_id:
             raise not_found("Contract", ref)
-        return views.contract(s, contract)
+        view = views.contract(s, contract)
+        if "SUPPLIER_USER" in p.roles:
+            # The internal approval history (tasks, approvers, comments), lineage and rule versions stay internal.
+            view = {k: v for k, v in view.items() if k not in ("process", "lineage", "rule_set_version", "owner_id", "created_by", "updated_by")}
+        return view
 
 
 @router.post("/contracts/{ref}/review", tags=["F4 Contract"])
@@ -188,14 +212,28 @@ def review_contract(ref: str, p: Principal = Depends(require("contract:manage"))
 
 class RedlineIn(BaseModel):
     clause: str
-    text: str
-    position: str = Field(pattern="^(STANDARD|FALLBACK|NON_STANDARD)$")
+    text: str = Field(min_length=1)
+    # The buyer classifies its own redline; a supplier redline is always NON_STANDARD until the buyer reviews it (position ignored).
+    position: Optional[str] = Field(default=None, pattern="^(STANDARD|FALLBACK|NON_STANDARD)$")
 
 
 @router.post("/contracts/{ref}/redlines", tags=["F4 Contract"])
 def redline(ref: str, body: RedlineIn, p: Principal = Depends(require_any("supplier:portal", "contract:manage"))):
     with uow(p) as s:
         return row(contract_svc.redline(s, by_ref(s, Contract, ref, lock=True), body.clause, body.text, body.position))
+
+
+class RedlineReviewIn(BaseModel):
+    decision: str = Field(pattern="^(ACCEPT|RESTORE)$")
+    position: Optional[str] = Field(default=None, pattern="^(STANDARD|FALLBACK|NON_STANDARD)$")  # required for ACCEPT
+    comment: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/contracts/{ref}/redlines/{clause}/review", tags=["F4 Contract"])
+def review_redline(ref: str, clause: str, body: RedlineReviewIn, p: Principal = Depends(require("contract:manage"))):
+    """Contract manager decision on a supplier redline: accept the supplier text with a playbook position, or restore the text."""
+    with uow(p) as s:
+        return row(contract_svc.review_redline(s, by_ref(s, Contract, ref, lock=True), clause, body.decision, body.position, body.comment))
 
 
 @router.post("/contracts/{ref}/submit", tags=["F4 Contract"])

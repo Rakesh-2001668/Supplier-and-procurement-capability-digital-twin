@@ -42,11 +42,12 @@ def is_working_day(d: date, working_days: Iterable[int], holidays: Iterable[date
 
 def subtract_working_days(d: date, days: int, working_days=(0, 1, 2, 3, 4, 5), holidays=()) -> date:
     """Move back ``days`` working days on a factory calendar."""
+    working, off = set(working_days), set(holidays)  # is_working_day's test, with the sets built once per call
     current = d
     remaining = days
     while remaining > 0:
         current -= timedelta(days=1)
-        if is_working_day(current, working_days, holidays):
+        if current.weekday() in working and current not in off:
             remaining -= 1
     return current
 

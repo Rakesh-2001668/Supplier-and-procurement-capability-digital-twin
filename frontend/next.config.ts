@@ -39,8 +39,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  // Self-contained server bundle for the Docker image (node server.js).
-  output: 'standalone',
+  // Self-contained server bundle for the Docker image (node server.js); Vercel (VERCEL=1 at build) uses its own output.
+  output: process.env.VERCEL ? undefined : 'standalone',
   poweredByHeader: false,
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
