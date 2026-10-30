@@ -6,7 +6,6 @@ Performs stochastic multi-tier lead time, line-stop risk, and Value-at-Risk (VaR
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-import numpy as np
 import uuid
 import time
 from datetime import datetime
@@ -365,6 +364,8 @@ def run_monte_carlo_engine(
     active_shocks: List[str],
     mitigations: MitigationOptions
 ) -> Dict[str, Any]:
+    # numpy only for this legacy demo engine (not in requirements.txt): imported here so the routers mount without it.
+    import numpy as np
     t0 = time.perf_counter()
     np.random.seed(42)  # Deterministic seed for reproducible baseline comparison
 

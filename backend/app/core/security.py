@@ -1,19 +1,22 @@
 from datetime import datetime, timedelta
 from typing import Any, Union
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 import os
 
-PWD_CONTEXT = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return PWD_CONTEXT.verify(plain_password, hashed_password)
+    # bcrypt directly (already a dependency) instead of passlib, which is unmaintained and not in requirements.txt.
+    try:
+        return bcrypt.checkpw(plain_password.encode()[:72], hashed_password.encode())
+    except ValueError:
+        return False
 
 def get_password_hash(password: str) -> str:
-    return PWD_CONTEXT.hash(password)
+    return bcrypt.hashpw(password.encode()[:72], bcrypt.gensalt()).decode()
 
 def create_access_token(subject: Union[str, Any], expires_delta: timedelta = None) -> str:
     if expires_delta:
