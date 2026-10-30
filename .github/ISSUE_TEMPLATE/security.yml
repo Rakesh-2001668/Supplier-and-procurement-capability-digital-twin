@@ -1,0 +1,25 @@
+name: Security issue (non-sensitive)
+description: A security weakness that can be discussed openly. For an exploitable vulnerability use the private report link instead.
+title: "[Security] "
+labels: ["type: security", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include secrets, working exploits or real customer data.
+  - type: textarea
+    id: what
+    attributes:
+      label: What is the weakness and where
+      description: Route, screen, rule or file
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Who could do what with it
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix, if known

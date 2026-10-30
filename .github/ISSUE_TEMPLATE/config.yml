@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/Rakesh-2001668/Supplier-and-procurement-capability-digital-twin/security/advisories/new
+    about: For exploitable security problems, keep the details private.

@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in PIC behaves differently from the Blueprint, the Technical Document or the process flows
+title: "[Bug] "
+labels: ["type: bug", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste passwords, tokens, connection strings or real supplier bank or tax IDs. For a security problem use the Security issue form instead.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - F1 MRP / planning
+        - F2 Requisitions
+        - F3 Sourcing
+        - F4 Contracts
+        - F5 Purchase orders
+        - F6 Receiving / quality
+        - F7 Invoice / payment
+        - F8 Supplier onboarding
+        - F9 Material master
+        - Spend / savings
+        - AI / agents
+        - Admin / rules
+        - Supplier portal
+        - Platform (auth, workflow engine, events, ERP queue)
+        - ERP loader / migration
+        - Deployment / CI / Vercel / Neon
+        - Documentation
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Definitions are in docs/PIC_Bug_Tracker.md
+      options:
+        - "S1 Critical: wrong money or data, security hole, or the system is down"
+        - "S2 High: a workflow is blocked or a control is bypassed, no workaround"
+        - "S3 Medium: wrong behaviour with a workaround"
+        - "S4 Low: cosmetic or minor"
+    validations:
+      required: true
+  - type: dropdown
+    id: env
+    attributes:
+      label: Where did you see it
+      options:
+        - Production (Vercel + Neon)
+        - Local
+        - CI (GitHub Actions)
+        - Test suite
+    validations:
+      required: true
+  - type: input
+    id: tenant
+    attributes:
+      label: Company and user
+      placeholder: AXN / buyer@axion.example
+  - type: input
+    id: ref
+    attributes:
+      label: Document reference
+      placeholder: PO-77416, INV-TF-8812, REQ-2323
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Sign in as ...\n2. Open ...\n3. Click ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: Cite the flow step or spec section if you know it, for example F7-04 or BP M10
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the traceId from the error message if there is one
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshots, logs, test output

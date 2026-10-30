@@ -1,0 +1,34 @@
+# Source of truth for issue labels; .github/workflows/labels.yml syncs it to GitHub.
+- {name: "type: bug", color: d73a4a, description: Something is wrong}
+- {name: "type: feature", color: a2eeef, description: New or missing capability}
+- {name: "type: security", color: b60205, description: Security weakness}
+- {name: "type: debt", color: cfd3d7, description: Cleanup, dependency or test gap}
+- {name: "severity: S1", color: b60205, description: "Critical: wrong money or data, security hole, down"}
+- {name: "severity: S2", color: d93f0b, description: "High: workflow blocked or control bypassed"}
+- {name: "severity: S3", color: fbca04, description: "Medium: wrong, with a workaround"}
+- {name: "severity: S4", color: 0e8a16, description: "Low: cosmetic"}
+- {name: "status: triage", color: ededed, description: New, not yet assessed}
+- {name: "status: ready", color: 0075ca, description: Understood and scheduled}
+- {name: "status: in progress", color: 5319e7, description: Being worked on}
+- {name: "status: blocked", color: 000000, description: Waiting on someone or something}
+- {name: "status: needs client", color: 7057ff, description: Needs the client system, data or decision}
+- {name: "area: F1 planning", color: c5def5}
+- {name: "area: F2 requisitions", color: c5def5}
+- {name: "area: F3 sourcing", color: c5def5}
+- {name: "area: F4 contracts", color: c5def5}
+- {name: "area: F5 orders", color: c5def5}
+- {name: "area: F6 receiving", color: c5def5}
+- {name: "area: F7 invoice-pay", color: c5def5}
+- {name: "area: F8 suppliers", color: c5def5}
+- {name: "area: F9 master data", color: c5def5}
+- {name: "area: spend-savings", color: c5def5}
+- {name: "area: AI-agents", color: c5def5}
+- {name: "area: admin-rules", color: c5def5}
+- {name: "area: portal", color: c5def5}
+- {name: "area: platform", color: c5def5}
+- {name: "area: erp-migration", color: c5def5}
+- {name: "area: deploy-ci", color: c5def5}
+- {name: "area: docs", color: c5def5}
+- {name: "industry", color: f9d0c4, description: Industry pack workflow}
+- {name: "from: code review", color: bfdadc, description: Found by the 29 Oct 2026 review}
+- {name: "from: spec matrix", color: bfdadc, description: From the requirement matrix}
