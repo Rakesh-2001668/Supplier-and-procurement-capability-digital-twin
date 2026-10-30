@@ -247,11 +247,11 @@ export default function Supplier360Page() {
 // ProcessPath and AuditTrail take the document reference in a prop named "ref"; keeping it in a leaf component stops the
 // React compiler lint from treating the whole supplier object as a ref.
 function SupplierProcess({ supplierCode }: { supplierCode: string }) {
-  return <ProcessPath type="SUPPLIER" ref={supplierCode} />;
+  return <ProcessPath type="SUPPLIER" objectRef={supplierCode} />;
 }
 
 function SupplierAudit({ supplierCode }: { supplierCode: string }) {
-  return <AuditTrail type="SUPPLIER" ref={supplierCode} />;
+  return <AuditTrail type="SUPPLIER" objectRef={supplierCode} />;
 }
 
 function Actions({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {

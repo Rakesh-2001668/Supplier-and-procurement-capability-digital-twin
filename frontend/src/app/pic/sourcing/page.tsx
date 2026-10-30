@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState, useSyncExternalStore } from 'react';
 import { Card, DataTable, LinkButton, PageHeader, Select, StatusChip } from '@/components/pic/ui';
 import { readSessionUser } from '@/lib/pic/api';
 import { dateTime, inr, label } from '@/lib/pic/format';
@@ -11,15 +11,18 @@ type SourcingEvent = { id: string; number: string; type: string; title: string; 
 
 const STATUSES = ['', 'DRAFT', 'OPEN', 'UNDER_EVALUATION', 'AWARD_PENDING', 'AWARDED', 'CANCELLED'];
 const MANAGERS = ['BUYER', 'CATEGORY_MANAGER'];
+const noSubscribe = () => () => {};
 
 export default function SourcingEvents() {
   const [status, setStatus] = useState('');
   const list = useList<SourcingEvent>(`/sourcing/events${status ? `?status=${status}` : ''}`);
-  const [canCreate, setCanCreate] = useState(false);
-  useEffect(() => {
+  // Read the session cookie on the client only (server snapshot null), so server and client render the same markup.
+  const cookie = useSyncExternalStore(noSubscribe, () => document.cookie, () => null);
+  const canCreate = useMemo(() => {
+    if (cookie === null) return false;
     const roles = readSessionUser()?.roles;
-    setCanCreate(!roles || roles.some((r) => MANAGERS.includes(r)));
-  }, []);
+    return !roles || roles.some((r) => MANAGERS.includes(r));
+  }, [cookie]);
   return (
     <div>
       <PageHeader eyebrow="SRC-01 · Strategic sourcing" title="Sourcing events"

@@ -94,9 +94,9 @@ export default function MrpRunPage() {
               ]}
             />
           ) },
-          { id: 'process', label: 'Process', content: <ProcessPath type="MRP_RUN" ref={run.number} /> },
-          { id: 'lineage', label: 'Lineage', content: <LineageView type="MRP_RUN" ref={run.number} /> },
-          { id: 'audit', label: 'Audit', content: <AuditTrail type="MRP_RUN" ref={run.number} /> },
+          { id: 'process', label: 'Process', content: <ProcessPath type="MRP_RUN" objectRef={run.number} /> },
+          { id: 'lineage', label: 'Lineage', content: <LineageView type="MRP_RUN" objectRef={run.number} /> },
+          { id: 'audit', label: 'Audit', content: <AuditTrail type="MRP_RUN" objectRef={run.number} /> },
         ]} />
       </Card>
     </div>

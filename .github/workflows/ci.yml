@@ -96,18 +96,10 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
       - name: Lint (PIC workspace)
-        # Scope: the PIC screens and components that lint clean today (28 Oct 2026), plus the proxy, config and BFF routes.
-        # Excluded until their owners fix pre-existing react-hooks errors (refs / set-state-in-effect): materials/[ref]/page.tsx,
-        # mrp/[ref]/page.tsx, sourcing/page.tsx, components/pic/object.tsx; suppliers/[code] is being reworked by its owner.
-        # Remove an ignore line as soon as that file lints clean.
+        # Scope: every PIC screen and component, plus the proxy, config and BFF routes (no exclusions since 30 Oct 2026).
         run: >-
           npx eslint
           src/app/pic src/components/pic src/lib/pic src/app/api src/proxy.ts next.config.ts
-          --ignore-pattern "src/app/pic/suppliers/[[]code]/**"
-          --ignore-pattern "src/app/pic/mrp/[[]ref]/page.tsx"
-          --ignore-pattern "src/app/pic/materials/[[]ref]/page.tsx"
-          --ignore-pattern "src/app/pic/sourcing/page.tsx"
-          --ignore-pattern "src/components/pic/object.tsx"
       - name: npm audit (production dependencies, fails on high/critical)
         run: npm audit --omit=dev --audit-level=high
       - name: npm audit (all dependencies, report only)

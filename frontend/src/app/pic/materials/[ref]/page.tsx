@@ -101,9 +101,9 @@ export default function MaterialRequestPage() {
               </dl>
             ) : <Empty title="No attributes supplied" />
           ) },
-          { id: 'process', label: 'Process', content: <ProcessPath type="MATERIAL_REQUEST" ref={mr.number} /> },
-          { id: 'lineage', label: 'Lineage', content: <LineageView type="MATERIAL_REQUEST" ref={mr.number} /> },
-          { id: 'audit', label: 'Audit', content: <AuditTrail type="MATERIAL_REQUEST" ref={mr.number} /> },
+          { id: 'process', label: 'Process', content: <ProcessPath type="MATERIAL_REQUEST" objectRef={mr.number} /> },
+          { id: 'lineage', label: 'Lineage', content: <LineageView type="MATERIAL_REQUEST" objectRef={mr.number} /> },
+          { id: 'audit', label: 'Audit', content: <AuditTrail type="MATERIAL_REQUEST" objectRef={mr.number} /> },
         ]} />
       </Card>
 

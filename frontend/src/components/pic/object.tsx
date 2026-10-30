@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useMemo, useState, useSyncExternalStore } from 'react';
 import { api, readSessionUser } from '@/lib/pic/api';
 import { dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
@@ -15,8 +15,8 @@ type Task = { id: string; name: string; kind: string; object_type: string; objec
   escalation_level: number; evidence: Record<string, unknown> };
 
 // ---------------------------------------------------------------- process path (live BPMN token position)
-export function ProcessPath({ type, ref }: { type: string; ref: string }) {
-  const { data, isLoading, error } = useApi<ProcessHistory[]>(`/documents/${type}/${encodeURIComponent(ref)}/process`);
+export function ProcessPath({ type, objectRef }: { type: string; objectRef: string }) {
+  const { data, isLoading, error } = useApi<ProcessHistory[]>(`/documents/${type}/${encodeURIComponent(objectRef)}/process`);
   if (isLoading) return <Loading />;
   if (error) return <ProblemBox error={error} />;
   if (!data?.length) return <Empty title="No workflow recorded for this document" />;
@@ -51,9 +51,9 @@ export function ProcessPath({ type, ref }: { type: string; ref: string }) {
 }
 
 // ---------------------------------------------------------------- lineage (P10)
-export function LineageView({ type, ref }: { type: string; ref: string }) {
+export function LineageView({ type, objectRef }: { type: string; objectRef: string }) {
   const { data, isLoading, error } = useApi<{ nodes: { type: string; id: string; ref: string }[]; edges: { from: string; to: string; type: string; fromLine: number | null; toLine: number | null }[] }>(
-    `/lineage/${type}/${encodeURIComponent(ref)}`);
+    `/lineage/${type}/${encodeURIComponent(objectRef)}`);
   if (isLoading) return <Loading />;
   if (error) return <ProblemBox error={error} />;
   if (!data?.edges.length) return <Empty title="No linked documents yet" />;
@@ -79,9 +79,9 @@ function DocLink({ node, line }: { node?: { type: string; id: string; ref: strin
 }
 
 // ---------------------------------------------------------------- audit trail
-export function AuditTrail({ type, ref }: { type: string; ref: string }) {
+export function AuditTrail({ type, objectRef }: { type: string; objectRef: string }) {
   const { data, isLoading, error } = useApi<{ seq: number; action: string; actor: string; reason: string | null; before: unknown; after: unknown; ruleSetVersion: string | null; aiRef: string | null; ts: string; hash: string }[]>(
-    `/audit/${type}/${encodeURIComponent(ref)}`);
+    `/audit/${type}/${encodeURIComponent(objectRef)}`);
   if (isLoading) return <Loading />;
   if (error) return <ProblemBox error={error} />;
   if (!data?.length) return <Empty title="No audit events" />;
@@ -181,9 +181,9 @@ export function ObjectPage({ type, docRef, eyebrow, title, status, facts, action
           { id: 'lines', label: 'Lines', content: lines },
           ...extraTabs,
           ...(internal ? [
-            { id: 'process', label: 'Process', content: <ProcessPath type={type} ref={docRef} /> },
-            { id: 'lineage', label: 'Lineage', content: <LineageView type={type} ref={docRef} /> },
-            { id: 'audit', label: 'Audit', content: <AuditTrail type={type} ref={docRef} /> },
+            { id: 'process', label: 'Process', content: <ProcessPath type={type} objectRef={docRef} /> },
+            { id: 'lineage', label: 'Lineage', content: <LineageView type={type} objectRef={docRef} /> },
+            { id: 'audit', label: 'Audit', content: <AuditTrail type={type} objectRef={docRef} /> },
           ] : []),
         ]} />
       </Card>
@@ -191,9 +191,9 @@ export function ObjectPage({ type, docRef, eyebrow, title, status, facts, action
   );
 }
 
-/** False for supplier-portal users. Read after mount so server and client render the same markup. */
+/** False for supplier-portal users. The cookie is read on the client only (server snapshot null), so markup matches. */
+const noSubscribe = () => () => {};
 function useInternalUser(): boolean {
-  const [internal, setInternal] = useState(true);
-  useEffect(() => setInternal(!readSessionUser()?.roles.includes('SUPPLIER_USER')), []);
-  return internal;
+  const cookie = useSyncExternalStore(noSubscribe, () => document.cookie, () => null);
+  return useMemo(() => cookie === null || !readSessionUser()?.roles.includes('SUPPLIER_USER'), [cookie]);
 }
