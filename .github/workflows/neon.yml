@@ -5,7 +5,8 @@ name: Neon database
 # pull requests → a throwaway Neon branch per PR (needs the Neon GitHub integration: secret NEON_API_KEY and
 #        variable NEON_PROJECT_ID), loaded and verified the same way, deleted when the PR closes.
 #
-# Repository secrets (Settings → Secrets and variables → Actions):
+# Secrets of the GitHub environment "neon-production" (Settings → Environments → neon-production → Environment secrets;
+# repository secrets with the same names also work):
 #   DATABASE_URL       Neon direct (non-pooler) connection string, sslmode=require
 #   PIC_JWT_SECRET     same value as backend/.env
 #   PIC_FIELD_KEY      same value as backend/.env (field encryption; never rotate without re-encrypting)
@@ -38,12 +39,13 @@ jobs:
       PIC_FIELD_KEY: ${{ secrets.PIC_FIELD_KEY }}
       PIC_SEED_PASSWORD: ${{ secrets.PIC_SEED_PASSWORD }}
     steps:
+      # Checkout first: the job's default working directory (backend) only exists after it.
+      - uses: actions/checkout@v4
       - name: Check secrets
         run: |
           missing=""
           for v in DATABASE_URL PIC_JWT_SECRET PIC_FIELD_KEY PIC_SEED_PASSWORD; do [ -z "${!v}" ] && missing="$missing $v"; done
-          if [ -n "$missing" ]; then echo "::error::Missing repository secrets:$missing"; exit 1; fi
-      - uses: actions/checkout@v4
+          if [ -n "$missing" ]; then echo "::error::Missing secrets in environment neon-production:$missing"; exit 1; fi
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
