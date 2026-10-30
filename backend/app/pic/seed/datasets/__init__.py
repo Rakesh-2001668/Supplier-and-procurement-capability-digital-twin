@@ -42,7 +42,8 @@ PACKS = (
     "industry_logistics",     # D5  tenant LOG
     "industry_healthcare",    # D6  tenant HLT
     "industry_general",       # D7  tenant GEN
-    "ai_eval",                # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
+    "erp_client_kac",         # D10 tenant KAC loaded from a mock SAP S/4HANA cutover extract (TD §12.4 ERP migration)
+    "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
 )
 

@@ -1,0 +1,193 @@
+{
+  "client": "Kaveri Auto Components Pvt Ltd",
+  "companyCodes": [
+    "1000"
+  ],
+  "currency": "INR",
+  "dateFormat": "YYYY-MM-DD",
+  "decimal": ".",
+  "delimiter": ",",
+  "encoding": "UTF-8",
+  "extractId": "KAC-S4H-20261101-INIT",
+  "extractType": "INITIAL",
+  "extractedAt": "2026-11-01T02:00:00+05:30",
+  "fictional": true,
+  "files": {
+    "A016_KONP.csv": {
+      "controlTotal": {
+        "column": "KBETR",
+        "sum": "7017140.02"
+      },
+      "rows": 780,
+      "sha256": "332940b418919fb122471fbfdb01296b0f84bf68c5e91851c596fff647aac9bf"
+    },
+    "ACDOCA_PERIOD_TOTALS.csv": {
+      "controlTotal": {
+        "column": "HSL",
+        "sum": "9740208550.22"
+      },
+      "rows": 335,
+      "sha256": "646139fd0b4a0324955a653c61dfc93904a1da9272a67e725228ec65a7f6fc4a"
+    },
+    "ADRC.csv": {
+      "rows": 247,
+      "sha256": "f17970db781169866e4f33938434c88126d78e0cbcf58102f6e29f9c23ef0daf"
+    },
+    "BSAK.csv": {
+      "controlTotal": {
+        "column": "WRBTR",
+        "sum": "10927716516.94"
+      },
+      "rows": 9662,
+      "sha256": "1a358b8953a2260e0e598d357b019c07b9869b5a339fb4b034160170401dd6f9"
+    },
+    "BSEG_KR.csv": {
+      "controlTotal": {
+        "column": "WRBTR",
+        "sum": "76903653.27"
+      },
+      "rows": 735,
+      "sha256": "455de6c7d010e41d1b494c49a19c54df2faa4bb1aea136fd697563538d39c252"
+    },
+    "BSIK.csv": {
+      "controlTotal": {
+        "column": "WRBTR",
+        "sum": "559421366.10"
+      },
+      "rows": 592,
+      "sha256": "9c85eeeb4d1433b381e678b9c76ae5c8baa2dc3d4de1c6c18eb43c9efe21c872"
+    },
+    "CSKS.csv": {
+      "rows": 16,
+      "sha256": "96af13cc135565bc5e3fbe91b178322350891fec7ffcc752a35ce45b56eaccf4"
+    },
+    "EINA_EINE.csv": {
+      "rows": 1551,
+      "sha256": "77e998e70245acbd59b224ad682f85fdc6c0a59621c265458e9183fed785b7e7"
+    },
+    "EKBE.csv": {
+      "controlTotal": {
+        "column": "DMBTR",
+        "sum": "18514316233.19"
+      },
+      "rows": 46921,
+      "sha256": "62fc88c2144a9a405cce80d0143b9954493e60d51290067432d9db03b57df7b5"
+    },
+    "EKET.csv": {
+      "rows": 323,
+      "sha256": "0e71f44f01972ef2adf30df2fc389e5b53825787a10fbd68cd39a48ddd4af09e"
+    },
+    "EKKN.csv": {
+      "rows": 6573,
+      "sha256": "a337263929674df8aa8c71551c46838c5790a828f535401bfec70cbbc49d7a9f"
+    },
+    "EKKO.csv": {
+      "rows": 8043,
+      "sha256": "96ce69aa72d294425104ddfa1a100cf01eb20970259be144d3371ed32a1f581c"
+    },
+    "EKPO.csv": {
+      "controlTotal": {
+        "column": "NETWR",
+        "sum": "6647687014.20"
+      },
+      "rows": 21730,
+      "sha256": "1e6603b984c59b95a47c95a5a2ddfd26ebc226376be534fb765a6963e1f6916e"
+    },
+    "EORD.csv": {
+      "rows": 574,
+      "sha256": "3069b6fc628e4745f44083258514127eef8e2771f59c48199d314605ea2a2035"
+    },
+    "GL_BALANCES.csv": {
+      "rows": 1,
+      "sha256": "cbab36411b05dee1cca196eab636b2689498c0d2b04d8cd3788110b08fc86c53"
+    },
+    "GL_RECON_ITEMS.csv": {
+      "rows": 2,
+      "sha256": "2ca9ab74f4a023f8369541ec2c72c66f8e9e57a38380a5333896993680b2b148"
+    },
+    "LFA1.csv": {
+      "rows": 247,
+      "sha256": "9223fc455fbed09d8ac6d4d9419f2caadf65723b47e1e21652a7094415f05395"
+    },
+    "LFB1.csv": {
+      "rows": 247,
+      "sha256": "7c521cb881b3c464770c474677fa989ac481ab59da56f1092c6308a898db9a79"
+    },
+    "LFBK.csv": {
+      "rows": 239,
+      "sha256": "6145d1691b9bb53a0271b812e0d67229508eb3330e2a575c6509f75b2a3f4bcd"
+    },
+    "MAKT.csv": {
+      "rows": 1172,
+      "sha256": "75c4b70c0856b2c52acc712fc05fb0f19e05e66830cb50943f50cfa40770cc7d"
+    },
+    "MARA.csv": {
+      "rows": 1172,
+      "sha256": "83038584d364a2d0e3b4166461b1c02224a608117b4fbf219afc0788828960ad"
+    },
+    "MARC.csv": {
+      "rows": 1800,
+      "sha256": "e60eba797f0fa707730cb317cd89c55c3d1e7693d30abada96d34aff9c2c67f4"
+    },
+    "MBEW.csv": {
+      "rows": 1593,
+      "sha256": "6053ca9c92f51ef148fbbf77825f60f2db6c84058b6c5ebc82cdc2d180c14ccb"
+    },
+    "PIC_MAP_MATKL.csv": {
+      "rows": 35,
+      "sha256": "04899257234fa13149b682cd6770d3a006511e0d85a91bd4309cf660bf269030"
+    },
+    "PIC_MAP_TAXONOMY.csv": {
+      "rows": 9,
+      "sha256": "7cf7f948a93e6e355932dfb5c90c4488ae1645d213644bdb3e656bd377ddf365"
+    },
+    "PRPS.csv": {
+      "rows": 4,
+      "sha256": "26228c87d689e281d8d699477f05cd5508d6d5a189a18e2bb2c67de1b0b1949c"
+    },
+    "RBKP.csv": {
+      "controlTotal": {
+        "column": "RMWWR",
+        "sum": "11396391572.17"
+      },
+      "rows": 9519,
+      "sha256": "bcf1b0eb6d8558d344d1045db41b35adacc3e115928112888cb603e258f42a4f"
+    },
+    "RSEG.csv": {
+      "controlTotal": {
+        "column": "WRBTR",
+        "sum": "9680820436.83"
+      },
+      "rows": 25753,
+      "sha256": "715d721c42bd1fd4191c03c9fc20ca5eccd9cf77dd9a5e2f6242e9dad9dbb38d"
+    },
+    "T001.csv": {
+      "rows": 1,
+      "sha256": "13b43d7033708245041c7de38af717a089120f1d3b3f868ee0bf3b96123df2c1"
+    },
+    "T001W.csv": {
+      "rows": 3,
+      "sha256": "85de84be08a4a85e8925f309add3395d5798265274972e7fba678e1b6b4873b6"
+    },
+    "T007S.csv": {
+      "rows": 4,
+      "sha256": "5296b2009526ab77bde26cff58f1ab1bb0daf80f122d000847212543a7a97e18"
+    },
+    "T023T.csv": {
+      "rows": 36,
+      "sha256": "b3eea9ba8a2907430ea214b43bb3cff8f559723d13a17f79aad8e88c91eca076"
+    },
+    "T052.csv": {
+      "rows": 4,
+      "sha256": "903c43384da568e22e69385f024692c6c81ebfedd7ec833dc5bfe1f07e51dcca"
+    }
+  },
+  "generator": "app.pic.tools.erp_mock seed 20261031",
+  "historyFrom": "2024-11-01",
+  "historyTo": "2026-10-31",
+  "keyDate": "2026-10-31",
+  "release": "SAP S/4HANA 2023 (mock extract)",
+  "sourceSystem": "SAP_S4",
+  "system": "S4P (mock)",
+  "tenant": "KAC"
+}

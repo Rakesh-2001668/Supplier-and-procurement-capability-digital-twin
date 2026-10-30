@@ -1,0 +1,10 @@
+CATEGORY,PARENT,LEVEL,NAME,KEYWORDS,ADDRESSABLE
+FERROUS-CASTINGS,DIR-METALS,3,Grey and SG iron castings,grey iron;sg iron;ductile iron;cast iron;foundry;fg260,X
+MRO-LUBRICANTS,IND-MRO,3,Lubricants and coolants,hydraulic oil;gear oil;grease;cutting oil;die lubricant;way lube,X
+MRO-CHEMICALS,IND-MRO,3,Chemicals and paints,degreaser;degreasing;thinner;primer;paint;binder resin,X
+TOOLING,IND-MRO,3,"Dies, moulds and cutting tools",die set;trim die;core pin;ejector pin;carbide drill;reamer;gauge fixture,X
+IND-IT,INDIRECT,2,IT and end-user computing,,X
+IT-HARDWARE,IND-IT,3,IT hardware,laptop;monitor;network switch;barcode printer;desktop,X
+SOFTWARE-LICENCES,IND-IT,3,Software licences and subscriptions,licence;license;subscription;antivirus;cad software,X
+IND-OFFICE,INDIRECT,2,Office and workplace,,X
+OFFICE-SAFETY,IND-OFFICE,3,Office and safety supplies,fire extinguisher;toner;stationery;safety goggles;ear plug,X

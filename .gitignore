@@ -12,3 +12,4 @@ backend/app.db
 .pytest_cache/
 *.log
 frontend/next-env.d.ts
+backend/data/erp_load_reports/

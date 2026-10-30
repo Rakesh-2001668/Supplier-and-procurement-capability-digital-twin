@@ -1,0 +1,36 @@
+MATKL,PIC_CATEGORY,NOTE
+RM-STEEL,RAW-MATERIALS,mapping workshop 2026-10-14
+RM-ALUIN,RAW-MATERIALS,mapping workshop 2026-10-14
+RM-POLY,RAW-MATERIALS,mapping workshop 2026-10-14
+RM-NRUB,RAW-MATERIALS,mapping workshop 2026-10-14
+BO-ALUDC,ALU-DIECAST,mapping workshop 2026-10-14
+BO-FECST,FERROUS-CASTINGS,mapping workshop 2026-10-14
+BO-FORG,FORGINGS,mapping workshop 2026-10-14
+BO-MACH,MACHINING,mapping workshop 2026-10-14
+BO-FAST,FASTENERS,mapping workshop 2026-10-14
+BO-RUBB,RUBBER-SEALS,mapping workshop 2026-10-14
+BO-SEAL,RUBBER-SEALS,mapping workshop 2026-10-14
+BO-ELEC,ELECTRONICS,mapping workshop 2026-10-14
+BO-HARN,ELECTRONICS,mapping workshop 2026-10-14
+PK-PACK,PACKAGING,mapping workshop 2026-10-14
+MR-BEAR,MRO,mapping workshop 2026-10-14
+MR-TOOL,MRO,mapping workshop 2026-10-14
+MR-ABRS,MRO,mapping workshop 2026-10-14
+MR-HYDR,MRO,mapping workshop 2026-10-14
+MR-ELEC,MRO,mapping workshop 2026-10-14
+MR-LUBE,MRO-LUBRICANTS,mapping workshop 2026-10-14
+MR-CHEM,MRO-CHEMICALS,mapping workshop 2026-10-14
+TL-DIES,TOOLING,mapping workshop 2026-10-14
+TL-CUTT,TOOLING,mapping workshop 2026-10-14
+IT-HW,IT-HARDWARE,mapping workshop 2026-10-14
+OF-SAFE,OFFICE-SAFETY,mapping workshop 2026-10-14
+SV-LOGI,LOGISTICS,mapping workshop 2026-10-14
+SV-FACL,FACILITIES,mapping workshop 2026-10-14
+SV-ITSV,IT-SERVICES,mapping workshop 2026-10-14
+SV-SOFT,SOFTWARE-LICENCES,mapping workshop 2026-10-14
+SV-PROF,PROF-SERVICES,mapping workshop 2026-10-14
+SV-TEST,PROF-SERVICES,mapping workshop 2026-10-14
+SV-REPR,TOOLING-SERVICES,mapping workshop 2026-10-14
+CP-MACH,CAPEX-MACHINERY,mapping workshop 2026-10-14
+IC-GROUP,IC-TRANSFER,mapping workshop 2026-10-14
+ZMISC,UNCLASSIFIED,classified by the PIC spend classifier

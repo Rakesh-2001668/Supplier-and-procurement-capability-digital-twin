@@ -1,0 +1,37 @@
+MATKL,SPRAS,WGBEZ
+RM-STEEL,E,Alloy steel bars and rods
+RM-ALUIN,E,Aluminium alloy ingots
+RM-POLY,E,Polymers and rubber compounds
+RM-NRUB,E,Natural rubber
+BO-ALUDC,E,Aluminium die castings
+BO-FECST,E,Grey and SG iron castings
+BO-FORG,E,Steel forgings
+BO-MACH,E,Machined components
+BO-FAST,E,Fasteners and springs
+BO-RUBB,E,Rubber moulded parts and hoses
+BO-SEAL,E,"Seals, gaskets and O-rings"
+BO-ELEC,E,Electrical and electronic parts
+BO-HARN,E,Wiring harnesses and cables
+PK-PACK,E,Packaging material
+MR-BEAR,E,Bearings and transmission parts
+MR-TOOL,E,Hand and power tools
+MR-ABRS,E,Abrasives and welding consumables
+MR-HYDR,E,"Hydraulics, pneumatics and valves"
+MR-ELEC,E,Electrical maintenance spares
+MR-LUBE,E,Lubricants and coolants
+MR-CHEM,E,Chemicals and paints
+TL-DIES,E,"Dies, moulds and fixtures"
+TL-CUTT,E,Cutting tools and holders
+IT-HW,E,IT hardware
+OF-SAFE,E,Office and safety supplies
+SV-LOGI,E,Freight and logistics services
+SV-FACL,E,Facility services
+SV-ITSV,E,IT services
+SV-SOFT,E,Software licences
+SV-PROF,E,Professional services
+SV-TEST,E,Testing and calibration
+SV-REPR,E,Machine repair and die maintenance
+CP-MACH,E,Capital machinery
+IC-GROUP,E,Intercompany supplies
+ZMISC,E,Miscellaneous (to be classified)
+ZOLD,E,Obsolete group (not mapped)

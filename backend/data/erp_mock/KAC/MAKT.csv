@@ -1,0 +1,1173 @@
+MATNR,SPRAS,MAKTX
+11000001,E,Alloy steel bar SAE4140 dia 80
+11000002,E,Alloy steel bar EN353 dia 80
+11000003,E,Alloy steel bar EN19 dia 55
+11000004,E,Alloy steel bar 20MnCr5 dia 32
+11000005,E,Alloy steel bar EN353 dia 40
+11000006,E,Alloy steel bar 20MnCr5 dia 80
+11000007,E,Alloy steel bar 20MnCr5 dia 55
+11000008,E,Alloy steel bar EN353 dia 65
+11000009,E,Alloy steel bar SAE4140 dia 32
+11000010,E,Alloy steel bar EN353 dia 55
+11000011,E,Alloy steel bar 20MnCr5 dia 55 172
+11000012,E,Alloy steel bar EN19 dia 32
+11000013,E,Alloy steel bar 20MnCr5 dia 65
+11000014,E,Alloy steel bar EN353 dia 40 726
+11000015,E,Alloy steel bar 20MnCr5 dia 32 316
+11000016,E,Alloy steel bar EN353 dia 40 581
+11000017,E,Alloy steel bar 20MnCr5 dia 32 391
+11000018,E,Alloy steel bar EN353 dia 65 323
+11000019,E,Alloy steel bar EN353 dia 55 157
+11000020,E,Alloy steel bar EN353 dia 55 500
+11000021,E,Alloy steel bar 20MnCr5 dia 65 783
+11000022,E,Alloy steel bar SAE4140 dia 65
+11100001,E,Aluminium alloy ingot ADC12
+11100002,E,Aluminium alloy ingot A356
+11100003,E,Aluminium alloy ingot LM6
+11100004,E,Aluminium alloy ingot LM24
+11200001,E,EPDM rubber compound black
+11200002,E,EPDM rubber compound grade A
+11200003,E,Polypropylene copolymer granules black
+11200004,E,Polyamide PA66 GF30 granules grade A
+11200005,E,Polyamide PA66 GF30 granules natural
+11200006,E,Polyamide PA66 GF30 granules grade  186
+11200007,E,EPDM rubber compound black 871
+11200008,E,EPDM rubber compound black 142
+11200009,E,EPDM rubber compound grade A 440
+11300001,E,Natural rubber ISNR 10
+11300002,E,Natural rubber ISNR 20
+11300003,E,Natural rubber ISNR 10 471
+21000001,E,Cylinder head cover LM24 AL-1637
+21000002,E,Alternator bracket LM24 AL-6710
+21000003,E,Cylinder head cover A356 AL-3577
+21000004,E,Clutch housing A356 AL-4788
+21000005,E,Steering column bracket A356 AL-4874
+21000006,E,Motor end shield LM6 AL-5504
+21000007,E,Timing chain cover LM24 AL-3754
+21000008,E,Water pump body A356 AL-5085
+21000009,E,Motor end shield LM6 AL-6242
+21000010,E,Alternator bracket ADC12 AL-4561
+21000011,E,Oil sump ADC12 AL-9332
+21000012,E,Motor end shield A356 AL-1101
+21000013,E,EV motor housing ADC12 AL-3769
+21000014,E,Oil sump LM6 AL-4762
+21000015,E,Oil sump A356 AL-7989
+21000016,E,Gearbox housing LM24 AL-4501
+21000017,E,Gearbox housing LM6 AL-1091
+21000018,E,Motor end shield ADC12 AL-3226
+21000019,E,Steering column bracket LM24 AL-4271
+21000020,E,EV motor housing LM6 AL-4717
+21000021,E,EV motor housing LM6 AL-8054
+21000022,E,Gearbox housing LM6 AL-3349
+21000023,E,Alternator bracket LM6 AL-3628
+21000024,E,Brake caliper bracket A356 AL-3613
+21000025,E,Clutch housing A356 AL-1135
+21000026,E,Water pump body A356 AL-9334
+21000027,E,Brake caliper bracket ADC12 AL-9170
+21000028,E,Brake caliper bracket ADC12 AL-8768
+21000029,E,Thermostat housing ADC12 AL-5756
+21000030,E,Alternator bracket ADC12 AL-6394
+21000031,E,Steering column bracket A356 AL-8364
+21000032,E,Alternator bracket LM6 AL-1972
+21000033,E,Clutch housing ADC12 AL-3584
+21000034,E,Steering column bracket LM6 AL-2387
+21000035,E,Brake caliper bracket LM24 AL-1684
+21000036,E,Cylinder head cover LM6 AL-1510
+21000037,E,EV motor housing LM6 AL-2722
+21000038,E,Cylinder head cover LM24 AL-1649
+21000039,E,EV motor housing A356 AL-9578
+21000040,E,Timing chain cover LM6 AL-7132
+21000041,E,Thermostat housing ADC12 AL-5522
+21000042,E,Oil pump cover LM6 AL-8679
+21000043,E,Gearbox housing LM24 AL-2369
+21000044,E,Oil sump LM6 AL-1533
+21000045,E,Inverter casing ADC12 AL-3337
+21000046,E,Steering column bracket LM24 AL-7709
+21000047,E,Oil pump cover A356 AL-1651
+21000048,E,Thermostat housing LM6 AL-6759
+21000049,E,Cylinder head cover LM6 AL-7290
+21000050,E,Transmission cover ADC12 AL-5190
+21000051,E,Thermostat housing A356 AL-2922
+21000052,E,Inverter casing ADC12 AL-8863
+21000053,E,Gearbox housing LM24 AL-4569
+21000054,E,Steering column bracket LM6 AL-2623
+21000055,E,Motor end shield A356 AL-3050
+21000056,E,Water pump body LM24 AL-5793
+21000057,E,Water pump body ADC12 AL-7912
+21000058,E,Water pump body LM6 AL-1093
+21000059,E,Steering column bracket A356 AL-4057
+21000060,E,Brake caliper bracket LM24 AL-1892
+21000061,E,Cylinder head cover ADC12 AL-8852
+21000062,E,Steering column bracket LM6 AL-7701
+21000063,E,Transmission cover LM6 AL-6685
+21000064,E,Clutch housing LM6 AL-7560
+21000065,E,Oil pump cover A356 AL-8115
+21000066,E,Gearbox housing A356 AL-9111
+21000067,E,Steering column bracket LM24 AL-3664
+21000068,E,Motor end shield A356 AL-6887
+21000069,E,Clutch housing ADC12 AL-3179
+21000070,E,Timing chain cover LM24 AL-3900
+21000071,E,Cylinder head cover A356 AL-1818
+21000072,E,Alternator bracket LM6 AL-9851
+21000073,E,Water pump body LM24 AL-3604
+21000074,E,Alternator bracket A356 AL-9610
+21000075,E,Motor end shield A356 AL-8946
+21000076,E,Water pump body ADC12 AL-4355
+21000077,E,Brake caliper bracket LM6 AL-3155
+21000078,E,Cylinder head cover A356 AL-6171
+21000079,E,Clutch housing A356 AL-2378
+21000080,E,Cylinder head cover LM6 AL-7986
+21000081,E,Steering column bracket LM6 AL-3338
+21000082,E,Gearbox housing LM6 AL-7718
+21000083,E,Steering column bracket ADC12 AL-3169
+21000084,E,Clutch housing ADC12 AL-1462
+21000085,E,Inverter casing A356 AL-1731
+21000086,E,Inverter casing ADC12 AL-5765
+21000087,E,Steering column bracket LM24 AL-2940
+21000088,E,Alternator bracket LM6 AL-7785
+21000089,E,Gearbox housing ADC12 AL-2466
+21000090,E,Alternator bracket ADC12 AL-6691
+21000091,E,Oil pump cover A356 AL-8757
+21000092,E,Steering column bracket A356 AL-2274
+21000093,E,Water pump body LM24 AL-2851
+21000094,E,EV motor housing ADC12 AL-7618
+21000095,E,Gearbox housing ADC12 AL-1698
+21000096,E,Brake caliper bracket ADC12 AL-8844
+21000097,E,Oil pump cover LM6 AL-2366
+21000098,E,Alternator bracket LM6 AL-3685
+21000099,E,Water pump body LM6 AL-3370
+21000100,E,EV motor housing A356 AL-9106
+21000101,E,Oil sump LM6 AL-7034
+21000102,E,Inverter casing ADC12 AL-4561
+21000103,E,Alternator bracket ADC12 AL-6470
+21000104,E,Oil sump ADC12 AL-1262
+21000105,E,Alternator bracket LM24 AL-8466
+21000106,E,Oil sump ADC12 AL-6204
+21000107,E,Timing chain cover LM24 AL-1966
+21000108,E,Brake caliper bracket LM24 AL-2731
+21000109,E,Oil sump ADC12 AL-4733
+21000110,E,Water pump body LM6 AL-1720
+21000111,E,Timing chain cover A356 AL-2583
+21000112,E,Brake caliper bracket LM6 AL-6513
+21000113,E,Cylinder head cover ADC12 AL-6929
+21000114,E,Steering column bracket A356 AL-3684
+21000115,E,Thermostat housing LM6 AL-2024
+21000116,E,Gearbox housing A356 AL-2923
+21000117,E,Water pump body ADC12 AL-7299
+21000118,E,Motor end shield LM24 AL-4967
+21000119,E,Gearbox housing LM6 AL-1371
+21000120,E,Clutch housing LM6 AL-6822
+21500001,E,Pump body FG300 FE-6420
+21500002,E,Exhaust manifold SG400/15 FE-9096
+21500003,E,Bearing cap SG500/7 FE-2726
+21500004,E,Engine mounting bracket FG260 FE-1777
+21500005,E,Exhaust manifold SG500/7 FE-6742
+21500006,E,Bearing cap FG300 FE-5113
+21500007,E,Flywheel housing FG300 FE-1985
+21500008,E,Bearing cap SG500/7 FE-9034
+21500009,E,Bearing cap SG500/7 FE-9269
+21500010,E,Bearing cap SG500/7 FE-3680
+21500011,E,Differential case SG500/7 FE-8996
+21500012,E,Hub casting FG300 FE-3072
+21500013,E,Pump body FG300 FE-1817
+21500014,E,Steering knuckle casting FG260 FE-5354
+21500015,E,Steering knuckle casting SG500/7 FE-7923
+21500016,E,Flywheel housing SG500/7 FE-6436
+21500017,E,Engine mounting bracket FG260 FE-4301
+21500018,E,Exhaust manifold SG500/7 FE-2620
+21500019,E,Hub casting SG500/7 FE-1906
+21500020,E,Pump body SG400/15 FE-2360
+21500021,E,Differential case FG300 FE-9496
+21500022,E,Flywheel housing FG300 FE-6124
+21500023,E,Flywheel housing FG300 FE-1595
+21500024,E,Exhaust manifold SG500/7 FE-8944
+21500025,E,Crankcase cover FG260 FE-2746
+21500026,E,Brake drum SG500/7 FE-1428
+21500027,E,Engine mounting bracket SG400/15 FE-9407
+21500028,E,Differential case SG400/15 FE-1492
+21500029,E,Brake drum FG260 FE-8830
+21500030,E,Brake drum SG400/15 FE-5835
+21500031,E,Engine mounting bracket FG300 FE-9247
+21500032,E,Brake drum SG400/15 FE-6048
+21500033,E,Hub casting FG260 FE-6405
+21500034,E,Steering knuckle casting SG400/15 FE-674
+21500035,E,Hub casting FG300 FE-5650
+21500036,E,Pump body SG400/15 FE-7602
+21500037,E,Bearing cap SG400/15 FE-6470
+21500038,E,Flywheel housing SG500/7 FE-9790
+21500039,E,Exhaust manifold FG260 FE-6145
+21500040,E,Differential case FG300 FE-7400
+21500041,E,Differential case SG500/7 FE-7685
+21500042,E,Flywheel housing FG300 FE-2455
+21500043,E,Hub casting FG300 FE-8265
+21500044,E,Brake drum FG260 FE-5992
+21500045,E,Steering knuckle casting FG300 FE-2314
+21500046,E,Flywheel housing SG500/7 FE-5782
+21500047,E,Steering knuckle casting SG400/15 FE-947
+21500048,E,Hub casting FG300 FE-3864
+21500049,E,Differential case FG300 FE-3970
+21500050,E,Bearing cap FG260 FE-6830
+21500051,E,Brake drum FG260 FE-1555
+21500052,E,Brake drum FG300 FE-9544
+21500053,E,Steering knuckle casting SG500/7 FE-6382
+21500054,E,Brake drum FG300 FE-5427
+21500055,E,Steering knuckle casting FG300 FE-2789
+21500056,E,Hub casting SG500/7 FE-9735
+21500057,E,Steering knuckle casting SG400/15 FE-216
+21500058,E,Pump body SG400/15 FE-2371
+21500059,E,Steering knuckle casting FG260 FE-1058
+21500060,E,Steering knuckle casting SG500/7 FE-3195
+21500061,E,Exhaust manifold SG400/15 FE-6758
+21500062,E,Engine mounting bracket FG300 FE-6453
+21500063,E,Steering knuckle casting FG300 FE-6065
+21500064,E,Flywheel housing SG500/7 FE-1687
+21500065,E,Crankcase cover FG300 FE-7224
+21500066,E,Engine mounting bracket SG500/7 FE-6232
+21500067,E,Brake drum SG500/7 FE-1810
+21500068,E,Crankcase cover FG300 FE-5797
+21500069,E,Bearing cap SG400/15 FE-5418
+21500070,E,Exhaust manifold FG300 FE-9806
+21500071,E,Hub casting SG500/7 FE-1821
+21500072,E,Flywheel housing FG260 FE-9785
+21500073,E,Exhaust manifold SG500/7 FE-2222
+21500074,E,Differential case FG260 FE-7121
+21500075,E,Steering knuckle casting SG400/15 FE-504
+21500076,E,Bearing cap FG300 FE-3677
+21500077,E,Hub casting SG400/15 FE-6206
+21500078,E,Hub casting SG400/15 FE-1059
+21500079,E,Engine mounting bracket FG260 FE-7996
+21500080,E,Hub casting FG260 FE-4689
+21500081,E,Engine mounting bracket FG260 FE-3656
+21500082,E,Crankcase cover FG260 FE-3636
+21500083,E,Steering knuckle casting SG400/15 FE-820
+21500084,E,Crankcase cover FG300 FE-1339
+21500085,E,Exhaust manifold FG260 FE-5693
+21500086,E,Differential case SG400/15 FE-6420
+21500087,E,Brake drum FG260 FE-1016
+21500088,E,Pump body FG300 FE-5413
+21500089,E,Brake drum FG260 FE-8734
+21500090,E,Exhaust manifold SG400/15 FE-9103
+21500091,E,Steering knuckle casting FG260 FE-6474
+21500092,E,Engine mounting bracket FG300 FE-5962
+21500093,E,Hub casting FG300 FE-1281
+21500094,E,Bearing cap SG400/15 FE-6217
+21500095,E,Bearing cap SG500/7 FE-4466
+21500096,E,Differential case FG260 FE-4231
+21500097,E,Pump body FG300 FE-9564
+21500098,E,Flywheel housing SG400/15 FE-5446
+21500099,E,Crankcase cover FG300 FE-3420
+21500100,E,Flywheel housing FG260 FE-7125
+22000001,E,Steering knuckle forging EN8 FO-6225
+22000002,E,Tie rod end forging SAE4140 FO-2974
+22000003,E,Flange yoke forging 20MnCr5 FO-2669
+22000004,E,Connecting rod forging SAE4140 FO-2069
+22000005,E,Tie rod end forging EN8 FO-2262
+22000006,E,Gear blank forging EN8 FO-1899
+22000007,E,Spindle forging SAE4140 FO-5997
+22000008,E,Flange yoke forging C45 FO-4001
+22000009,E,Tie rod end forging 20MnCr5 FO-4005
+22000010,E,Tie rod end forging 20MnCr5 FO-4708
+22000011,E,Flange yoke forging 20MnCr5 FO-7815
+22000012,E,Gear blank forging EN19 FO-5290
+22000013,E,Steering knuckle forging EN8 FO-5213
+22000014,E,Front axle beam forging EN19 FO-2633
+22000015,E,Connecting rod forging C45 FO-9048
+22000016,E,Steering knuckle forging EN8 FO-6015
+22000017,E,Flange yoke forging SAE4140 FO-4107
+22000018,E,Front axle beam forging EN8 FO-1520
+22000019,E,Front axle beam forging C45 FO-1181
+22000020,E,Spindle forging EN8 FO-7887
+22000021,E,Crankshaft forging EN8 FO-3622
+22000022,E,Crankshaft forging EN8 FO-8617
+22000023,E,Ring gear blank SAE4140 FO-7678
+22000024,E,Steering knuckle forging EN8 FO-7634
+22000025,E,Connecting rod forging EN8 FO-6828
+22000026,E,Crankshaft forging EN19 FO-6798
+22000027,E,Ring gear blank SAE4140 FO-1322
+22000028,E,Ring gear blank 20MnCr5 FO-5537
+22000029,E,Steering knuckle forging C45 FO-7346
+22000030,E,Spindle forging C45 FO-3505
+22000031,E,Connecting rod forging C45 FO-1045
+22000032,E,Spindle forging 20MnCr5 FO-1025
+22000033,E,Front axle beam forging SAE4140 FO-9009
+22000034,E,Crankshaft forging C45 FO-9449
+22000035,E,Gear blank forging SAE4140 FO-9055
+22000036,E,Steering knuckle forging EN19 FO-4208
+22000037,E,Connecting rod forging 20MnCr5 FO-7070
+22000038,E,Connecting rod forging EN8 FO-3122
+22000039,E,Spindle forging C45 FO-6360
+22000040,E,Connecting rod forging SAE4140 FO-2295
+22000041,E,Gear blank forging C45 FO-9277
+22000042,E,Ring gear blank 20MnCr5 FO-7152
+22000043,E,Front axle beam forging C45 FO-2161
+22000044,E,Spindle forging EN8 FO-6889
+22000045,E,Front axle beam forging C45 FO-2375
+22000046,E,Gear blank forging C45 FO-1982
+22000047,E,Crankshaft forging EN8 FO-3271
+22000048,E,Front axle beam forging 20MnCr5 FO-9511
+22000049,E,Front axle beam forging 20MnCr5 FO-6780
+22000050,E,Front axle beam forging C45 FO-6882
+22000051,E,Connecting rod forging 20MnCr5 FO-2572
+22000052,E,Spindle forging EN8 FO-9695
+22000053,E,Front axle beam forging SAE4140 FO-9565
+22000054,E,Connecting rod forging SAE4140 FO-4395
+22000055,E,Tie rod end forging EN19 FO-3428
+22000056,E,Flange yoke forging SAE4140 FO-4621
+22000057,E,Front axle beam forging C45 FO-8553
+22000058,E,Ring gear blank SAE4140 FO-6336
+22000059,E,Steering knuckle forging EN8 FO-8505
+22000060,E,Front axle beam forging EN8 FO-6177
+22000061,E,Ring gear blank EN8 FO-2705
+22000062,E,Flange yoke forging C45 FO-1406
+22000063,E,Steering knuckle forging SAE4140 FO-5356
+22000064,E,Front axle beam forging SAE4140 FO-3524
+22000065,E,Connecting rod forging EN8 FO-7259
+22000066,E,Flange yoke forging EN8 FO-8384
+22000067,E,Tie rod end forging EN8 FO-6047
+22000068,E,Front axle beam forging 20MnCr5 FO-8837
+22000069,E,Front axle beam forging EN19 FO-9502
+22000070,E,Tie rod end forging EN19 FO-1106
+22000071,E,Ring gear blank SAE4140 FO-8255
+22000072,E,Flange yoke forging SAE4140 FO-6879
+22000073,E,Ring gear blank EN19 FO-2658
+22000074,E,Gear blank forging 20MnCr5 FO-2304
+22000075,E,Connecting rod forging 20MnCr5 FO-5856
+22000076,E,Spindle forging EN8 FO-1433
+22000077,E,Ring gear blank EN8 FO-5636
+22000078,E,Flange yoke forging EN19 FO-1820
+22000079,E,Front axle beam forging EN19 FO-7137
+22000080,E,Spindle forging SAE4140 FO-2436
+22000081,E,Front axle beam forging EN19 FO-8899
+22000082,E,Connecting rod forging EN8 FO-7143
+22000083,E,Spindle forging EN19 FO-5723
+22000084,E,Flange yoke forging C45 FO-1265
+22000085,E,Crankshaft forging EN8 FO-6721
+22000086,E,Tie rod end forging EN8 FO-8640
+22000087,E,Tie rod end forging 20MnCr5 FO-5248
+22000088,E,Gear blank forging EN19 FO-8777
+22000089,E,Tie rod end forging EN19 FO-9048
+22000090,E,Spindle forging 20MnCr5 FO-8935
+22000091,E,Gear blank forging 20MnCr5 FO-3927
+22000092,E,Spindle forging EN8 FO-6209
+22000093,E,Tie rod end forging EN8 FO-5776
+22000094,E,Steering knuckle forging EN8 FO-7764
+22000095,E,Tie rod end forging EN8 FO-2880
+22000096,E,Gear blank forging EN19 FO-4109
+22000097,E,Steering knuckle forging EN19 FO-4141
+22000098,E,Crankshaft forging SAE4140 FO-2175
+22000099,E,Ring gear blank EN19 FO-6548
+22000100,E,Connecting rod forging 20MnCr5 FO-5906
+22000101,E,Tie rod end forging EN19 FO-6801
+22000102,E,Gear blank forging 20MnCr5 FO-5871
+22000103,E,Tie rod end forging EN19 FO-1298
+22000104,E,Gear blank forging EN8 FO-7676
+22000105,E,Flange yoke forging 20MnCr5 FO-9338
+22000106,E,Steering knuckle forging EN19 FO-9411
+22000107,E,Ring gear blank EN8 FO-6220
+22000108,E,Front axle beam forging SAE4140 FO-4922
+22000109,E,Flange yoke forging EN19 FO-3032
+22000110,E,Crankshaft forging C45 FO-1162
+23000001,E,Machined flange EN8 MA-9792
+23000002,E,Pump shaft machined SAE8620 MA-9594
+23000003,E,Sleeve machined EN8 MA-2582
+23000004,E,Machined bracket EN8 MA-9838
+23000005,E,Pump shaft machined C45 MA-7184
+23000006,E,Input shaft machined EN8 MA-9782
+23000007,E,Input shaft machined EN353 MA-4511
+23000008,E,Pump shaft machined C45 MA-4445
+23000009,E,Pump shaft machined SAE8620 MA-8327
+23000010,E,Pinion shaft EN353 MA-4796
+23000011,E,Machined flange EN8 MA-3504
+23000012,E,Output shaft machined SAE8620 MA-4465
+23000013,E,Sleeve machined C45 MA-7529
+23000014,E,Machined flange EN353 MA-8758
+23000015,E,Machined bracket EN8 MA-3840
+23000016,E,Sleeve machined SAE8620 MA-2298
+23000017,E,Spacer machined C45 MA-4756
+23000018,E,Pinion shaft EN353 MA-2358
+23000019,E,Output shaft machined EN8 MA-2533
+23000020,E,Spacer machined C45 MA-1106
+23000021,E,Input shaft machined EN8 MA-2910
+23000022,E,Spacer machined EN353 MA-4127
+23000023,E,Spacer machined EN353 MA-9123
+23000024,E,Input shaft machined EN353 MA-6259
+23000025,E,Input shaft machined EN353 MA-3996
+23000026,E,Spacer machined SAE8620 MA-9970
+23000027,E,Machined bracket EN8 MA-9027
+23000028,E,Input shaft machined EN353 MA-5692
+23000029,E,Spacer machined EN8 MA-4779
+23000030,E,Machined flange SAE8620 MA-5955
+23000031,E,Pinion shaft SAE8620 MA-5045
+23000032,E,Machined flange SAE8620 MA-4673
+23000033,E,Output shaft machined SAE8620 MA-3305
+23000034,E,Machined bracket EN8 MA-5061
+23000035,E,Machined bracket EN353 MA-5484
+23000036,E,Spacer machined EN353 MA-3352
+23000037,E,Input shaft machined C45 MA-1397
+23000038,E,Pinion shaft SAE8620 MA-9886
+23000039,E,Pinion shaft EN353 MA-8215
+23000040,E,Machined flange SAE8620 MA-1830
+23000041,E,Machined bracket SAE8620 MA-6380
+23000042,E,Pump shaft machined C45 MA-9321
+23000043,E,Sleeve machined C45 MA-2880
+23000044,E,Machined bracket EN353 MA-4066
+23000045,E,Output shaft machined EN353 MA-7142
+23000046,E,Pinion shaft SAE8620 MA-6350
+23000047,E,Machined flange C45 MA-6887
+23000048,E,Machined bracket EN353 MA-4290
+23000049,E,Output shaft machined SAE8620 MA-6577
+23000050,E,Spacer machined C45 MA-1879
+23000051,E,Spacer machined EN8 MA-5414
+23000052,E,Pump shaft machined EN353 MA-6704
+23000053,E,Sleeve machined EN8 MA-3193
+23000054,E,Pinion shaft EN8 MA-5102
+23000055,E,Sleeve machined SAE8620 MA-8236
+23000056,E,Spacer machined EN353 MA-3837
+23000057,E,Spacer machined SAE8620 MA-1070
+23000058,E,Spacer machined SAE8620 MA-4589
+23000059,E,Pump shaft machined C45 MA-4254
+23000060,E,Spacer machined EN8 MA-7590
+23000061,E,Machined bracket SAE8620 MA-8950
+23000062,E,Input shaft machined SAE8620 MA-5025
+23000063,E,Input shaft machined C45 MA-6356
+23000064,E,Input shaft machined SAE8620 MA-6656
+23000065,E,Machined bracket EN353 MA-4714
+23000066,E,Input shaft machined EN8 MA-9445
+23000067,E,Pinion shaft C45 MA-3918
+23000068,E,Input shaft machined C45 MA-9130
+23000069,E,Spacer machined EN8 MA-2375
+23000070,E,Machined flange C45 MA-8654
+23000071,E,Pinion shaft EN353 MA-5631
+23000072,E,Pump shaft machined EN8 MA-6556
+23000073,E,Machined bracket C45 MA-3166
+23000074,E,Pinion shaft C45 MA-9056
+23000075,E,Machined bracket SAE8620 MA-2128
+23000076,E,Input shaft machined EN353 MA-4256
+23000077,E,Machined bracket SAE8620 MA-1956
+23000078,E,Sleeve machined SAE8620 MA-3622
+23000079,E,Output shaft machined EN8 MA-8581
+23000080,E,Pinion shaft EN353 MA-5931
+23000081,E,Output shaft machined C45 MA-8154
+23000082,E,Output shaft machined C45 MA-9916
+23000083,E,Machined bracket EN353 MA-9629
+23000084,E,Pump shaft machined C45 MA-8626
+23000085,E,Machined bracket SAE8620 MA-9619
+23000086,E,Machined flange SAE8620 MA-6499
+23000087,E,Machined bracket C45 MA-8236
+23000088,E,Input shaft machined C45 MA-8735
+23000089,E,Machined bracket EN8 MA-8028
+23000090,E,Output shaft machined EN8 MA-4705
+24000001,E,Hex bolt M6 FA-7544
+24000002,E,Hex flange bolt M8 FA-2893
+24000003,E,Plain washer M8 FA-7971
+24000004,E,Hex bolt M10 FA-4915
+24000005,E,Spring washer M6 FA-2933
+24000006,E,Socket head cap screw M12 FA-2399
+24000007,E,Compression spring M10 FA-3747
+24000008,E,Compression spring M14 FA-8593
+24000009,E,Stud M12 FA-3822
+24000010,E,Hex nut M12 FA-9510
+24000011,E,Stud M10 FA-4557
+24000012,E,Spring washer M8 FA-1564
+24000013,E,Compression spring M6 FA-7947
+24000014,E,Hex nut M12 FA-2752
+24000015,E,Stud M14 FA-5310
+24000016,E,Hex nut M10 FA-3601
+24000017,E,Stud M10 FA-1603
+24000018,E,Hex nut M10 FA-8862
+24000019,E,Socket head cap screw M12 FA-4814
+24000020,E,Compression spring M8 FA-5486
+24000021,E,Stud M12 FA-2357
+24000022,E,Hex bolt M10 FA-4620
+24000023,E,Spring washer M10 FA-8453
+24000024,E,Spring washer M8 FA-4395
+24000025,E,Nyloc nut M10 FA-4473
+24000026,E,Nyloc nut M14 FA-4727
+24000027,E,Hex nut M12 FA-7939
+24000028,E,Compression spring M8 FA-8631
+24000029,E,Stud M12 FA-1732
+24000030,E,Hex nut M6 FA-6634
+24000031,E,Hex bolt M8 FA-8982
+24000032,E,Socket head cap screw M12 FA-7651
+24000033,E,Plain washer M8 FA-6393
+24000034,E,Compression spring M6 FA-4246
+24000035,E,Hex bolt M6 FA-1531
+24000036,E,Spring washer M8 FA-4378
+24000037,E,Stud M14 FA-8135
+24000038,E,Nyloc nut M10 FA-8667
+24000039,E,Socket head cap screw M14 FA-6213
+24000040,E,Compression spring M12 FA-7378
+24000041,E,Spring washer M10 FA-8309
+24000042,E,Compression spring M8 FA-3900
+24000043,E,Spring washer M12 FA-4773
+24000044,E,Spring washer M8 FA-3858
+24000045,E,Nyloc nut M10 FA-5166
+24000046,E,Compression spring M14 FA-3009
+24000047,E,Stud M14 FA-9436
+24000048,E,Hex bolt M6 FA-9372
+24000049,E,Spring washer M14 FA-7154
+24000050,E,Hex flange bolt M8 FA-7222
+24000051,E,Hex bolt M14 FA-6926
+24000052,E,Nyloc nut M10 FA-4157
+24000053,E,Hex flange bolt M6 FA-1830
+24000054,E,Hex flange bolt M6 FA-3209
+24000055,E,Hex bolt M8 FA-6512
+24000056,E,Spring washer M8 FA-3454
+24000057,E,Socket head cap screw M6 FA-5159
+24000058,E,Socket head cap screw M6 FA-2625
+24000059,E,Spring washer M12 FA-1981
+24000060,E,Spring washer M14 FA-3156
+24000061,E,Hex nut M14 FA-6211
+24000062,E,Hex nut M12 FA-1416
+24000063,E,Hex flange bolt M8 FA-1117
+24000064,E,Hex bolt M10 FA-5013
+24000065,E,Hex nut M10 FA-7712
+24000066,E,Hex bolt M12 FA-9261
+24000067,E,Spring washer M8 FA-6252
+24000068,E,Nyloc nut M6 FA-1690
+24000069,E,Hex flange bolt M8 FA-2813
+24000070,E,Stud M6 FA-6449
+24000071,E,Hex flange bolt M6 FA-3358
+24000072,E,Spring washer M10 FA-5846
+24000073,E,Spring washer M8 FA-3228
+24000074,E,Compression spring M12 FA-4675
+24000075,E,Compression spring M6 FA-5169
+24000076,E,Nyloc nut M14 FA-3669
+24000077,E,Nyloc nut M12 FA-6144
+24000078,E,Plain washer M10 FA-5033
+24000079,E,Hex flange bolt M14 FA-1900
+24000080,E,Stud M6 FA-4554
+24000081,E,Hex flange bolt M6 FA-4649
+24000082,E,Compression spring M8 FA-2512
+24000083,E,Hex bolt M14 FA-6510
+24000084,E,Hex bolt M12 FA-9176
+24000085,E,Socket head cap screw M12 FA-7173
+24000086,E,Compression spring M6 FA-5625
+24000087,E,Plain washer M14 FA-2520
+24000088,E,Hex flange bolt M10 FA-7606
+24000089,E,Hex flange bolt M14 FA-4151
+24000090,E,Hex flange bolt M8 FA-1753
+24000091,E,Nyloc nut M6 FA-4727
+24000092,E,Hex bolt M14 FA-6806
+24000093,E,Hex nut M10 FA-8699
+24000094,E,Socket head cap screw M12 FA-1656
+24000095,E,Spring washer M14 FA-1807
+24000096,E,Spring washer M8 FA-5008
+24000097,E,Hex bolt M12 FA-7579
+24000098,E,Spring washer M6 FA-3003
+24000099,E,Stud M14 FA-2674
+24000100,E,Compression spring M12 FA-9174
+24000101,E,Compression spring M10 FA-2265
+24000102,E,Hex nut M6 FA-4836
+24000103,E,Compression spring M10 FA-2119
+24000104,E,Nyloc nut M6 FA-2469
+24000105,E,Compression spring M12 FA-6430
+24000106,E,Compression spring M6 FA-3775
+24000107,E,Hex nut M14 FA-1205
+24000108,E,Plain washer M12 FA-4106
+24000109,E,Hex bolt M6 FA-2876
+24000110,E,Plain washer M12 FA-3143
+24000111,E,Hex flange bolt M8 FA-3386
+24000112,E,Spring washer M6 FA-6147
+24000113,E,Stud M6 FA-3476
+24000114,E,Plain washer M6 FA-1795
+24000115,E,Hex nut M14 FA-3403
+24000116,E,Plain washer M10 FA-5270
+24000117,E,Plain washer M6 FA-8852
+24000118,E,Hex nut M8 FA-3327
+24000119,E,Nyloc nut M12 FA-9156
+24000120,E,Hex nut M12 FA-1886
+25000001,E,Radiator hose outlet RH RU-4780
+25000002,E,Rubber boot CV joint type B RU-1337
+25000003,E,Radiator hose inlet RH RU-4964
+25000004,E,Radiator hose outlet type B RU-2825
+25000005,E,Radiator hose outlet RH RU-1518
+25000006,E,Radiator hose outlet RH RU-7264
+25000007,E,Rubber boot CV joint type B RU-8935
+25000008,E,Radiator hose outlet type B RU-4033
+25000009,E,Fuel hose type B RU-1538
+25000010,E,Fuel hose type B RU-6818
+25000011,E,Grommet EPDM type A RU-2601
+25000012,E,Fuel hose RH RU-3975
+25000013,E,Grommet EPDM type A RU-6573
+25000014,E,Fuel hose type A RU-2568
+25000015,E,Fuel hose type B RU-5182
+25000016,E,Engine mount rubber LH RU-2171
+25000017,E,Rubber boot CV joint LH RU-6295
+25000018,E,Engine mount rubber type A RU-6568
+25000019,E,Grommet EPDM type B RU-2078
+25000020,E,Rubber boot CV joint type A RU-4983
+25000021,E,Radiator hose inlet LH RU-2187
+25000022,E,Bump stopper type B RU-2721
+25000023,E,Bump stopper type B RU-4378
+25000024,E,Radiator hose inlet LH RU-3902
+25000025,E,Fuel hose RH RU-9181
+25000026,E,Rubber boot CV joint type A RU-7737
+25000027,E,Bump stopper LH RU-8230
+25000028,E,Bump stopper type A RU-7164
+25000029,E,Rubber boot CV joint RH RU-2849
+25000030,E,Radiator hose outlet LH RU-9918
+25000031,E,Radiator hose inlet RH RU-8581
+25000032,E,Grommet EPDM LH RU-3831
+25000033,E,Engine mount rubber RH RU-9410
+25000034,E,Bump stopper RH RU-9116
+25000035,E,Radiator hose outlet type A RU-4896
+25000036,E,Radiator hose inlet type B RU-1114
+25000037,E,Radiator hose outlet RH RU-6456
+25000038,E,Rubber boot CV joint type A RU-4906
+25000039,E,Engine mount rubber LH RU-4423
+25000040,E,Bump stopper LH RU-4304
+25000041,E,Bump stopper LH RU-8182
+25000042,E,Bump stopper type A RU-9378
+25000043,E,Fuel hose type B RU-4842
+25000044,E,Radiator hose outlet type B RU-4394
+25000045,E,Rubber boot CV joint RH RU-5573
+25000046,E,Rubber boot CV joint RH RU-3625
+25000047,E,Rubber boot CV joint type A RU-4998
+25000048,E,Engine mount rubber type A RU-4111
+25000049,E,Fuel hose RH RU-8401
+25000050,E,Rubber boot CV joint LH RU-5137
+25000051,E,Radiator hose inlet type B RU-1038
+25000052,E,Engine mount rubber LH RU-2926
+25000053,E,Engine mount rubber type B RU-4386
+25000054,E,Engine mount rubber LH RU-1010
+25000055,E,Bump stopper type A RU-1977
+25000056,E,Fuel hose LH RU-4393
+25000057,E,Radiator hose inlet type B RU-2441
+25000058,E,Rubber boot CV joint type B RU-4946
+25000059,E,Engine mount rubber LH RU-7881
+25000060,E,Grommet EPDM type A RU-6130
+25500001,E,Valve stem seal 55x72x10 SE-4625
+25500002,E,Oil seal 55x72x10 SE-6641
+25500003,E,O-ring NBR 40x62x8 SE-6633
+25500004,E,Valve stem seal 55x72x10 SE-8517
+25500005,E,Gasket oil pan 55x72x10 SE-4242
+25500006,E,Valve stem seal std SE-1756
+25500007,E,Valve stem seal 32x2.5 SE-4433
+25500008,E,Valve stem seal 32x2.5 SE-7699
+25500009,E,Valve stem seal 32x2.5 SE-7192
+25500010,E,Cylinder head gasket MLS 40x62x8 SE-2806
+25500011,E,O-ring NBR 55x72x10 SE-1020
+25500012,E,Oil seal std SE-1133
+25500013,E,Gasket oil pan std SE-7821
+25500014,E,O-ring NBR 40x62x8 SE-2126
+25500015,E,Valve stem seal 32x2.5 SE-7608
+25500016,E,Valve stem seal 32x2.5 SE-5055
+25500017,E,Valve stem seal std SE-7856
+25500018,E,Oil seal 40x62x8 SE-2969
+25500019,E,O-ring NBR std SE-2437
+25500020,E,Gasket oil pan 55x72x10 SE-3436
+25500021,E,Cylinder head gasket MLS 55x72x10 SE-566
+25500022,E,Gasket oil pan std SE-2722
+25500023,E,Cylinder head gasket MLS std SE-9725
+25500024,E,Gasket oil pan 55x72x10 SE-5373
+25500025,E,Oil seal std SE-4734
+25500026,E,Gasket oil pan 32x2.5 SE-5670
+25500027,E,Oil seal 32x2.5 SE-4798
+25500028,E,Valve stem seal 55x72x10 SE-2191
+25500029,E,Valve stem seal std SE-2194
+25500030,E,Oil seal std SE-5238
+25500031,E,O-ring NBR std SE-1539
+25500032,E,Gasket oil pan std SE-6557
+25500033,E,O-ring NBR 32x2.5 SE-3812
+25500034,E,Oil seal std SE-5772
+25500035,E,Oil seal std SE-7976
+25500036,E,Gasket oil pan 40x62x8 SE-7979
+25500037,E,Cylinder head gasket MLS 40x62x8 SE-7453
+25500038,E,Gasket oil pan std SE-4662
+25500039,E,Valve stem seal 55x72x10 SE-7779
+25500040,E,Gasket oil pan 40x62x8 SE-2134
+26000001,E,Speed sensor hall type type 3 EL-2224
+26000002,E,Reverse light switch black EL-2917
+26000003,E,Connector 12-way sealed grey EL-8634
+26000004,E,Connector 12-way sealed type 3 EL-4136
+26000005,E,Relay 12V 40A black EL-5513
+26000006,E,Speed sensor hall type type 3 EL-7179
+26000007,E,Oil pressure sensor black EL-9907
+26000008,E,Oil pressure sensor type 3 EL-6377
+26000009,E,Speed sensor hall type type 2 EL-2183
+26000010,E,Oil pressure sensor grey EL-4232
+26000011,E,Connector 12-way sealed black EL-2476
+26000012,E,Reverse light switch type 2 EL-7776
+26000013,E,Connector 12-way sealed type 3 EL-6364
+26000014,E,Reverse light switch type 3 EL-3028
+26000015,E,Connector 12-way sealed type 3 EL-8305
+26000016,E,Speed sensor hall type black EL-4155
+26000017,E,Fuse blade 15A grey EL-8515
+26000018,E,Speed sensor hall type grey EL-4138
+26000019,E,Oil pressure sensor type 2 EL-9598
+26000020,E,Oil pressure sensor grey EL-4430
+26000021,E,Fuse blade 15A grey EL-3359
+26000022,E,Connector 12-way sealed grey EL-3331
+26000023,E,Relay 12V 40A black EL-2974
+26000024,E,Speed sensor hall type black EL-5527
+26000025,E,Relay 12V 40A grey EL-3168
+26000026,E,Oil pressure sensor type 2 EL-6780
+26000027,E,Fuse blade 15A type 3 EL-1121
+26000028,E,Reverse light switch black EL-9632
+26000029,E,Fuse blade 15A grey EL-8911
+26000030,E,Speed sensor hall type grey EL-1093
+26000031,E,Reverse light switch type 2 EL-5041
+26000032,E,Connector 12-way sealed type 3 EL-3126
+26000033,E,Relay 12V 40A black EL-5140
+26000034,E,Reverse light switch type 3 EL-2900
+26000035,E,Oil pressure sensor grey EL-5655
+26000036,E,Reverse light switch black EL-1444
+26000037,E,Reverse light switch black EL-3541
+26000038,E,Fuse blade 15A black EL-1970
+26000039,E,Fuse blade 15A type 2 EL-2104
+26000040,E,Fuse blade 15A grey EL-2222
+26000041,E,Reverse light switch black EL-4278
+26000042,E,Reverse light switch type 3 EL-7149
+26000043,E,Speed sensor hall type type 3 EL-2938
+26000044,E,Connector 12-way sealed grey EL-9998
+26000045,E,Speed sensor hall type grey EL-6635
+26500001,E,Wiring harness engine RHD HA-6534
+26500002,E,Wiring harness EV traction variant 2 HA-
+26500003,E,Wiring harness EV traction variant  901
+26500004,E,Wiring harness engine variant 2 HA-8318
+26500005,E,Battery cable assembly RHD HA-4227
+26500006,E,Wiring harness EV traction variant  373
+26500007,E,Wiring harness engine LHD HA-9617
+26500008,E,Wiring harness body variant 2 HA-7650
+26500009,E,Battery cable assembly RHD HA-1734
+26500010,E,Wiring harness body LHD HA-3637
+26500011,E,Wiring harness EV traction RHD HA-5030
+26500012,E,Wiring harness engine LHD HA-8816
+26500013,E,Battery cable assembly RHD HA-8537
+26500014,E,Battery cable assembly variant 2 HA-9433
+26500015,E,Battery cable assembly variant 2 HA-6151
+26500016,E,Battery cable assembly LHD HA-4228
+26500017,E,Wiring harness EV traction RHD HA-8488
+26500018,E,Wiring harness EV traction variant  346
+26500019,E,Wiring harness body variant 2 HA-3581
+26500020,E,Wiring harness body variant 2 HA-2414
+26500021,E,Battery cable assembly RHD HA-1041
+26500022,E,Battery cable assembly variant 2 HA-1689
+26500023,E,Wiring harness engine variant 2 HA-7385
+26500024,E,Wiring harness EV traction variant  131
+26500025,E,Battery cable assembly variant 2 HA-1945
+27000001,E,Machined spindle sub-assembly (group) ty
+27000002,E,Gear shaft sub-assembly (group) type B G
+27000003,E,Gear shaft sub-assembly (group) type A G
+27000004,E,Machined spindle sub-assembly (grou 497
+27000005,E,Machined spindle sub-assembly (grou 187
+27000006,E,Machined spindle sub-assembly (grou 459
+27000007,E,Machined spindle sub-assembly (grou 674
+27000008,E,Gear shaft sub-assembly (group) typ 747
+27000009,E,Gear shaft sub-assembly (group) typ 477
+27000010,E,Machined spindle sub-assembly (grou 126
+31000001,E,Thermal label roll 100x50 std PA-5511
+31000002,E,Thermal label roll 100x50 std PA-8698
+31000003,E,Stretch film roll 500 mm std PA-6361
+31000004,E,Plastic crate 600x400x300 blue PA-2292
+31000005,E,Thermal label roll 100x50 blue PA-6862
+31000006,E,Stretch film roll 500 mm grey PA-3420
+31000007,E,Stretch film roll 500 mm grey PA-9907
+31000008,E,BOPP tape 48 mm std PA-4899
+31000009,E,Thermal label roll 100x50 std PA-2585
+31000010,E,Stretch film roll 500 mm grey PA-7731
+31000011,E,Thermal label roll 100x50 std PA-5910
+31000012,E,Stretch film roll 500 mm std PA-4285
+31000013,E,Stretch film roll 500 mm grey PA-1453
+31000014,E,Stretch film roll 500 mm grey PA-8817
+31000015,E,Plastic crate 600x400x300 grey PA-5382
+31000016,E,VCI poly bag 600x900 grey PA-1407
+31000017,E,Thermal label roll 100x50 blue PA-1136
+31000018,E,BOPP tape 48 mm blue PA-6853
+31000019,E,VCI poly bag 600x900 std PA-6593
+31000020,E,Thermal label roll 100x50 std PA-1118
+31000021,E,Stretch film roll 500 mm blue PA-9755
+31000022,E,Plastic crate 600x400x300 grey PA-7326
+31000023,E,Plastic crate 600x400x300 grey PA-9138
+31000024,E,BOPP tape 48 mm blue PA-3442
+31000025,E,BOPP tape 48 mm std PA-6520
+41000001,E,V-belt 32008
+41000002,E,Gear coupling B-52
+41000003,E,V-belt size 4
+41000004,E,Ball bearing 6205 ZZ
+41000005,E,V-belt 6205 ZZ
+41000006,E,Gear coupling 6306 2RS
+41000007,E,Gear coupling 32008
+41000008,E,V-belt 6306 2RS
+41000009,E,Ball bearing 32008
+41000010,E,Gear coupling size 4
+41000011,E,Taper roller bearing size 4
+41000012,E,V-belt size 4 306
+41000013,E,Gear coupling 6205 ZZ
+41000014,E,Gear coupling B-52 613
+41000015,E,Taper roller bearing B-52
+41000016,E,V-belt size 4 823
+41000017,E,Ball bearing 6306 2RS
+41000018,E,Gear coupling 32008 466
+41000019,E,V-belt 6306 2RS 925
+41000020,E,Gear coupling B-52 806
+41000021,E,Gear coupling 6205 ZZ 166
+41000022,E,Taper roller bearing 6205 ZZ
+41000023,E,Taper roller bearing 6306 2RS
+41000024,E,V-belt 6205 ZZ 415
+41000025,E,Gear coupling 6306 2RS 367
+41000026,E,Taper roller bearing size 4 190
+41000027,E,Taper roller bearing 32008
+41000028,E,Taper roller bearing 6205 ZZ 149
+41000029,E,Ball bearing B-52
+41000030,E,Gear coupling size 4 427
+41000031,E,V-belt size 4 645
+41000032,E,Taper roller bearing 6205 ZZ 807
+41000033,E,Ball bearing 6306 2RS 290
+41000034,E,Gear coupling 6306 2RS 535
+41000035,E,V-belt size 4 784
+41000036,E,Ball bearing 6205 ZZ 271
+41000037,E,Gear coupling 6205 ZZ 409
+41000038,E,Taper roller bearing 6306 2RS 996
+41000039,E,V-belt 32008 900
+41000040,E,Ball bearing size 4
+41000041,E,Gear coupling 6205 ZZ 937
+41000042,E,Gear coupling 32008 252
+41000043,E,Taper roller bearing B-52 656
+41000044,E,V-belt B-52
+41000045,E,V-belt 32008 254
+41000046,E,Ball bearing size 4 422
+41000047,E,Ball bearing size 4 647
+41000048,E,Gear coupling 6205 ZZ 430
+41000049,E,V-belt size 4 706
+41000050,E,Gear coupling B-52 117
+41000051,E,Torque wrench 17-19
+41000052,E,Spanner double ended 10-11
+41000053,E,Torque wrench std
+41000054,E,Angle grinder 4 inch heavy duty
+41000055,E,Torque wrench std 522
+41000056,E,Torque wrench std 950
+41000057,E,Spanner double ended 10-11 822
+41000058,E,Impact wrench 1/2 inch 10-11
+41000059,E,Impact wrench 1/2 inch 10-11 767
+41000060,E,Torque wrench heavy duty
+41000061,E,Impact wrench 1/2 inch heavy duty
+41000062,E,Spanner double ended std
+41000063,E,Spanner double ended 10-11 385
+41000064,E,Spanner double ended 10-11 751
+41000065,E,Torque wrench 10-11
+41000066,E,Torque wrench 17-19 984
+41000067,E,Torque wrench heavy duty 356
+41000068,E,Impact wrench 1/2 inch heavy duty 166
+41000069,E,Spanner double ended heavy duty
+41000070,E,Spanner double ended 17-19
+41000071,E,Spanner double ended std 384
+41000072,E,Torque wrench 17-19 588
+41000073,E,Angle grinder 4 inch 17-19
+41000074,E,Angle grinder 4 inch heavy duty 522
+41000075,E,Angle grinder 4 inch std
+41000076,E,Angle grinder 4 inch std 979
+41000077,E,Impact wrench 1/2 inch heavy duty 569
+41000078,E,Angle grinder 4 inch 17-19 661
+41000079,E,Torque wrench std 887
+41000080,E,Impact wrench 1/2 inch 10-11 850
+41000081,E,Torque wrench 17-19 973
+41000082,E,Torque wrench 17-19 440
+41000083,E,Spanner double ended heavy duty 470
+41000084,E,Angle grinder 4 inch 17-19 627
+41000085,E,Spanner double ended heavy duty 919
+41000086,E,Impact wrench 1/2 inch 10-11 345
+41000087,E,Torque wrench heavy duty 131
+41000088,E,Spanner double ended heavy duty 928
+41000089,E,Angle grinder 4 inch heavy duty 471
+41000090,E,Impact wrench 1/2 inch 10-11 923
+41000091,E,Grinding wheel 100 mm
+41000092,E,Emery paper 3.15 mm
+41000093,E,Grinding wheel 3.15 mm
+41000094,E,Emery paper 100 mm
+41000095,E,Flap disc 120 grit
+41000096,E,Flap disc 180x6x22
+41000097,E,Grinding wheel 180x6x22
+41000098,E,Emery paper 100 mm 109
+41000099,E,Welding electrode E6013 180x6x22
+41000100,E,Welding electrode E6013 100 mm
+41000101,E,Welding electrode E6013 100 mm 604
+41000102,E,Emery paper 100 mm 543
+41000103,E,Emery paper 3.15 mm 385
+41000104,E,Welding electrode E6013 180x6x22 353
+41000105,E,Emery paper 3.15 mm 915
+41000106,E,Grinding wheel 180x6x22 687
+41000107,E,Grinding wheel 100 mm 169
+41000108,E,Emery paper 3.15 mm 494
+41000109,E,Grinding wheel 3.15 mm 490
+41000110,E,Welding electrode E6013 180x6x22 838
+41000111,E,Flap disc 120 grit 775
+41000112,E,Emery paper 100 mm 674
+41000113,E,Emery paper 3.15 mm 699
+41000114,E,Grinding wheel 120 grit
+41000115,E,Welding electrode E6013 100 mm 365
+41000116,E,Flap disc 100 mm
+41000117,E,Grinding wheel 120 grit 656
+41000118,E,Grinding wheel 120 grit 857
+41000119,E,Grinding wheel 180x6x22 788
+41000120,E,Flap disc 100 mm 251
+41000121,E,Grinding wheel 3.15 mm 840
+41000122,E,Welding electrode E6013 180x6x22 413
+41000123,E,Flap disc 120 grit 234
+41000124,E,Emery paper 180x6x22
+41000125,E,Grinding wheel 3.15 mm 897
+41000126,E,Solenoid valve 5/2 1 inch
+41000127,E,Pneumatic cylinder std
+41000128,E,Ball valve SS 50x100
+41000129,E,Solenoid valve 5/2 std
+41000130,E,Pneumatic cylinder 50x100
+41000131,E,Ball valve SS 24V DC
+41000132,E,Solenoid valve 5/2 50x100
+41000133,E,Ball valve SS 24V DC 867
+41000134,E,Solenoid valve 5/2 50x100 166
+41000135,E,Pneumatic cylinder std 470
+41000136,E,Air filter element compressor 1 inch
+41000137,E,Ball valve SS std
+41000138,E,Air filter element compressor 50x100
+41000139,E,Ball valve SS 50x100 905
+41000140,E,Solenoid valve 5/2 50x100 753
+41000141,E,Ball valve SS 1 inch
+41000142,E,Solenoid valve 5/2 50x100 404
+41000143,E,Solenoid valve 5/2 50x100 673
+41000144,E,Solenoid valve 5/2 50x100 525
+41000145,E,Air filter element compressor std
+41000146,E,Ball valve SS 50x100 719
+41000147,E,Solenoid valve 5/2 1 inch 824
+41000148,E,Air filter element compressor 24V DC
+41000149,E,Solenoid valve 5/2 1 inch 536
+41000150,E,Ball valve SS 24V DC 958
+41000151,E,Pneumatic cylinder 1 inch
+41000152,E,Solenoid valve 5/2 50x100 816
+41000153,E,Ball valve SS 50x100 408
+41000154,E,Air filter element compressor std 439
+41000155,E,Ball valve SS 24V DC 530
+41000156,E,Pneumatic cylinder 1 inch 129
+41000157,E,Ball valve SS 24V DC 189
+41000158,E,Solenoid valve 5/2 50x100 465
+41000159,E,Air filter element compressor 1 inc 422
+41000160,E,Ball valve SS 1 inch 411
+41000161,E,Air filter element compressor 24V D 570
+41000162,E,Ball valve SS std 211
+41000163,E,Pneumatic cylinder 50x100 199
+41000164,E,Ball valve SS 24V DC 925
+41000165,E,Pneumatic cylinder 1 inch 505
+41000166,E,Dial gauge 0-10 mm
+41000167,E,Control cable 4C x 2.5 3-pole
+41000168,E,Contactor 32A 0-10 mm
+41000169,E,Contactor 32A 3-pole
+41000170,E,Contactor 32A 0-10 mm 697
+41000171,E,Dial gauge 0-10 mm 882
+41000172,E,Induction motor 5.5 kW
+41000173,E,Induction motor 3-pole
+41000174,E,Induction motor 0-10 mm
+41000175,E,Dial gauge 5.5 kW
+41000176,E,Contactor 32A per metre
+41000177,E,Induction motor 3-pole 257
+41000178,E,Dial gauge 0-10 mm 889
+41000179,E,Dial gauge 0-10 mm 581
+41000180,E,Induction motor per metre
+41000181,E,Contactor 32A 0-10 mm 722
+41000182,E,Induction motor 3-pole 329
+41000183,E,Contactor 32A 3-pole 537
+41000184,E,Dial gauge per metre
+41000185,E,Dial gauge per metre 763
+41000186,E,Induction motor per metre 796
+41000187,E,Dial gauge 0-10 mm 104
+41000188,E,Contactor 32A 0-10 mm 208
+41000189,E,Control cable 4C x 2.5 3-pole 569
+41000190,E,Induction motor per metre 354
+41000191,E,Dial gauge 0-10 mm 992
+41000192,E,Induction motor 0-10 mm 422
+41000193,E,Dial gauge per metre 429
+41000194,E,Contactor 32A 5.5 kW
+41000195,E,Induction motor 3-pole 210
+41000196,E,Dial gauge 5.5 kW 520
+41000197,E,Dial gauge 0-10 mm 907
+41000198,E,Induction motor 5.5 kW 482
+41000199,E,Induction motor 3-pole 817
+41000200,E,Induction motor per metre 162
+42000001,E,Hydraulic oil ISO VG 68 210 L
+42000002,E,Gear oil EP 220 50 L
+42000003,E,Die release agent concentrate 20 L
+42000004,E,Soluble cutting oil 20 L
+42000005,E,Gear oil EP 220 20 L
+42000006,E,Hydraulic oil ISO VG 68 210 L 535
+42000007,E,Way lube oil ISO VG 68 50 L
+42000008,E,Gear oil EP 220 20 L 868
+42000009,E,Die release agent concentrate 20 L 884
+42000010,E,Hydraulic oil ISO VG 68 20 L
+42000011,E,Hydraulic oil ISO VG 68 210 L 465
+42000012,E,Die release agent concentrate 20 L 597
+42000013,E,Die release agent concentrate 210 L
+42000014,E,Soluble cutting oil 210 L
+42000015,E,Gear oil EP 220 20 L 494
+42000016,E,Gear oil EP 220 20 L 687
+42000017,E,Hydraulic oil ISO VG 68 50 L
+42000018,E,Soluble cutting oil 210 L 274
+42000019,E,Way lube oil ISO VG 68 20 L
+42000020,E,Die release agent concentrate 20 L 278
+42500001,E,Primer red oxide 50 kg
+42500002,E,Cold box binder part 1 20 kg
+42500003,E,Thinner NC 20 kg
+42500004,E,Cold box binder part 1 50 kg
+42500005,E,Thinner NC 50 kg
+42500006,E,Cold box binder part 1 50 kg 171
+42500007,E,Alkaline degreaser 20 kg
+42500008,E,Primer red oxide 20 kg
+42500009,E,Alkaline degreaser std
+42500010,E,Primer red oxide std
+42500011,E,Cold box binder part 1 50 kg 729
+42500012,E,Thinner NC std
+42500013,E,Thinner NC std 169
+42500014,E,Alkaline degreaser std 471
+42500015,E,Cold box binder part 1 50 kg 615
+43000001,E,HPDC die set oil pump cover
+43000002,E,Trim die set clutch housing
+43000003,E,Trim die set motor end shield
+43000004,E,Trim die set oil pump cover
+43000005,E,Trim die set gearbox housing
+43000006,E,HPDC die set motor end shield
+43000007,E,Trim die set clutch housing 543
+43000008,E,HPDC die set motor end shield 327
+43000009,E,HPDC die set gearbox housing
+43000010,E,HPDC die set clutch housing
+43000011,E,HPDC die set motor end shield 640
+43000012,E,Trim die set gearbox housing 562
+43000013,E,HPDC die set oil pump cover 113
+43000014,E,Trim die set clutch housing 342
+43000015,E,HPDC die set gearbox housing 164
+43500001,E,Reamer carbide 8.5 mm
+43500002,E,Reamer carbide std
+43500003,E,Turning insert holder PCLNR 2525
+43500004,E,Carbide drill PCLNR 2525
+43500005,E,Carbide drill PCLNR 2525 151
+43500006,E,Turning insert holder 12 H7
+43500007,E,Turning insert holder std
+43500008,E,Turning insert holder 8.5 mm
+43500009,E,Reamer carbide PCLNR 2525
+43500010,E,Reamer carbide std 544
+43500011,E,Turning insert holder 12 H7 222
+43500012,E,Tool holder BT40 ER32 std
+43500013,E,Turning insert holder std 908
+43500014,E,Turning insert holder 8.5 mm 135
+43500015,E,Tool holder BT40 ER32 8.5 mm
+43500016,E,Reamer carbide std 378
+43500017,E,Tool holder BT40 ER32 PCLNR 2525
+43500018,E,Carbide drill PCLNR 2525 140
+43500019,E,Turning insert holder std 752
+43500020,E,Carbide drill 12 H7
+43500021,E,Tool holder BT40 ER32 8.5 mm 909
+43500022,E,Carbide drill std
+43500023,E,Tool holder BT40 ER32 12 H7
+43500024,E,Turning insert holder 12 H7 284
+43500025,E,Tool holder BT40 ER32 PCLNR 2525 842
+43500026,E,Carbide drill 8.5 mm
+43500027,E,Turning insert holder PCLNR 2525 546
+43500028,E,Carbide drill 8.5 mm 835
+43500029,E,Carbide drill std 752
+43500030,E,Turning insert holder 8.5 mm 670
+43500031,E,Tool holder BT40 ER32 12 H7 270
+43500032,E,Carbide drill std 738
+43500033,E,Turning insert holder 8.5 mm 681
+43500034,E,Reamer carbide std 921
+43500035,E,Reamer carbide 12 H7
+43500036,E,Carbide drill std 977
+43500037,E,Reamer carbide 12 H7 665
+43500038,E,Tool holder BT40 ER32 PCLNR 2525 987
+43500039,E,Tool holder BT40 ER32 PCLNR 2525 855
+43500040,E,Turning insert holder std 895
+43500041,E,Turning insert holder 12 H7 114
+43500042,E,Tool holder BT40 ER32 8.5 mm 822
+43500043,E,Carbide drill 8.5 mm 821
+43500044,E,Turning insert holder PCLNR 2525 114
+43500045,E,Turning insert holder PCLNR 2525 249
+44000001,E,Network switch 24 port
+44000002,E,Laptop i5 16GB 512GB
+44000003,E,Barcode label printer
+44000004,E,Barcode label printer PoE
+44000005,E,Network switch 24 port PoE
+44000006,E,Monitor 24 inch PoE
+44000007,E,Barcode label printer PoE 762
+44000008,E,Monitor 24 inch PoE 340
+44000009,E,Laptop i5 16GB 512GB industrial
+44000010,E,Barcode label printer industrial
+44000011,E,Laptop i5 16GB 512GB PoE
+44000012,E,Network switch 24 port 480
+44000013,E,Laptop i5 16GB 512GB PoE 162
+44000014,E,Network switch 24 port PoE 805
+44000015,E,Monitor 24 inch PoE 730
+45000001,E,Fire extinguisher ABC 6 kg
+45000002,E,Fire extinguisher CO2 4.5 kg
+45000003,E,Fire extinguisher CO2 4.5 kg 535
+45000004,E,Fire extinguisher ABC 6 kg 759
+45000005,E,Fire extinguisher CO2 4.5 kg 406
+45000006,E,Fire extinguisher CO2 4.5 kg 729
+45000007,E,Toner cartridge laser
+45000008,E,Toner cartridge laser 837
+45000009,E,Toner cartridge laser 805
+45000010,E,Fire extinguisher ABC 6 kg 327
+45000011,E,Fire extinguisher CO2 4.5 kg 931
+45000012,E,Toner cartridge laser 236
+45000013,E,Fire extinguisher CO2 4.5 kg 530
+45000014,E,Fire extinguisher ABC 6 kg 607
+45000015,E,Fire extinguisher CO2 4.5 kg 694
+51000001,E,Courier charges Hosur-Pune
+51000002,E,Courier charges Bidadi-Hosur
+51000003,E,Freight FTL 32 ft Hosur-Chennai port
+51000004,E,Freight 20 ft container Hosur-Chennai po
+51000005,E,Freight FTL 32 ft Hosur-Pune
+51000006,E,Courier charges Bidadi-Hosur 915
+51000007,E,Milk run trip Hosur-Chennai port
+51000008,E,Freight 20 ft container Hosur-Pune
+51000009,E,Milk run trip Hosur-Chennai port 263
+51000010,E,Freight 20 ft container Hosur-Pune 499
+51000011,E,Milk run trip Oragadam-Bidadi
+51000012,E,Milk run trip Hosur-Pune
+51000013,E,Freight FTL 32 ft Hosur-Chennai por 697
+51000014,E,Milk run trip Oragadam-Bidadi 428
+51100001,E,Housekeeping services per month Oragadam
+51100002,E,Housekeeping services per month Bidadi
+51100003,E,Security services per month Oragadam
+51100004,E,Housekeeping services per month Bid 348
+51100005,E,Manpower supply per month Hosur
+51100006,E,Housekeeping services per month Hosur
+51100007,E,Pest control services per month Oragadam
+51100008,E,Pest control services per month Hosur
+51100009,E,Manpower supply per month Oragadam
+51100010,E,Manpower supply per month Hosur 283
+51100011,E,Housekeeping services per month Bid 380
+51100012,E,Pest control services per month Bidadi
+51200001,E,IT onsite support per month Bidadi
+51200002,E,Leased line per month Hosur
+51200003,E,Leased line per month Bidadi
+51200004,E,Network management per month Hosur
+51200005,E,IT onsite support per month Bidadi 418
+51200006,E,IT onsite support per month Bidadi 459
+51200007,E,Network management per month Bidadi
+51200008,E,IT onsite support per month Oragadam
+51300001,E,CAD licence annual
+51300002,E,MES subscription annual
+51300003,E,MES subscription annual 490
+51300004,E,MES subscription annual 757
+51300005,E,CAD licence annual seat pack
+51300006,E,MES subscription annual seat pack
+51400001,E,Calibration per instrument NABL
+51400002,E,Material testing per sample NABL
+51400003,E,Material testing per sample NABL 316
+51400004,E,Calibration per instrument std
+51400005,E,Calibration per instrument std 834
+51400006,E,Calibration per instrument NABL 788
+51400007,E,Material testing per sample NABL 491
+51400008,E,Calibration per instrument NABL 215
+51500001,E,Consulting per man-day lean
+51500002,E,Consulting per man-day lean 194
+51500003,E,Consulting per man-day lean 734
+51500004,E,Engineering design per day lean
+51500005,E,Engineering design per day tooling
+51500006,E,Engineering design per day tooling 783
+51600001,E,Machine repair per call press
+51600002,E,Installation of machine HPDC
+51600003,E,Installation of machine HPDC 544
+51600004,E,Die maintenance per visit CNC
+51600005,E,Die maintenance per visit press
+51600006,E,Installation of machine press
+51600007,E,Machine repair per call CNC
+51600008,E,Installation of machine CNC
+51600009,E,Installation of machine CNC 849
+51600010,E,Machine repair per call HPDC
