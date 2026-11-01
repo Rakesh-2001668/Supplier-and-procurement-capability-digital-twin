@@ -2,6 +2,7 @@
 
 Supplier-portal users only ever see documents of their own company.
 """
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -14,6 +15,7 @@ from app.pic.models import (
     Invoice, InvoiceException, Material, MaterialRequest, MrpRun, Plant, PlannedOrder, ProcessDefinition, ProcessInstance,
     PurchaseOrder, Requisition, ServiceEntry, SourcingEvent, Supplier, SupplierCategoryStatus,
 )
+from app.pic.platform import clock
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.serialize import jsonable, row
 
@@ -82,15 +84,28 @@ def sourcing_events(status: Optional[str] = None, page: Page = Depends(), p: Pri
 
 
 @router.get("/contracts")
-def contracts(status: Optional[str] = None, page: Page = Depends(), p: Principal = Depends(PORTAL)):
+def contracts(status: Optional[str] = None, supplier: Optional[str] = None, type: Optional[str] = None, q: Optional[str] = None,
+              expiring_within_days: Optional[int] = None, page: Page = Depends(), p: Principal = Depends(PORTAL)):
+    """The contract repository. Filters: status, supplier code, type, free text (number or title), contracts ending within N days."""
     with uow(p) as s:
         codes = _supplier_codes(s)
-        q = select(Contract)
+        query = select(Contract)
         if status:
-            q = q.where(Contract.status == status.upper())
+            query = query.where(Contract.status.in_([x.strip().upper() for x in status.split(",") if x.strip()]))
+        if supplier:
+            query = query.where(Contract.supplier_id.in_([k for k, v in codes.items() if v == supplier]))
+        if type:
+            query = query.where(Contract.type == type.upper())
+        if q and q.strip():
+            like = f"%{q.strip()}%"
+            query = query.where(Contract.number.ilike(like) | Contract.title.ilike(like))
+        if expiring_within_days is not None:
+            today = clock.today()
+            query = query.where(Contract.status.in_(("ACTIVE", "EXPIRING")), Contract.valid_to >= today,
+                                Contract.valid_to <= today + timedelta(days=max(0, expiring_within_days)))
         if _is_supplier(p):
-            q = q.where(Contract.supplier_id == p.supplier_id)
-        return paginate(s, q, Contract, page, _with_supplier(codes))
+            query = query.where(Contract.supplier_id == p.supplier_id, Contract.status != "DRAFT")  # a draft is internal work
+        return paginate(s, query, Contract, page, _with_supplier(codes))
 
 
 @router.get("/purchase-orders")
@@ -277,7 +292,7 @@ def reference_data(p: Principal = Depends(PORTAL)):
         if _is_supplier(p):
             own = select(CatalogueItem).where(CatalogueItem.active.is_(True), CatalogueItem.supplier_id == p.supplier_id)
             return {
-                "plants": [{"code": x.code, "name": x.name} for x in s.execute(select(Plant).order_by(Plant.code)).scalars()],
+                "plants": [{"code": x.code, "name": x.name} for x in s.execute(select(Plant).where(Plant.active.is_(True)).order_by(Plant.code)).scalars()],
                 "costObjects": [],
                 "materials": [{"number": m.number, "description": m.description, "uom": m.base_uom, "type": m.type, "category": m.category}
                               for m in s.execute(select(Material).order_by(Material.number)).scalars()],
@@ -286,8 +301,8 @@ def reference_data(p: Principal = Depends(PORTAL)):
                                "category": c.category} for c in s.execute(own).scalars()],
             }
         return {
-            "plants": [{"code": x.code, "name": x.name} for x in s.execute(select(Plant).order_by(Plant.code)).scalars()],
-            "costObjects": [{"type": x.type, "code": x.code, "name": x.name} for x in s.execute(select(CostObject).order_by(CostObject.code)).scalars()],
+            "plants": [{"code": x.code, "name": x.name} for x in s.execute(select(Plant).where(Plant.active.is_(True)).order_by(Plant.code)).scalars()],
+            "costObjects": [{"type": x.type, "code": x.code, "name": x.name} for x in s.execute(select(CostObject).where(CostObject.active.is_(True)).order_by(CostObject.code)).scalars()],
             "materials": [{"number": m.number, "description": m.description, "uom": m.base_uom, "type": m.type, "category": m.category,
                            "standardPriceMinor": m.standard_price_minor} for m in s.execute(select(Material).order_by(Material.number)).scalars()],
             "suppliers": [] if _is_supplier(p) else [{"code": x.code, "name": x.legal_name, "status": x.status}

@@ -148,7 +148,9 @@ def test_first_tick_creates_the_rows_and_runs_nothing(wja):
 
 def test_due_jobs_run_record_and_reschedule(wja, monkeypatch):
     jobs.run_due(wja)
-    later = datetime.now(UTC) + timedelta(days=3)
+    # 40 days is past the next run of every registered job, including the monthly and weekly ones (3 days made the count depend
+    # on the day of the week and month the suite runs on)
+    later = datetime.now(UTC) + timedelta(days=40)
     monkeypatch.setattr(jobs, "_now", lambda: later)
     before = observability.JOB_RUNS.value("payment-due", "SUCCESS")
     ran = jobs.run_due(wja)
@@ -710,8 +712,9 @@ def test_delegation_api(client, login, wja):
     assert again.json()["id"] == r.json()["id"] and again.json().get("replayed") is True
     assert client.post("/v1/me/delegations", json={**body, "reason": "x"}, headers=ph).status_code == 422
     mine = client.get("/v1/me/delegations", headers=ph).json()
-    assert [d["id"] for d in mine["given"]] == [r.json()["id"]]
-    assert [d["id"] for d in client.get("/v1/me/delegations", headers=login("deputy2@wja1.example", "WJA1")).json()["received"]] == [r.json()["id"]]
+    # earlier tests of this module leave their own delegations of the same people in the tenant: the new one is in the lists
+    assert r.json()["id"] in [d["id"] for d in mine["given"]]
+    assert r.json()["id"] in [d["id"] for d in client.get("/v1/me/delegations", headers=login("deputy2@wja1.example", "WJA1")).json()["received"]]
     assert client.get("/v1/admin/delegations", headers=buyer).status_code == 403
     overview = client.get("/v1/admin/delegations?status=ACTIVE", headers=admin).json()
     assert any(d["id"] == r.json()["id"] for d in overview)

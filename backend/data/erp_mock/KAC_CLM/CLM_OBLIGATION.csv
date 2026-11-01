@@ -1,0 +1,366 @@
+CONTRACT_NO,KIND,PARTY,DESCRIPTION,DUE_DATE,STATUS,COMPLETED_ON,NOTE
+KAC-MA-0001,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2024-07-31,DONE,2024-07-30,Evidence received and filed in the contract record.
+KAC-MA-0001,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2024-08-15,DONE,2024-08-15,Evidence received and filed in the contract record.
+KAC-MA-0001,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2024-12-28,DONE,2024-12-23,Evidence received and filed in the contract record.
+KAC-MA-0001,OBLIGATION,BUYER,Annual review of the master agreement terms,2025-05-27,DONE,2025-05-24,Evidence received and filed in the contract record.
+KAC-MA-0001,OBLIGATION,BUYER,Quarterly business review,2024-09-29,DONE,2024-09-25,Evidence received and filed in the contract record.
+KAC-MA-0001,OBLIGATION,BUYER,Quarterly business review,2025-03-28,DONE,2025-03-27,Evidence received and filed in the contract record.
+KAC-MA-0001,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-12-28,DONE,2025-12-24,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-05-01,DONE,2025-04-28,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-05-16,DONE,2025-05-10,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-09-28,DONE,2025-09-23,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-02-25,DONE,2026-02-25,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,BUYER,Quarterly business review,2025-06-30,DONE,2025-06-30,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,BUYER,Quarterly business review,2025-12-27,DONE,2025-12-27,Evidence received and filed in the contract record.
+KAC-MA-0002,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-09-28,DONE,2026-09-23,Evidence received and filed in the contract record.
+KAC-MA-0003,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-05-01,DONE,2025-04-27,Evidence received and filed in the contract record.
+KAC-MA-0003,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-05-16,DONE,2025-05-13,Evidence received and filed in the contract record.
+KAC-MA-0003,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-09-28,OPEN,,
+KAC-MA-0003,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-02-25,DONE,2026-03-19,Received after the due date; reminder sent.
+KAC-MA-0003,OBLIGATION,BUYER,Quarterly business review,2025-06-30,OPEN,,
+KAC-MA-0003,OBLIGATION,BUYER,Quarterly business review,2025-12-27,DONE,2026-01-20,Received after the due date; reminder sent.
+KAC-MA-0003,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-09-28,DONE,2026-09-22,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2024-07-31,DONE,2024-07-27,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2024-08-15,DONE,2024-08-09,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2024-12-28,DONE,2024-12-23,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,BUYER,Annual review of the master agreement terms,2025-05-27,DONE,2025-05-26,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,BUYER,Quarterly business review,2024-09-29,DONE,2024-09-27,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,BUYER,Quarterly business review,2025-03-28,DONE,2025-03-28,Evidence received and filed in the contract record.
+KAC-MA-0004,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-12-28,DONE,2025-12-28,Evidence received and filed in the contract record.
+KAC-MA-0005,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-10-31,DONE,2025-11-13,Received after the due date; reminder sent.
+KAC-MA-0005,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-11-15,DONE,2025-11-12,Evidence received and filed in the contract record.
+KAC-MA-0005,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-03-30,DONE,2026-03-30,Evidence received and filed in the contract record.
+KAC-MA-0005,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-08-27,DONE,2026-08-24,Evidence received and filed in the contract record.
+KAC-MA-0005,OBLIGATION,BUYER,Quarterly business review,2025-12-30,OPEN,,
+KAC-MA-0005,OBLIGATION,BUYER,Quarterly business review,2026-06-28,DONE,2026-06-26,Evidence received and filed in the contract record.
+KAC-MA-0005,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2027-03-30,OPEN,,
+KAC-MA-0006,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2026-05-01,DONE,2026-04-25,Evidence received and filed in the contract record.
+KAC-MA-0006,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2026-05-16,DONE,2026-05-14,Evidence received and filed in the contract record.
+KAC-MA-0006,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-09-28,DONE,2026-10-17,Received after the due date; reminder sent.
+KAC-MA-0006,OBLIGATION,BUYER,Annual review of the master agreement terms,2027-02-25,OPEN,,
+KAC-MA-0006,OBLIGATION,BUYER,Quarterly business review,2026-06-30,OPEN,,
+KAC-MA-0006,OBLIGATION,BUYER,Quarterly business review,2026-12-27,OPEN,,
+KAC-MA-0006,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2027-09-28,OPEN,,
+KAC-MA-0007,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-10-31,DONE,2025-10-25,Evidence received and filed in the contract record.
+KAC-MA-0007,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-11-15,DONE,2025-11-14,Evidence received and filed in the contract record.
+KAC-MA-0007,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-03-30,DONE,2026-03-24,Evidence received and filed in the contract record.
+KAC-MA-0007,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-08-27,DONE,2026-08-26,Evidence received and filed in the contract record.
+KAC-MA-0007,OBLIGATION,BUYER,Quarterly business review,2025-12-30,DONE,2025-12-27,Evidence received and filed in the contract record.
+KAC-MA-0007,OBLIGATION,BUYER,Quarterly business review,2026-06-28,DONE,2026-06-26,Evidence received and filed in the contract record.
+KAC-MA-0007,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2027-03-30,OPEN,,
+KAC-MA-0008,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2024-02-18,DONE,2024-02-14,Evidence received and filed in the contract record.
+KAC-MA-0008,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2024-03-04,DONE,2024-02-29,Evidence received and filed in the contract record.
+KAC-MA-0008,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2024-07-17,DONE,2024-07-15,Evidence received and filed in the contract record.
+KAC-MA-0008,OBLIGATION,BUYER,Annual review of the master agreement terms,2024-12-14,DONE,2024-12-11,Evidence received and filed in the contract record.
+KAC-MA-0008,OBLIGATION,BUYER,Quarterly business review,2024-04-18,DONE,2024-04-15,Evidence received and filed in the contract record.
+KAC-MA-0008,OBLIGATION,BUYER,Quarterly business review,2024-10-15,DONE,2024-10-15,Evidence received and filed in the contract record.
+KAC-MA-0008,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-07-17,DONE,2025-07-13,Evidence received and filed in the contract record.
+KAC-MA-0009,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-05-01,OPEN,,
+KAC-MA-0009,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-05-16,DONE,2025-05-16,Evidence received and filed in the contract record.
+KAC-MA-0009,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-09-28,OPEN,,
+KAC-MA-0009,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-02-25,OPEN,,
+KAC-MA-0009,OBLIGATION,BUYER,Quarterly business review,2025-06-30,DONE,2025-07-09,Received after the due date; reminder sent.
+KAC-MA-0009,OBLIGATION,BUYER,Quarterly business review,2025-12-27,DONE,2025-12-23,Evidence received and filed in the contract record.
+KAC-MA-0009,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-09-28,DONE,2026-10-04,Received after the due date; reminder sent.
+KAC-MA-0010,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-10-31,DONE,2025-10-31,Evidence received and filed in the contract record.
+KAC-MA-0010,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-11-15,DONE,2025-11-09,Evidence received and filed in the contract record.
+KAC-MA-0010,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-03-30,DONE,2026-03-30,Evidence received and filed in the contract record.
+KAC-MA-0010,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-08-27,DONE,2026-08-21,Evidence received and filed in the contract record.
+KAC-MA-0010,OBLIGATION,BUYER,Quarterly business review,2025-12-30,DONE,2025-12-28,Evidence received and filed in the contract record.
+KAC-MA-0010,OBLIGATION,BUYER,Quarterly business review,2026-06-28,DONE,2026-06-23,Evidence received and filed in the contract record.
+KAC-MA-0010,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2027-03-30,OPEN,,
+KAC-MA-0011,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-05-01,DONE,2025-04-30,Evidence received and filed in the contract record.
+KAC-MA-0011,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-05-16,DONE,2025-05-10,Evidence received and filed in the contract record.
+KAC-MA-0011,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-09-28,DONE,2025-09-26,Evidence received and filed in the contract record.
+KAC-MA-0011,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-02-25,DONE,2026-02-20,Evidence received and filed in the contract record.
+KAC-MA-0011,OBLIGATION,BUYER,Quarterly business review,2025-06-30,DONE,2025-06-24,Evidence received and filed in the contract record.
+KAC-MA-0011,OBLIGATION,BUYER,Quarterly business review,2025-12-27,DONE,2025-12-26,Evidence received and filed in the contract record.
+KAC-MA-0011,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-09-28,DONE,2026-09-24,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2025-10-31,DONE,2025-10-26,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2025-11-15,DONE,2025-11-13,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-03-30,DONE,2026-03-28,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,BUYER,Annual review of the master agreement terms,2026-08-27,DONE,2026-08-22,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,BUYER,Quarterly business review,2025-12-30,DONE,2025-12-29,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,BUYER,Quarterly business review,2026-06-28,DONE,2026-06-23,Evidence received and filed in the contract record.
+KAC-MA-0012,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2027-03-30,OPEN,,
+KAC-MA-0013,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2026-05-01,DONE,2026-04-28,Evidence received and filed in the contract record.
+KAC-MA-0013,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2026-05-16,DONE,2026-05-14,Evidence received and filed in the contract record.
+KAC-MA-0013,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2026-09-28,DONE,2026-09-25,Evidence received and filed in the contract record.
+KAC-MA-0013,OBLIGATION,BUYER,Annual review of the master agreement terms,2027-02-25,OPEN,,
+KAC-MA-0013,OBLIGATION,BUYER,Quarterly business review,2026-06-30,DONE,2026-06-24,Evidence received and filed in the contract record.
+KAC-MA-0013,OBLIGATION,BUYER,Quarterly business review,2026-12-27,OPEN,,
+KAC-MA-0013,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2027-09-28,OPEN,,
+KAC-MA-0014,OBLIGATION,SUPPLIER,Submit insurance certificates and Udyam / MSME registration proof,2024-07-31,OPEN,,
+KAC-MA-0014,OBLIGATION,SUPPLIER,Acknowledge the Supplier Code of Conduct,2024-08-15,DONE,2024-08-09,Evidence received and filed in the contract record.
+KAC-MA-0014,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2024-12-28,DONE,2024-12-26,Evidence received and filed in the contract record.
+KAC-MA-0014,OBLIGATION,BUYER,Annual review of the master agreement terms,2025-05-27,OPEN,,
+KAC-MA-0014,OBLIGATION,BUYER,Quarterly business review,2024-09-29,DONE,2024-10-07,Received after the due date; reminder sent.
+KAC-MA-0014,OBLIGATION,BUYER,Quarterly business review,2025-03-28,DONE,2025-03-22,Evidence received and filed in the contract record.
+KAC-MA-0014,OBLIGATION,SUPPLIER,ESG and emissions self-assessment,2025-12-28,DONE,2025-12-22,Evidence received and filed in the contract record.
+KAC-NDA-0001,OBLIGATION,BUYER,Annual review of the NDA register entry,2027-03-01,OPEN,,
+KAC-NDA-0001,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2029-02-18,OPEN,,
+KAC-NDA-0002,OBLIGATION,BUYER,Annual review of the NDA register entry,2025-11-01,DONE,2025-10-29,Evidence received and filed in the contract record.
+KAC-NDA-0002,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2027-10-21,OPEN,,
+KAC-NDA-0003,OBLIGATION,BUYER,Annual review of the NDA register entry,2025-07-01,DONE,2025-06-26,Evidence received and filed in the contract record.
+KAC-NDA-0003,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2027-06-20,OPEN,,
+KAC-NDA-0004,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2026-11-09,OPEN,,
+KAC-NDA-0005,OBLIGATION,BUYER,Annual review of the NDA register entry,2025-07-01,DONE,2025-06-30,Evidence received and filed in the contract record.
+KAC-NDA-0005,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2027-06-20,OPEN,,
+KAC-NDA-0006,OBLIGATION,BUYER,Annual review of the NDA register entry,2025-09-01,DONE,2025-08-27,Evidence received and filed in the contract record.
+KAC-NDA-0006,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2027-08-21,OPEN,,
+KAC-NDA-0007,OBLIGATION,BUYER,Annual review of the NDA register entry,2025-09-01,DONE,2025-08-29,Evidence received and filed in the contract record.
+KAC-NDA-0007,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2026-08-21,DONE,2026-08-19,Evidence received and filed in the contract record.
+KAC-NDA-0008,OBLIGATION,BUYER,Annual review of the NDA register entry,2025-03-01,DONE,2025-02-24,Evidence received and filed in the contract record.
+KAC-NDA-0008,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2028-02-19,OPEN,,
+KAC-NDA-0009,OBLIGATION,BUYER,Annual review of the NDA register entry,2027-11-15,OPEN,,
+KAC-NDA-0009,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2029-11-04,OPEN,,
+KAC-NDA-0010,OBLIGATION,BUYER,Annual review of the NDA register entry,2027-06-01,OPEN,,
+KAC-NDA-0010,OBLIGATION,SUPPLIER,Confirm return or destruction of confidential information,2029-05-21,OPEN,,
+KAC-QC-0001,OBLIGATION,BUYER,Share the 13-week rolling forecast,2026-09-22,DONE,2026-09-18,Evidence received and filed in the contract record.
+KAC-QC-0001,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-12-14,OPEN,,
+KAC-QC-0001,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2027-03-14,OPEN,,
+KAC-QC-0001,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2027-06-12,OPEN,,
+KAC-QC-0001,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2027-08-11,OPEN,,
+KAC-QC-0002,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-11-22,OPEN,,
+KAC-QC-0002,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-02-13,DONE,2026-02-26,Received after the due date; reminder sent.
+KAC-QC-0002,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-05-14,OPEN,,
+KAC-QC-0002,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-08-12,DONE,2026-08-25,Received after the due date; reminder sent.
+KAC-QC-0002,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-10-11,DONE,2026-10-21,Received after the due date; reminder sent.
+KAC-QC-0003,OBLIGATION,BUYER,Share the 13-week rolling forecast,2026-01-21,DONE,2026-01-21,Evidence received and filed in the contract record.
+KAC-QC-0003,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-04-14,DONE,2026-04-11,Evidence received and filed in the contract record.
+KAC-QC-0003,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-07-13,DONE,2026-07-23,Received after the due date; reminder sent.
+KAC-QC-0003,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-10-11,DONE,2026-10-06,Evidence received and filed in the contract record.
+KAC-QC-0003,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-12-10,OPEN,,
+KAC-QC-0004,OBLIGATION,BUYER,Share the 13-week rolling forecast,2024-03-08,DONE,2024-03-02,Evidence received and filed in the contract record.
+KAC-QC-0004,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2024-05-30,DONE,2024-05-27,Evidence received and filed in the contract record.
+KAC-QC-0004,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2024-08-28,OPEN,,
+KAC-QC-0004,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2024-11-26,DONE,2024-12-12,Received after the due date; reminder sent.
+KAC-QC-0004,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2025-01-25,DONE,2025-01-21,Evidence received and filed in the contract record.
+KAC-QC-0005,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-04-08,DONE,2025-04-03,Evidence received and filed in the contract record.
+KAC-QC-0005,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-06-30,DONE,2025-06-30,Evidence received and filed in the contract record.
+KAC-QC-0005,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-09-28,DONE,2025-10-08,Received after the due date; reminder sent.
+KAC-QC-0005,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-12-27,DONE,2025-12-23,Evidence received and filed in the contract record.
+KAC-QC-0005,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-02-25,DONE,2026-02-21,Evidence received and filed in the contract record.
+KAC-QC-0006,OBLIGATION,BUYER,Share the 13-week rolling forecast,2026-01-29,DONE,2026-01-28,Evidence received and filed in the contract record.
+KAC-QC-0006,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-04-22,OPEN,,
+KAC-QC-0006,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-07-21,DONE,2026-07-18,Evidence received and filed in the contract record.
+KAC-QC-0006,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-10-19,DONE,2026-10-18,Evidence received and filed in the contract record.
+KAC-QC-0006,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-12-18,OPEN,,
+KAC-QC-0007,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-10-23,DONE,2025-10-19,Evidence received and filed in the contract record.
+KAC-QC-0007,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-01-14,DONE,2026-01-11,Evidence received and filed in the contract record.
+KAC-QC-0007,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-04-14,DONE,2026-04-10,Evidence received and filed in the contract record.
+KAC-QC-0007,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-07-13,DONE,2026-07-11,Evidence received and filed in the contract record.
+KAC-QC-0007,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-09-11,OPEN,,
+KAC-QC-0008,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-08-03,DONE,2025-08-19,Received after the due date; reminder sent.
+KAC-QC-0008,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-10-25,DONE,2025-10-24,Evidence received and filed in the contract record.
+KAC-QC-0008,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-01-23,DONE,2026-02-08,Received after the due date; reminder sent.
+KAC-QC-0008,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-04-23,OPEN,,
+KAC-QC-0008,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-06-22,OPEN,,
+KAC-RC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-09-22,DONE,2025-09-18,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-10-22,DONE,2025-10-17,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-11-21,DONE,2025-11-19,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-12-21,DONE,2025-12-16,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2026-01-20,DONE,2026-01-20,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2026-02-19,DONE,2026-02-18,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,BUYER,Quarterly business review,2025-11-21,DONE,2025-11-15,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,BUYER,Quarterly business review,2026-02-19,DONE,2026-02-16,Evidence received and filed in the contract record.
+KAC-RC-0001,OBLIGATION,BUYER,Annual review of the rate card against market rates,2026-07-19,DONE,2026-07-13,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2025-11-14,DONE,2025-11-11,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2025-12-14,DONE,2025-12-08,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-01-13,DONE,2026-01-12,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-02-12,DONE,2026-02-09,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-03-14,DONE,2026-03-14,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-04-13,DONE,2026-04-10,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,BUYER,Quarterly business review,2026-01-13,DONE,2026-01-07,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,BUYER,Quarterly business review,2026-04-13,DONE,2026-04-08,Evidence received and filed in the contract record.
+KAC-RC-0002,OBLIGATION,BUYER,Annual review of the rate card against market rates,2026-09-10,DONE,2026-09-08,Evidence received and filed in the contract record.
+KAC-RC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-07-31,DONE,2026-07-27,Evidence received and filed in the contract record.
+KAC-RC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-08-30,OPEN,,
+KAC-RC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-09-29,DONE,2026-09-29,Evidence received and filed in the contract record.
+KAC-RC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-10-29,DONE,2026-10-28,Evidence received and filed in the contract record.
+KAC-RC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-11-28,OPEN,,
+KAC-RC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-12-28,OPEN,,
+KAC-RC-0003,OBLIGATION,BUYER,Quarterly business review,2026-09-29,DONE,2026-10-07,Received after the due date; reminder sent.
+KAC-RC-0003,OBLIGATION,BUYER,Quarterly business review,2026-12-28,OPEN,,
+KAC-RC-0003,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-07-31,DONE,2026-07-27,Evidence received and filed in the contract record.
+KAC-RC-0003,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-08-30,DONE,2026-08-25,Evidence received and filed in the contract record.
+KAC-RC-0003,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-09-29,OPEN,,
+KAC-RC-0003,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-10-29,OPEN,,
+KAC-RC-0003,OBLIGATION,BUYER,Annual review of the rate card against market rates,2027-05-27,OPEN,,
+KAC-RC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2024-10-01,DONE,2024-09-27,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2024-10-31,DONE,2024-10-31,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2024-11-30,DONE,2024-11-28,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2024-12-30,DONE,2024-12-26,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2025-01-29,DONE,2025-01-24,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2025-02-28,DONE,2025-02-27,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,BUYER,Quarterly business review,2024-11-30,DONE,2024-11-27,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,BUYER,Quarterly business review,2025-02-28,DONE,2025-02-22,Evidence received and filed in the contract record.
+KAC-RC-0004,OBLIGATION,BUYER,Annual review of the rate card against market rates,2025-07-28,DONE,2025-07-27,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-12-29,DONE,2025-12-29,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2026-01-28,DONE,2026-01-25,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2026-02-27,DONE,2026-02-24,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2026-03-29,DONE,2026-03-29,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2026-04-28,DONE,2026-04-24,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2026-05-28,DONE,2026-05-22,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,BUYER,Quarterly business review,2026-02-27,DONE,2026-02-23,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,BUYER,Quarterly business review,2026-05-28,DONE,2026-05-25,Evidence received and filed in the contract record.
+KAC-RC-0005,OBLIGATION,BUYER,Annual review of the rate card against market rates,2026-10-25,DONE,2026-10-19,Evidence received and filed in the contract record.
+KAC-RC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2024-12-11,OPEN,,
+KAC-RC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-01-10,DONE,2025-01-05,Evidence received and filed in the contract record.
+KAC-RC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-02-09,DONE,2025-02-06,Evidence received and filed in the contract record.
+KAC-RC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-03-11,DONE,2025-03-09,Evidence received and filed in the contract record.
+KAC-RC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-04-10,DONE,2025-04-19,Received after the due date; reminder sent.
+KAC-RC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-05-10,DONE,2025-05-09,Evidence received and filed in the contract record.
+KAC-RC-0006,OBLIGATION,BUYER,Quarterly business review,2025-02-09,DONE,2025-02-06,Evidence received and filed in the contract record.
+KAC-RC-0006,OBLIGATION,BUYER,Quarterly business review,2025-05-10,DONE,2025-05-25,Received after the due date; reminder sent.
+KAC-RC-0006,OBLIGATION,BUYER,Annual review of the rate card against market rates,2025-10-07,DONE,2025-10-06,Evidence received and filed in the contract record.
+KAC-RC-0007,OBLIGATION,SUPPLIER,Monthly service-level report,2026-12-31,OPEN,,
+KAC-RC-0007,OBLIGATION,SUPPLIER,Monthly service-level report,2027-01-30,OPEN,,
+KAC-RC-0007,OBLIGATION,SUPPLIER,Monthly service-level report,2027-03-01,OPEN,,
+KAC-RC-0007,OBLIGATION,SUPPLIER,Monthly service-level report,2027-03-31,OPEN,,
+KAC-RC-0007,OBLIGATION,SUPPLIER,Monthly service-level report,2027-04-30,OPEN,,
+KAC-RC-0007,OBLIGATION,SUPPLIER,Monthly service-level report,2027-05-30,OPEN,,
+KAC-RC-0007,OBLIGATION,BUYER,Quarterly business review,2027-03-01,OPEN,,
+KAC-RC-0007,OBLIGATION,BUYER,Quarterly business review,2027-05-30,OPEN,,
+KAC-RC-0007,OBLIGATION,BUYER,Annual review of the rate card against market rates,2027-10-27,OPEN,,
+KAC-RC-0008,OBLIGATION,SUPPLIER,Monthly service-level report,2025-10-31,DONE,2025-10-30,Evidence received and filed in the contract record.
+KAC-RC-0008,OBLIGATION,SUPPLIER,Monthly service-level report,2025-11-30,OPEN,,
+KAC-RC-0008,OBLIGATION,SUPPLIER,Monthly service-level report,2025-12-30,DONE,2025-12-27,Evidence received and filed in the contract record.
+KAC-RC-0008,OBLIGATION,SUPPLIER,Monthly service-level report,2026-01-29,DONE,2026-01-26,Evidence received and filed in the contract record.
+KAC-RC-0008,OBLIGATION,SUPPLIER,Monthly service-level report,2026-02-28,DONE,2026-03-12,Received after the due date; reminder sent.
+KAC-RC-0008,OBLIGATION,SUPPLIER,Monthly service-level report,2026-03-30,OPEN,,
+KAC-RC-0008,OBLIGATION,BUYER,Quarterly business review,2025-12-30,DONE,2026-01-17,Received after the due date; reminder sent.
+KAC-RC-0008,OBLIGATION,BUYER,Quarterly business review,2026-03-30,DONE,2026-04-22,Received after the due date; reminder sent.
+KAC-RC-0008,OBLIGATION,BUYER,Annual review of the rate card against market rates,2026-08-27,DONE,2026-08-24,Evidence received and filed in the contract record.
+KAC-SA-0001,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-01-01,DONE,2024-12-28,Evidence received and filed in the contract record.
+KAC-SA-0001,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-03-25,DONE,2025-03-22,Evidence received and filed in the contract record.
+KAC-SA-0001,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-06-23,DONE,2025-07-09,Received after the due date; reminder sent.
+KAC-SA-0001,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-09-21,DONE,2025-09-16,Evidence received and filed in the contract record.
+KAC-SA-0001,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2025-11-20,DONE,2025-11-19,Evidence received and filed in the contract record.
+KAC-SA-0002,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-11-08,DONE,2025-11-07,Evidence received and filed in the contract record.
+KAC-SA-0002,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-01-30,DONE,2026-01-27,Evidence received and filed in the contract record.
+KAC-SA-0002,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-04-30,DONE,2026-04-27,Evidence received and filed in the contract record.
+KAC-SA-0002,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-07-29,DONE,2026-07-24,Evidence received and filed in the contract record.
+KAC-SA-0002,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-09-27,DONE,2026-09-25,Evidence received and filed in the contract record.
+KAC-SA-0003,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-11-09,DONE,2025-11-08,Evidence received and filed in the contract record.
+KAC-SA-0003,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-01-31,DONE,2026-01-29,Evidence received and filed in the contract record.
+KAC-SA-0003,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-05-01,DONE,2026-04-29,Evidence received and filed in the contract record.
+KAC-SA-0003,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-07-30,DONE,2026-07-27,Evidence received and filed in the contract record.
+KAC-SA-0003,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-09-28,OPEN,,
+KAC-SA-0004,OBLIGATION,BUYER,Share the 13-week rolling forecast,2024-07-08,DONE,2024-07-03,Evidence received and filed in the contract record.
+KAC-SA-0004,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2024-09-29,DONE,2024-09-24,Evidence received and filed in the contract record.
+KAC-SA-0004,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2024-12-28,DONE,2024-12-25,Evidence received and filed in the contract record.
+KAC-SA-0004,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-03-28,DONE,2025-03-23,Evidence received and filed in the contract record.
+KAC-SA-0004,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2025-05-27,DONE,2025-05-24,Evidence received and filed in the contract record.
+KAC-SA-0005,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-10-09,DONE,2025-10-30,Received after the due date; reminder sent.
+KAC-SA-0005,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2025-12-31,DONE,2025-12-30,Evidence received and filed in the contract record.
+KAC-SA-0005,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-03-31,OPEN,,
+KAC-SA-0005,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-06-29,DONE,2026-07-22,Received after the due date; reminder sent.
+KAC-SA-0005,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-08-28,DONE,2026-09-03,Received after the due date; reminder sent.
+KAC-SA-0006,OBLIGATION,BUYER,Share the 13-week rolling forecast,2025-11-18,DONE,2025-11-13,Evidence received and filed in the contract record.
+KAC-SA-0006,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-02-09,DONE,2026-02-09,Evidence received and filed in the contract record.
+KAC-SA-0006,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-05-10,DONE,2026-05-04,Evidence received and filed in the contract record.
+KAC-SA-0006,OBLIGATION,SUPPLIER,Quarterly capacity confirmation,2026-08-08,DONE,2026-08-02,Evidence received and filed in the contract record.
+KAC-SA-0006,OBLIGATION,SUPPLIER,Annual PPAP layout inspection and certificate of conformity review,2026-10-07,DONE,2026-10-07,Evidence received and filed in the contract record.
+KAC-SOW-0001,MILESTONE,SUPPLIER,Milestone 1: Blueprint and interface specification signed off,2027-01-31,OPEN,,
+KAC-SOW-0001,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2027-02-10,OPEN,,
+KAC-SOW-0001,MILESTONE,SUPPLIER,Milestone 2: Build and unit test complete,2027-05-02,OPEN,,
+KAC-SOW-0001,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2027-05-12,OPEN,,
+KAC-SOW-0001,MILESTONE,SUPPLIER,Milestone 3: User acceptance test passed,2027-07-16,OPEN,,
+KAC-SOW-0001,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-07-26,OPEN,,
+KAC-SOW-0001,MILESTONE,SUPPLIER,Milestone 4: Go-live and hypercare handover,2027-09-15,OPEN,,
+KAC-SOW-0001,MILESTONE,BUYER,Accept or reject milestone 4 in writing,2027-09-25,OPEN,,
+KAC-SOW-0002,MILESTONE,SUPPLIER,Milestone 1: Site survey and drawings approved,2026-12-12,OPEN,,
+KAC-SOW-0002,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-12-22,OPEN,,
+KAC-SOW-0002,MILESTONE,SUPPLIER,Milestone 2: Civil and electrical works complete,2027-01-22,OPEN,,
+KAC-SOW-0002,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2027-02-01,OPEN,,
+KAC-SOW-0002,MILESTONE,SUPPLIER,Milestone 3: Handover with completion certificate,2027-02-25,OPEN,,
+KAC-SOW-0002,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-03-07,OPEN,,
+KAC-SOW-0003,MILESTONE,SUPPLIER,Milestone 1: Fieldwork complete,2026-07-25,DONE,2026-07-25,Evidence received and filed in the contract record.
+KAC-SOW-0003,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-08-04,DONE,2026-08-12,Received after the due date; reminder sent.
+KAC-SOW-0003,MILESTONE,SUPPLIER,Milestone 2: Draft report issued,2026-11-29,OPEN,,
+KAC-SOW-0003,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2026-12-09,OPEN,,
+KAC-SOW-0003,MILESTONE,SUPPLIER,Milestone 3: Final report accepted,2027-03-16,OPEN,,
+KAC-SOW-0003,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-03-26,OPEN,,
+KAC-SOW-0004,MILESTONE,SUPPLIER,Milestone 1: First batch of dies received,2026-03-13,DONE,2026-03-09,Evidence received and filed in the contract record.
+KAC-SOW-0004,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-03-23,DONE,2026-03-21,Evidence received and filed in the contract record.
+KAC-SOW-0004,MILESTONE,SUPPLIER,Milestone 2: Second batch of dies received,2026-06-28,DONE,2026-06-27,Evidence received and filed in the contract record.
+KAC-SOW-0004,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2026-07-08,DONE,2026-07-04,Evidence received and filed in the contract record.
+KAC-SOW-0004,MILESTONE,SUPPLIER,Milestone 3: Programme closure report,2026-09-25,DONE,2026-09-22,Evidence received and filed in the contract record.
+KAC-SOW-0004,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2026-10-05,DONE,2026-10-02,Evidence received and filed in the contract record.
+KAC-SOW-0005,MILESTONE,SUPPLIER,Milestone 1: Delivery of first 50% of devices,2026-08-13,DONE,2026-08-08,Evidence received and filed in the contract record.
+KAC-SOW-0005,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-08-23,DONE,2026-08-20,Evidence received and filed in the contract record.
+KAC-SOW-0005,MILESTONE,SUPPLIER,Milestone 2: Delivery and imaging of all devices,2026-11-30,OPEN,,
+KAC-SOW-0005,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2026-12-10,OPEN,,
+KAC-SOW-0005,MILESTONE,SUPPLIER,Milestone 3: Asset register handed over,2027-03-01,OPEN,,
+KAC-SOW-0005,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-03-11,OPEN,,
+KAC-SOW-0006,MILESTONE,SUPPLIER,Milestone 1: Foundation ready and machine delivered,2026-06-19,DONE,2026-06-16,Evidence received and filed in the contract record.
+KAC-SOW-0006,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-06-29,DONE,2026-06-26,Evidence received and filed in the contract record.
+KAC-SOW-0006,MILESTONE,SUPPLIER,Milestone 2: Installation complete,2026-10-15,DONE,2026-10-14,Evidence received and filed in the contract record.
+KAC-SOW-0006,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2026-10-25,DONE,2026-10-25,Evidence received and filed in the contract record.
+KAC-SOW-0006,MILESTONE,SUPPLIER,Milestone 3: Trial run and acceptance,2027-01-22,OPEN,,
+KAC-SOW-0006,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-02-01,OPEN,,
+KAC-SOW-0007,MILESTONE,SUPPLIER,Milestone 1: Move plan approved,2026-09-12,DONE,2026-09-08,Evidence received and filed in the contract record.
+KAC-SOW-0007,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-09-22,OPEN,,
+KAC-SOW-0007,MILESTONE,SUPPLIER,Milestone 2: Inventory transferred,2026-12-30,OPEN,,
+KAC-SOW-0007,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2027-01-09,OPEN,,
+KAC-SOW-0007,MILESTONE,SUPPLIER,Milestone 3: Old warehouse handed back,2027-03-31,OPEN,,
+KAC-SOW-0007,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-04-10,OPEN,,
+KAC-SOW-0008,MILESTONE,SUPPLIER,Milestone 1: Fieldwork complete,2026-06-19,DONE,2026-06-16,Evidence received and filed in the contract record.
+KAC-SOW-0008,MILESTONE,BUYER,Accept or reject milestone 1 in writing,2026-06-29,DONE,2026-06-26,Evidence received and filed in the contract record.
+KAC-SOW-0008,MILESTONE,SUPPLIER,Milestone 2: Draft report issued,2026-11-30,OPEN,,
+KAC-SOW-0008,MILESTONE,BUYER,Accept or reject milestone 2 in writing,2026-12-10,OPEN,,
+KAC-SOW-0008,MILESTONE,SUPPLIER,Milestone 3: Final report accepted,2027-04-16,OPEN,,
+KAC-SOW-0008,MILESTONE,BUYER,Accept or reject milestone 3 in writing,2027-04-26,OPEN,,
+KAC-VC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-10-10,DONE,2025-10-05,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-11-09,DONE,2025-11-07,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2025-12-09,DONE,2025-12-09,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2026-01-08,DONE,2026-01-05,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2026-02-07,DONE,2026-02-02,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,SUPPLIER,Monthly service-level report,2026-03-09,DONE,2026-03-04,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,BUYER,Quarterly business review,2025-12-09,DONE,2025-12-07,Evidence received and filed in the contract record.
+KAC-VC-0001,OBLIGATION,BUYER,Quarterly business review,2026-03-09,DONE,2026-03-03,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-05-29,DONE,2026-05-28,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-06-28,DONE,2026-06-26,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-07-28,DONE,2026-07-26,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-08-27,DONE,2026-08-25,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-09-26,DONE,2026-09-22,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,SUPPLIER,Monthly service-level report,2026-10-26,DONE,2026-10-23,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,BUYER,Quarterly business review,2026-07-28,DONE,2026-07-22,Evidence received and filed in the contract record.
+KAC-VC-0002,OBLIGATION,BUYER,Quarterly business review,2026-10-26,DONE,2026-10-23,Evidence received and filed in the contract record.
+KAC-VC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-06-08,OPEN,,
+KAC-VC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-07-08,DONE,2026-07-20,Received after the due date; reminder sent.
+KAC-VC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-08-07,OPEN,,
+KAC-VC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-09-06,OPEN,,
+KAC-VC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-10-06,OPEN,,
+KAC-VC-0003,OBLIGATION,SUPPLIER,Monthly service-level report,2026-11-05,OPEN,,
+KAC-VC-0003,OBLIGATION,BUYER,Quarterly business review,2026-08-07,DONE,2026-08-20,Received after the due date; reminder sent.
+KAC-VC-0003,OBLIGATION,BUYER,Quarterly business review,2026-11-05,OPEN,,
+KAC-VC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2026-05-15,DONE,2026-05-12,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2026-06-14,DONE,2026-06-13,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2026-07-14,DONE,2026-07-10,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2026-08-13,DONE,2026-08-13,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2026-09-12,DONE,2026-09-10,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Monthly service-level report,2026-10-12,CANCELLED,,
+KAC-VC-0004,OBLIGATION,BUYER,Quarterly business review,2026-07-14,DONE,2026-07-08,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,BUYER,Quarterly business review,2026-10-12,CANCELLED,,
+KAC-VC-0004,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-05-15,DONE,2026-05-14,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-06-14,DONE,2026-06-11,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-07-14,DONE,2026-07-12,Evidence received and filed in the contract record.
+KAC-VC-0004,OBLIGATION,SUPPLIER,Proof of provident fund and ESI remittance,2026-08-13,DONE,2026-08-10,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-01-13,DONE,2025-01-11,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-02-12,DONE,2025-02-12,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-03-14,DONE,2025-03-11,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-04-13,DONE,2025-04-08,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-05-13,DONE,2025-05-12,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,SUPPLIER,Monthly service-level report,2025-06-12,DONE,2025-06-06,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,BUYER,Quarterly business review,2025-03-14,DONE,2025-03-13,Evidence received and filed in the contract record.
+KAC-VC-0005,OBLIGATION,BUYER,Quarterly business review,2025-06-12,DONE,2025-06-06,Evidence received and filed in the contract record.
+KAC-VC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-03-03,OPEN,,
+KAC-VC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-04-02,DONE,2025-04-19,Received after the due date; reminder sent.
+KAC-VC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-05-02,DONE,2025-05-01,Evidence received and filed in the contract record.
+KAC-VC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-06-01,OPEN,,
+KAC-VC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-07-01,DONE,2025-07-12,Received after the due date; reminder sent.
+KAC-VC-0006,OBLIGATION,SUPPLIER,Monthly service-level report,2025-07-31,OPEN,,
+KAC-VC-0006,OBLIGATION,BUYER,Quarterly business review,2025-05-02,DONE,2025-05-02,Evidence received and filed in the contract record.
+KAC-VC-0006,OBLIGATION,BUYER,Quarterly business review,2025-07-31,OPEN,,

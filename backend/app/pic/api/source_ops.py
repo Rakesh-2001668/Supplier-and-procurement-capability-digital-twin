@@ -52,6 +52,26 @@ def list_amendments(ref: str, p: Principal = Depends(require_any(READ, "supplier
         return amendments.listing(s, _contract(s, ref, p), internal="SUPPLIER_USER" not in p.roles)
 
 
+class TerminateIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=2000)
+    for_cause: bool = False  # for cause: no notice period
+    effective_from: Optional[date] = None  # default: today for cause, otherwise the end of the notice period (CONTRACT-AMENDMENT.noticeDays)
+
+
+@router.post("/contracts/{ref}/terminate", status_code=201, tags=["F4 Contract"])
+def terminate_contract(ref: str, body: TerminateIn, p: Principal = Depends(require("contract:manage")),
+                       key: Optional[str] = Depends(idempotency_key)):
+    """Terminate an active contract. Raises the termination amendment and sends it to the CONTRACT-AMENDMENT approval chain (the requester
+    never approves); the contract becomes TERMINATED when it takes effect, with prices stopped, timers cancelled and open POs flagged."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/contracts/{ref}/terminate", key, body)
+        if idem.replay:
+            return idem.replay
+        amendment = contract_svc.terminate(s, _contract(s, ref, p, lock=True), reason=body.reason, effective_from=body.effective_from,
+                                           for_cause=body.for_cause)
+        return idem.store(amendments.view(s, amendment), 201)
+
+
 @router.post("/contracts/{ref}/amendments/preview", tags=["F4 Contract"])
 def preview_amendment(ref: str, body: PreviewIn, p: Principal = Depends(require("contract:manage"))):
     """Validate a change set and show its effect, value delta and approval chain without saving it."""

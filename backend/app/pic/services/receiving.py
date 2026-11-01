@@ -21,7 +21,7 @@ from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount, tax_amount
 from app.pic.platform.serialize import jsonable
 from app.pic.services import ind_healthcare
-from app.pic.services import mandatory, p2p_rules, po_controls
+from app.pic.services import mandatory, org_guard, p2p_rules, po_controls
 from app.pic.services import order as order_svc
 from app.pic.services.common import principal, require_supplier_user
 
@@ -240,8 +240,11 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
                       f"not {po.number}; post the receipt against that order or without the ASN", rule_ref="F6-03",
                       asn=asn.number, asnPo=other.number if other else None, po=po.number)
     sod.guard(session, "GR_POST", {"po_id": po.id})
-    abac.guard(session, "GR_POST", po)
     po_lines = {l.line_no: l for l in order_svc.lines_of(session, po)}
+    # SEC-AZ: the receiver must be assigned to the plant of every line received (an order can carry lines for several plants; the
+    # header plant is only where it was raised). Lines that do not exist are reported below.
+    for plant in sorted({po_lines[int(d["line"])].plant for d in lines if int(d["line"]) in po_lines} or {po.plant}):
+        abac.guard(session, "GR_POST", po, plant=plant)
     if not lines:
         raise Problem(422, "LINES_REQUIRED", "A goods receipt lists at least one received line", rule_ref="RCV")
     for data in lines:
@@ -249,6 +252,12 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
             raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {data['line']}")
         _positive(data["qty"], f"Line {data['line']}")
     _mandatory_fields(session, po, lines, asn, delivery_note, posting_date)
+    # ADM-01: a deactivated plant or storage location is refused on a new receipt (the order may predate the deactivation)
+    org_guard.ensure_active(session, "goods receipt", company_code=po.company_code)
+    for data in lines:
+        line = po_lines[int(data["line"])]
+        org_guard.ensure_active(session, "goods receipt", plant=line.plant,
+                                storage_location=data.get("storage_location") or line.storage_location)
     gr = GoodsReceipt(tenant_id=po.tenant_id, number=next_number(session, "GOODS_RECEIPT"), po_id=po.id, asn_id=asn.id if asn else None,
                       status="POSTED", posting_date=posting_date or clock.today(), delivery_note=delivery_note, posted_by=p.user_id,
                       created_by=p.user_id)

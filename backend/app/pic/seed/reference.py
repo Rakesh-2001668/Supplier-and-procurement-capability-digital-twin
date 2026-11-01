@@ -17,7 +17,7 @@ from app.pic.platform import agents as agent_catalogue
 from app.pic.platform import clock
 from app.pic.platform import job_defaults, p2p_defaults
 from app.pic.platform.process_defs import baseline
-from app.pic.seed import templates
+from app.pic.seed import clause_library, templates
 
 RULES_VERSION = "2026.1"
 RULES_FROM = date(2026, 4, 1)
@@ -220,6 +220,11 @@ RULE_SETS = {
                        "and uses, compensating control text. Applies to SoD rules in mode MITIGATE."),
 }
 
+# The clause library (illustrative sample until the client's legal-approved text is loaded, see seed/clause_library.py) joins the playbook.
+_playbook_body, _playbook_description = RULE_SETS["CLM-PLAYBOOK"]
+RULE_SETS["CLM-PLAYBOOK"] = (clause_library.merge_into(_playbook_body, clause_library.playbook_patch()),
+                             _playbook_description + " (clause library: illustrative sample)")
+
 SOD_RULES = [
     ("SOD-01", "SUPPLIER_CREATE", "PO_CREATE", "supplier_id", None, "High", "Creator of a supplier master may not create POs for that supplier"),
     ("SOD-02", "SUPPLIER_BANK_CHANGE", "PAYMENT_APPROVE", "supplier_id", None, "Critical", "Whoever changes supplier bank details may not approve its payments"),
@@ -344,12 +349,22 @@ def ensure_extensions(tenant_id: uuid.UUID) -> list[str]:
             if key not in current:
                 s.add(RuleSet(tenant_id=tenant_id, key=key, version=RULES_VERSION, effective_from=RULES_FROM, body=body, description=description))
                 added.append(f"rule set {key}")
-            elif key == "CLM-PLAYBOOK" and set(body["templates"]) - set(current[key].body.get("templates", {})):
-                merged = {**current[key].body, "templates": {**body["templates"], **current[key].body["templates"]},
-                          "obligations": {**body["obligations"], **current[key].body.get("obligations", {})}}
-                s.add(RuleSet(tenant_id=tenant_id, key=key, version="2026.2", effective_from=max(clock.today(), current[key].effective_from),
-                              body=merged, description=description + " (value and quantity contract templates)"))
-                added.append("rule set CLM-PLAYBOOK@2026.2")
+            elif key == "CLM-PLAYBOOK" and (set(body["templates"]) - set(current[key].body.get("templates", {}))
+                                            or ("clauseLibrary" in body and "clauseLibrary" not in current[key].body)):
+                need_templates = bool(set(body["templates"]) - set(current[key].body.get("templates", {})))
+                need_library = "clauseLibrary" in body and "clauseLibrary" not in current[key].body
+                merged = current[key].body
+                if need_templates:
+                    merged = {**merged, "templates": {**body["templates"], **merged["templates"]},
+                              "obligations": {**body["obligations"], **merged.get("obligations", {})}}
+                if need_library:   # the clause library (seed/clause_library.py): the tenant's own categoryClauses, jurisdictions and fallbacks win
+                    merged = clause_library.merge_into(merged, {k: body[k] for k in ("clauseLibrary", "categoryClauses", "jurisdictions", "fallbacks")})
+                version = "2026.3" if need_library else "2026.2"
+                if s.execute(select(RuleSet.id).where(RuleSet.key == key, RuleSet.version == version)).first():
+                    version += "-LIB"
+                s.add(RuleSet(tenant_id=tenant_id, key=key, version=version, effective_from=max(clock.today(), current[key].effective_from),
+                              body=merged, description=description + (" (clause library: illustrative sample)" if need_library else " (value and quantity contract templates)")))
+                added.append(f"rule set CLM-PLAYBOOK@{version}")
         codes = set(s.execute(select(Currency.code)).scalars())
         for code, name_ in CURRENCIES:
             if code not in codes:

@@ -9,7 +9,7 @@
     "mode": {},
     "plannedOrders": {},
     "exceptions": {},
-    "sourceSystem": null
+    "sourceSystem": {}
   },
   "required": [
     "plant",

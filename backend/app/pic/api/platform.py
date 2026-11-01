@@ -81,6 +81,8 @@ def token(body: TokenRequest, request: Request):
 
 @router.get("/me", tags=["Identity"])
 def me(p: Principal = Depends(current_principal)):
+    with uow(p):  # refuses a deactivated user, outdated roles or a revoked session (401) like every other call
+        pass
     return {"userId": str(p.user_id), "user": p.email, "name": p.name, "tenant": p.tenant_code, "roles": p.roles, "scopes": sorted(p.scopes),
             "attributes": p.attributes, "supplierId": str(p.supplier_id) if p.supplier_id else None}
 

@@ -8,30 +8,34 @@ import { date, inr, label, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, isPositive, useSessionUser } from '../../invoices/_components';
 
-type ContractType = 'SCHEDULING_AGREEMENT' | 'QUANTITY_CONTRACT' | 'VALUE_CONTRACT' | 'MASTER_AGREEMENT' | 'NDA';
+type ContractType = 'SCHEDULING_AGREEMENT' | 'QUANTITY_CONTRACT' | 'VALUE_CONTRACT' | 'MASTER_AGREEMENT' | 'RATE_CARD' | 'SOW' | 'NDA';
 type Template = { code: string; title: string; text: string };
 type Jurisdiction = { code: string; name: string; seat: string; law: string };
 type ListedContract = { number: string; type: string; status: string; supplier_code: string; title: string; valid_from: string; valid_to: string };
-type Obligation = { party: string; description: string; dueAfterDays: number };
+type Obligation = { party: string; description: string; dueAfterDays: number; kind?: string };
 type Templates = { ruleSet: string; types: ContractType[]; frameworkTypes: string[]; templates: Record<string, Template[]>; obligations: Record<string, Obligation[]>;
-  fallbacks: Record<string, string>; jurisdictions: Jurisdiction[] };
+  fallbacks: Record<string, string>; jurisdictions: Jurisdiction[]; categories?: string[] };
 type Supplier = { code: string; legal_name: string; status: string; payment_terms: string | null; incoterms: string | null };
 type Material = { number: string; description: string; base_uom: string };
-type Org = { plants: { code: string; name: string }[] };
+type Org = { plants: { code: string; name: string }[]; companyCodes?: { code: string; name: string; active?: boolean }[] };
 type Line = { material: string; description: string; plant: string; uom: string; target_qty: string; unit_price: string };
 type Created = { number: string };
 
 const TYPE_TEXT: Record<ContractType, string> = {
   SCHEDULING_AGREEMENT: 'Delivery schedules released against the agreement; index-linked pricing; ERS-eligible.',
   QUANTITY_CONTRACT: 'A fixed total quantity at fixed prices, released by purchase order.',
-  VALUE_CONTRACT: 'A total value (typically services or rate cards) consumed by purchase orders.',
+  VALUE_CONTRACT: 'A total value (typically services) consumed by purchase orders.',
+  RATE_CARD: 'Unit rates per role or service, fixed for the term; orders draw on the rates.',
+  SOW: 'A statement of work: scope, deliverables and milestones accepted one by one.',
   MASTER_AGREEMENT: 'Commercial terms only: no value, no quantities. Call-off contracts refer to it.',
   NDA: 'Confidentiality only: no value, no lines, nothing to consume.',
 };
-const CREATABLE: ContractType[] = ['SCHEDULING_AGREEMENT', 'QUANTITY_CONTRACT', 'VALUE_CONTRACT', 'MASTER_AGREEMENT', 'NDA'];
+const CREATABLE: ContractType[] = ['SCHEDULING_AGREEMENT', 'QUANTITY_CONTRACT', 'VALUE_CONTRACT', 'RATE_CARD', 'SOW', 'MASTER_AGREEMENT', 'NDA'];
+const RESETS = ['MONTHLY', 'QUARTERLY', 'HALF_YEARLY', 'ANNUAL'];
 const FRAMEWORK: ContractType[] = ['MASTER_AGREEMENT', 'NDA'];
 
-const emptyLine = (plant = 'P100'): Line => ({ material: '', description: '', plant, uom: 'EA', target_qty: '', unit_price: '' });
+// An empty plant means "the first plant of the organisation" (resolved when the form is submitted), so no plant code is hard-coded.
+const emptyLine = (plant = ''): Line => ({ material: '', description: '', plant, uom: 'EA', target_qty: '', unit_price: '' });
 
 function inOneYear() {
   const d = new Date();
@@ -49,13 +53,15 @@ export default function NewContract() {
   const materials = useApi<Paged<Material>>('/materials?limit=200');
   const org = useApi<Org>('/admin/organisation');
   const plants = org.data?.plants ?? [];
+  const companyCodes = (org.data?.companyCodes ?? []).filter((c) => c.active !== false);
+  const plantOf = (l: Line) => l.plant || plants[0]?.code || '';
   const contracts = useApi<Paged<ListedContract>>('/contracts?limit=200');
 
   // One key per form: a double-submit or network retry replays the same contract instead of creating two.
   const [idempotencyKey] = useState(() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
   const [type, setType] = useState<ContractType>('SCHEDULING_AGREEMENT');
   const [f, setF] = useState({ supplier: '', title: '', valid_from: new Date().toISOString().slice(0, 10), valid_to: inOneYear(), payment_terms: 'N45',
-    incoterms: 'FCA', over_pct: '5', under_pct: '5', price_pct: '0', index: 'LME_AL', index_base: '100.00', band_pct: '3' });
+    incoterms: 'FCA', over_pct: '5', under_pct: '5', price_pct: '0', index: 'LME_AL', index_base: '100.00', band_pct: '3', reset: 'QUARTERLY', company_code: '', category: '' });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const [invalid, setInvalid] = useState<string | null>(null);
   const [framework, setFramework] = useState('');
@@ -90,24 +96,24 @@ export default function NewContract() {
     if (!f.supplier.trim() || !f.title.trim() || !f.payment_terms.trim()) { setInvalid('Supplier, title and payment terms are required.'); return; }
     if (!f.valid_from || !f.valid_to || f.valid_to <= f.valid_from) { setInvalid('Valid to must be after valid from.'); return; }
     if (supplier?.status === 'BLOCKED') { setInvalid(`${supplier.code} is blocked and cannot be contracted.`); return; }
-    const bad = isFramework ? -1 : lines.findIndex((l) => !l.description.trim() || !l.uom.trim() || !l.plant.trim() || !isPositive(l.target_qty) || !isPositive(l.unit_price));
+    const bad = isFramework ? -1 : lines.findIndex((l) => !l.description.trim() || !l.uom.trim() || !plantOf(l).trim() || l.uom.trim().length > 5 || !isPositive(l.target_qty) || !isPositive(l.unit_price));
     if (bad >= 0) { setInvalid(`Line ${(bad + 1) * 10}: description, plant, unit, a positive target quantity and unit price are required.`); return; }
-    if (!isFramework && [f.over_pct, f.under_pct, f.price_pct].some((v) => v.trim() === '' || Number.isNaN(Number(v)) || Number(v) < 0)) {
-      setInvalid('Tolerances must be zero or positive percentages.'); return;
+    if (!isFramework && [f.over_pct, f.under_pct, f.price_pct].some((v) => v.trim() === '' || Number.isNaN(Number(v)) || Number(v) < 0 || Number(v) > 100)) {
+      setInvalid('Tolerances must be percentages between 0 and 100.'); return;
     }
     const indexed = type === 'SCHEDULING_AGREEMENT';
-    if (indexed && (!f.index.trim() || !isPositive(f.index_base) || f.band_pct.trim() === '' || Number.isNaN(Number(f.band_pct)))) {
-      setInvalid('A scheduling agreement needs the price index, its base value and the absorbed band %.'); return;
+    if (indexed && (!f.index.trim() || !isPositive(f.index_base) || f.band_pct.trim() === '' || Number.isNaN(Number(f.band_pct)) || Number(f.band_pct) < 0 || Number(f.band_pct) >= 100)) {
+      setInvalid('A scheduling agreement needs the price index, its base value and the absorbed band % (0 up to 100).'); return;
     }
     setInvalid(null);
     create.mutate({
-      type, title: f.title.trim(), supplier: f.supplier.trim().toUpperCase(), company_code: '1000', valid_from: f.valid_from, valid_to: f.valid_to,
-      payment_terms: f.payment_terms.trim(), incoterms: f.incoterms.trim() || undefined,
-      jurisdiction: jurisdiction || undefined, framework: !isFramework && framework ? framework : undefined,
+      type, title: f.title.trim(), supplier: f.supplier.trim().toUpperCase(), company_code: f.company_code || companyCodes[0]?.code || '1000',
+      valid_from: f.valid_from, valid_to: f.valid_to, payment_terms: f.payment_terms.trim(), incoterms: f.incoterms.trim() || undefined,
+      jurisdiction: jurisdiction || undefined, category: f.category.trim() || undefined, framework: !isFramework && framework ? framework : undefined,
       tolerances: { over_pct: f.over_pct.trim(), under_pct: f.under_pct.trim(), price_pct: f.price_pct.trim() },
-      index_ref: indexed ? { index: f.index.trim().toUpperCase(), base: f.index_base.trim(), band_pct: f.band_pct.trim(), reset: 'QUARTERLY' } : undefined,
+      index_ref: indexed ? { index: f.index.trim().toUpperCase(), base: f.index_base.trim(), band_pct: f.band_pct.trim(), reset: f.reset } : undefined,
       lines: isFramework ? [] : lines.map((l) => ({
-        material: l.material.trim() || undefined, description: l.description.trim(), plant: l.plant.trim(), uom: l.uom.trim().toUpperCase(),
+        material: l.material.trim() || undefined, description: l.description.trim(), plant: plantOf(l).trim(), uom: l.uom.trim().toUpperCase(),
         target_qty: l.target_qty.trim(), unit_price_minor: rupeesToMinor(l.unit_price),
       })),
     });
@@ -125,7 +131,7 @@ export default function NewContract() {
 
       {user && !canCreate && (
         <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-          Creating contracts needs the contract manager role (contract.manager@axion.example). You can still preview the templates.
+          Creating contracts needs the contract manager role. You can still preview the templates.
         </p>
       )}
 
@@ -158,6 +164,18 @@ export default function NewContract() {
               <Field label="Incoterms">{(id) => <Input id={id} value={f.incoterms} onChange={set('incoterms')} placeholder="e.g. FCA Hosur" />}</Field>
             </div>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {companyCodes.length > 1 && (
+                <Field label="Company code">
+                  {(id) => <Select id={id} value={f.company_code || companyCodes[0].code} onChange={(e) => setF((x) => ({ ...x, company_code: e.target.value }))}
+                    options={companyCodes.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` }))} />}
+                </Field>
+              )}
+              <Field label="Category (clause overlay)" hint={templates.data?.categories?.length ? 'Adds the category clauses of the playbook' : 'The playbook has no category clauses yet'}>
+                {(id) => (
+                  <Select id={id} value={f.category} onChange={(e) => setF((x) => ({ ...x, category: e.target.value }))}
+                    options={[{ value: '', label: 'No category overlay' }, ...(templates.data?.categories ?? []).map((c) => ({ value: c, label: label(c) }))]} />
+                )}
+              </Field>
               <Field label="Governing law and forum" hint="Adds the clause-library variant: governing law, dispute resolution, stamp duty, personal data">
                 {(id) => (
                   <Select id={id} value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)}
@@ -179,15 +197,16 @@ export default function NewContract() {
               <Field label="Price tolerance %">{(id) => <Input id={id} inputMode="decimal" value={f.price_pct} onChange={set('price_pct')} />}</Field>
             </div>}
             {type === 'SCHEDULING_AGREEMENT' && (
-              <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                <Field label="Price index (required)" hint="Reset quarterly">{(id) => <Input id={id} value={f.index} onChange={set('index')} placeholder="e.g. LME_AL" />}</Field>
+              <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                <Field label="Price index (required)">{(id) => <Input id={id} value={f.index} onChange={set('index')} placeholder="e.g. LME_AL" />}</Field>
                 <Field label="Index base value">{(id) => <Input id={id} inputMode="decimal" value={f.index_base} onChange={set('index_base')} />}</Field>
                 <Field label="Band absorbed by supplier ±%">{(id) => <Input id={id} inputMode="decimal" value={f.band_pct} onChange={set('band_pct')} />}</Field>
+                <Field label="Reset">{(id) => <Select id={id} value={f.reset} onChange={set('reset')} options={RESETS.map((r) => ({ value: r, label: label(r) }))} />}</Field>
               </div>
             )}
           </Card>
 
-          {!isFramework && <Card title="Lines" actions={<Button type="button" onClick={() => setLines((ls) => [...ls, emptyLine(plants[0]?.code)])}>Add line</Button>}>
+          {!isFramework && <Card title="Lines" actions={<Button type="button" onClick={() => setLines((ls) => [...ls, emptyLine(plantOf(ls[ls.length - 1] ?? emptyLine()))])}>Add line</Button>}>
             <datalist id="material-numbers">{materials.data?.items.map((m) => <option key={m.number} value={m.number}>{m.description}</option>)}</datalist>
             <div className="space-y-3">
               {lines.map((l, i) => (
@@ -203,10 +222,10 @@ export default function NewContract() {
                     </div>
                     <Field label="Plant">
                       {(id) => plants.length
-                        ? <Select id={id} value={l.plant} onChange={(e) => updateLine(i, { plant: e.target.value })} options={plants.map((p) => ({ value: p.code, label: `${p.code} · ${p.name}` }))} />
-                        : <Input id={id} value={l.plant} onChange={(e) => updateLine(i, { plant: e.target.value })} />}
+                        ? <Select id={id} value={plantOf(l)} onChange={(e) => updateLine(i, { plant: e.target.value })} options={plants.map((p) => ({ value: p.code, label: `${p.code} · ${p.name}` }))} />
+                        : <Input id={id} required value={l.plant} onChange={(e) => updateLine(i, { plant: e.target.value })} />}
                     </Field>
-                    <Field label="Unit">{(id) => <Input id={id} required value={l.uom} onChange={(e) => updateLine(i, { uom: e.target.value })} />}</Field>
+                    <Field label="Unit" hint="At most 5 characters">{(id) => <Input id={id} required maxLength={5} value={l.uom} onChange={(e) => updateLine(i, { uom: e.target.value })} />}</Field>
                     <Field label="Target quantity">{(id) => <Input id={id} required inputMode="decimal" value={l.target_qty} onChange={(e) => updateLine(i, { target_qty: e.target.value })} />}</Field>
                     <Field label="Unit price (₹)" hint={isPositive(l.unit_price) && isPositive(l.target_qty) ? `Line value ${inr(Number(l.target_qty) * rupeesToMinor(l.unit_price))}` : undefined}>
                       {(id) => <Input id={id} required inputMode="decimal" value={l.unit_price} onChange={(e) => updateLine(i, { unit_price: e.target.value })} />}
@@ -260,7 +279,7 @@ export default function NewContract() {
                   <ul className="mt-1 divide-y divide-slate-100 text-sm">
                     {(templates.data.obligations[type] ?? []).map((o) => (
                       <li key={o.description} className="flex flex-wrap items-center justify-between gap-2 py-1.5">
-                        <span><StatusChip status={o.party} /> {o.description}</span>
+                        <span><StatusChip status={o.party} /> {o.kind === 'MILESTONE' ? <span className="mr-1 text-[11px] font-semibold uppercase text-slate-500">milestone</span> : null}{o.description}</span>
                         <span className="text-xs text-slate-500">due {o.dueAfterDays} days after start</span>
                       </li>
                     ))}

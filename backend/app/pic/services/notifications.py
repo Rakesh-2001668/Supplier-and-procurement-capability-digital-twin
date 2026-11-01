@@ -47,10 +47,10 @@ def link_for(object_type: Optional[str], object_ref: Optional[str], object_id: O
 
 
 # ---------------------------------------------------------------- recipients
-def _principal(user: AppUser) -> Principal:
+def _principal(user: AppUser, session=None) -> Principal:
     roles = list(user.roles or [])
     return Principal(user_id=user.id, tenant_id=user.tenant_id, tenant_code="", email=user.email, name=user.full_name, roles=roles,
-                     scopes=scopes_for(roles), attributes=user.attributes or {}, supplier_id=user.supplier_id)
+                     scopes=scopes_for(roles, session), attributes=user.attributes or {}, supplier_id=user.supplier_id)
 
 
 def users_with_role(session: Session, role: str) -> list[AppUser]:
@@ -61,13 +61,13 @@ def users_with_role(session: Session, role: str) -> list[AppUser]:
 def task_workers(session: Session, task: Task) -> list[AppUser]:
     """Everyone who could complete the task now (same rules as the task inbox and ``workflow.complete``): the holders of the
     candidate role and the delegates currently acting for them (delegation of authority)."""
-    workers = [u for u in users_with_role(session, task.candidate_role) if workflow.can_work(_principal(u), task) is None]
+    workers = [u for u in users_with_role(session, task.candidate_role) if workflow.can_work(_principal(u, session), task) is None]
     seen = {u.id for u in workers}
     for grant in delegation.all_current(session):
         if grant.delegate_id in seen:
             continue
         delegate = session.get(AppUser, grant.delegate_id)
-        if delegate is not None and delegate.active and workflow.can_work(_principal(delegate), task) is None:
+        if delegate is not None and delegate.active and workflow.can_work(_principal(delegate, session), task) is None:
             workers.append(delegate)
             seen.add(delegate.id)
     return workers
@@ -159,13 +159,13 @@ def _task_escalated(session: Session, event: OutboxEvent) -> None:
     # exclusions and scope apply through can_work); every notification below shares the dedup key, so nobody gets two.
     target = event.payload.get("escalatedTo")
     if target:
-        managers = [u for u in users_with_role(session, target) if workflow.can_work(_principal(u), task) is None]
+        managers = [u for u in users_with_role(session, target) if workflow.can_work(_principal(u, session), task) is None]
         notify(session, managers, kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
                title=f"Escalated to you: {task.object_ref}",
                body=f"{task.name} passed its SLA (escalation {level}); as {target.replace('_', ' ').lower()} you can now decide it.",
                link=link, object_type=task.object_type, object_ref=task.object_ref)
     escalated = [e.get("role") for e in (task.candidate_scope or {}).get(workflow.ESCALATION_KEY) or []]
-    others = [u for role in escalated for u in users_with_role(session, role) if workflow.can_work(_principal(u), task) is None]
+    others = [u for role in escalated for u in users_with_role(session, role) if workflow.can_work(_principal(u, session), task) is None]
     notify(session, task_workers(session, task) + others, kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
            title=f"Overdue (escalation {level}): {task.object_ref}", body=f"{task.name} has passed its SLA and was escalated.",
            link=link, object_type=task.object_type, object_ref=task.object_ref)
@@ -188,7 +188,7 @@ def _task_reassigned(session: Session, task: Task, event: OutboxEvent, level: in
             if user.id in keep or user.supplier_id is not None:
                 continue
             scope = last.get("scope") or {} if index == 0 else {}
-            if workflow._can_work_as(_principal(user), task, role, scope) is None:
+            if workflow._can_work_as(_principal(user, session), task, role, scope) is None:
                 former.append(user)
     notify(session, former, kind="TASK_REASSIGNED", dedup_key=f"TASK_REASSIGNED:{task.id}:{level}", title=f"No longer yours: {task.object_ref}",
            body=f"{task.name} was not decided within its SLA and was reassigned to the {target} role. You no longer need to act on it.",
@@ -364,10 +364,12 @@ def _contract_consumption(session: Session, event: OutboxEvent) -> None:
     if contract is None:
         return
     threshold = event.payload.get("threshold")
+    line = event.payload.get("line")  # each contract line alerts on its own
     internal = _user(session, contract.owner_id) + [u for u in users_with_role(session, "CONTRACT_MANAGER") if u.supplier_id is None]
-    notify(session, internal, kind="CONTRACT_CONSUMPTION", dedup_key=f"CONTRACT_CONSUMPTION:{contract.id}:{threshold}",
-           title=f"Contract {contract.number} {threshold}% consumed",
-           body=f"{contract.number} ({contract.title}) has reached {event.payload.get('consumedPct') or threshold}% of its target "
+    notify(session, internal, kind="CONTRACT_CONSUMPTION", dedup_key=f"CONTRACT_CONSUMPTION:{contract.id}:{line}:{threshold}",
+           title=f"Contract {contract.number} {threshold}% consumed" + (f" (line {line})" if line else ""),
+           body=f"{contract.number} ({contract.title}){f', line {line} ' + str(event.payload.get('description') or '') if line else ''} has reached "
+                f"{event.payload.get('consumedPct') or threshold}% of its target "
                 f"quantity (alert at {threshold}%). Plan the renewal, a variation or a new sourcing event.",
            link=link_for("CONTRACT", contract.number), object_type="CONTRACT", object_ref=contract.number)
 

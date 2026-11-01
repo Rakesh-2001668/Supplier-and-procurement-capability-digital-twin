@@ -126,6 +126,8 @@ class RequisitionIn(BaseModel):
     purpose_text: Optional[str] = None
     plant: str
     company_code: str = "1000"
+    purchasing_org: Optional[str] = Field(default=None, max_length=10)     # checked against the organisation master (ADM-01)
+    purchasing_group: Optional[str] = Field(default=None, max_length=10)
     template: Optional[str] = Field(default=None, max_length=40)   # default template for lines that name none
     lines: list[PrLineIn] = Field(min_length=1)
 
@@ -137,7 +139,7 @@ def create_requisition(body: RequisitionIn, p: Principal = Depends(require("req:
         if idem.replay:
             return idem.replay
         pr = requisition.create(s, origin=body.origin, purpose_code=body.purpose_code, purpose_text=body.purpose_text, plant=body.plant,
-                                company_code=body.company_code,
+                                company_code=body.company_code, purchasing_org=body.purchasing_org, purchasing_group=body.purchasing_group,
                                 lines=[{**l.model_dump(), "template": l.template or body.template} for l in body.lines])
         return idem.store(views.requisition(s, pr), 201)
 

@@ -26,16 +26,37 @@ def database():
     url = os.environ["DATABASE_URL"]
     assert "neon.tech" not in url, "Refusing to run destructive tests against Neon"
     engine = create_engine(url)
+    # PIC_TEST_KEEP_DB=1 (developer shortcut for iterating on one test file): keep an already seeded schema, only apply new migrations.
+    # Never set it for a full run; tests that assume a fresh database (module-scoped tenants) may see their own leftovers.
     with engine.begin() as conn:
-        conn.execute(text("DROP SCHEMA IF EXISTS pic CASCADE"))
+        seeded = os.environ.get("PIC_TEST_KEEP_DB") == "1" and bool(
+            conn.execute(text("SELECT 1 FROM information_schema.tables WHERE table_schema = 'pic' AND table_name = 'tenant'")).first()
+            and conn.execute(text("SELECT 1 FROM pic.tenant WHERE code = 'AXN'")).first())
+        if not seeded:
+            conn.execute(text("DROP SCHEMA IF EXISTS pic CASCADE"))
     engine.dispose()
     config = Config(str(BACKEND_DIR / "alembic_pic.ini"))
     config.set_main_option("script_location", str(BACKEND_DIR / "pic_migrations"))
-    command.upgrade(config, "heads")  # wave 1: parallel migration branches until the integrator re-chains them
+    command.upgrade(config, "head")
     import app.pic.services  # noqa: F401
-    from app.pic.seed import axion
-    axion.run(PASSWORD)
+    if not seeded:
+        from app.pic.seed import axion
+        axion.run(PASSWORD)
     yield
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _business_clock_isolated(database):
+    """Every test module starts and ends on the real clock. Scenario.act / approve_all (seed/axion.py) pin the business clock and a
+    module that does not unpin leaves it pinned for the next one: the time-based job and agent tests then see a clock that is
+    days ahead of the rows they just wrote (idempotency purge counted the fresh row as expired; the acceptance-rate window was
+    shifted). Being an autouse fixture of the module scope it runs before the module's own fixtures, so a module that pins the
+    clock on purpose in its fixtures still can."""
+    from app.pic.platform import clock
+
+    clock.set_pinned(None)
+    yield
+    clock.set_pinned(None)
 
 
 @pytest.fixture(scope="session")
@@ -65,4 +86,6 @@ def login(client):
 def pytest_collection_modifyitems(config, items):
     """Dataset-pack tests (test_datasets_*.py) add data on top of the signature case: run them after every other test so
     the signature-case assertions always see the base seed."""
-    items.sort(key=lambda item: item.module.__name__.rsplit(".", 1)[-1].startswith("test_datasets_"))
+    # test_datasets_contracts_kac builds on the KAC pack of test_datasets_erp_client_kac (whose fixture expects to be the one that loads it): last.
+    items.sort(key=lambda item: (item.module.__name__.rsplit(".", 1)[-1].startswith("test_datasets_"),
+                                 item.module.__name__.rsplit(".", 1)[-1] == "test_datasets_contracts_kac"))

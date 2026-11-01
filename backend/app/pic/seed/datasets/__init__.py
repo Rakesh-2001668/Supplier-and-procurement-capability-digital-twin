@@ -44,6 +44,7 @@ PACKS = (
     "industry_healthcare",    # D6  tenant HLT
     "industry_general",       # D7  tenant GEN
     "erp_client_kac",         # D10 tenant KAC loaded from a mock SAP S/4HANA cutover extract (TD §12.4 ERP migration)
+    "contracts_kac",          # D12 tenant KAC: master agreements, call-offs, NDAs, rate cards, SOWs from a mock contract-register export
     "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
 )

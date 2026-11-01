@@ -445,7 +445,7 @@ def test_mrp_run_view_from_column_selects_equals_the_orm_rows(sc):
         return row(run, extra={
             "plannedOrders": [row(o, extra={"material": materials.get(o.material_id), "requisition": prs.get(o.requisition_id)}) for o in orders],
             "exceptions": [row(e, extra={"material": materials.get(e.material_id)}) for e in exceptions],
-            "process": views._process(s, "MRP_RUN", run)})
+            "process": views._process(s, "MRP_RUN", run), "detail": "full"})  # detail: the run is small enough for the full view
 
     from app.pic.models import Requisition
     try:

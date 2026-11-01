@@ -8,6 +8,21 @@
     "threshold": {},
     "consumedPct": {
       "type": "string"
+    },
+    "line": {
+      "type": "integer"
+    },
+    "description": {
+      "type": "string"
+    },
+    "releasedQty": {
+      "type": "string"
+    },
+    "targetQty": {
+      "type": "string"
+    },
+    "ownerId": {
+      "type": "string"
     }
   },
   "required": [

@@ -1,7 +1,7 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import { Button, Card, DataTable, Dialog, Facts, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip, Tabs, Textarea } from '@/components/pic/ui';
+import { Button, Card, DataTable, Dialog, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip, Tabs, Textarea } from '@/components/pic/ui';
 import { api, ApiError } from '@/lib/pic/api';
 import { date, dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
@@ -14,6 +14,11 @@ import { MandatoryFieldsTab } from './_mandatory';
 import { WorkflowTab } from './_designer';
 import { MappingsTab } from './_mappings';
 import { MitigationReport, MitigationReportData, RuleModeButton } from './_sod';
+import { OrganisationTab } from './_org';
+import { UsersTab } from './_users';
+import { RolesMatrixTab } from './_roles';
+import { TemplatesTab } from './_templates';
+import { ApprovalMatrixTab } from './_matrix';
 
 // ---------------------------------------------------------------- types
 type Rule = { id: string; key: string; version: string; company_code: string | null; plant: string | null; category: string | null;
@@ -297,271 +302,6 @@ function OpsTab() {
   );
 }
 
-// ---------------------------------------------------------------- organisation, calendars, currencies (ADM-01)
-type Org = {
-  tenant: { code: string; name: string; industryTemplate: string; templateName: string | null; baseCurrency: string; timezone: string };
-  companyCodes: { code: string; name: string; gstin: string | null; currency: string; fiscalYearStartMonth: number }[];
-  plants: { code: string; name: string; companyCode: string; stateCode: string | null; workingDays: number[] | null; holidays: string[];
-    storageLocations: { code: string; name: string }[] }[];
-  costObjects: { type: string; code: string; name: string; companyCode: string }[];
-  currencies: { code: string; name: string; decimals: number; active: boolean }[];
-  fxRates: { from: string; to: string; rate: string; validFrom: string; source: string }[];
-};
-// Python weekday numbering (0 = Monday), as stored on the plant calendar.
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function OrganisationTab({ isAdmin }: { isAdmin: boolean }) {
-  const { data, isLoading, error } = useApi<Org>('/admin/organisation');
-  if (isLoading) return <Loading />;
-  if (error || !data) return <ProblemBox error={error} />;
-  return (
-    <div className="space-y-4">
-      <Card title="Organisation (ADM-01)">
-        <Facts items={[
-          ['Tenant', `${data.tenant.name} (${data.tenant.code})`], ['Industry template', data.tenant.templateName ?? label(data.tenant.industryTemplate)],
-          ['Base currency', data.tenant.baseCurrency], ['Time zone', data.tenant.timezone],
-        ]} />
-      </Card>
-      <Card title={`Company codes (${data.companyCodes.length})`}>
-        <DataTable<Org['companyCodes'][number]> rows={data.companyCodes} empty="No company codes" columns={[
-          { key: 'code', header: 'Code', render: (c) => <span className="font-mono text-xs font-semibold">{c.code}</span> },
-          { key: 'name', header: 'Legal entity' },
-          { key: 'gstin', header: 'GSTIN', render: (c) => <span className="font-mono text-xs">{c.gstin ?? '–'}</span> },
-          { key: 'currency', header: 'Currency' },
-          { key: 'fiscalYearStartMonth', header: 'Fiscal year starts', render: (c) => MONTHS[c.fiscalYearStartMonth - 1] ?? c.fiscalYearStartMonth },
-        ]} />
-      </Card>
-      <Card title={`Plants, calendars and storage locations (${data.plants.length})`}>
-        <DataTable<Org['plants'][number]> rows={data.plants} empty="No plants" columns={[
-          { key: 'code', header: 'Plant', render: (p) => <span><span className="font-mono text-xs font-semibold">{p.code}</span> {p.name}</span> },
-          { key: 'companyCode', header: 'Company' },
-          { key: 'stateCode', header: 'GST state', render: (p) => p.stateCode ?? '–' },
-          { key: 'workingDays', header: 'Working days', render: (p) => <span className="text-xs">{(p.workingDays ?? []).map((d) => WEEKDAYS[d] ?? d).join(' ') || '–'}</span> },
-          { key: 'holidays', header: 'Holidays', render: (p) => <span className="text-xs">{p.holidays.length ? p.holidays.map((h) => date(h)).join(' · ') : '–'}</span> },
-          { key: 'storageLocations', header: 'Storage locations', render: (p) => (
-            <ul className="text-xs">{p.storageLocations.map((s) => <li key={s.code}><span className="font-mono">{s.code}</span> {s.name}</li>)}</ul>
-          ) },
-        ]} />
-      </Card>
-      <Card title={`Cost objects (${data.costObjects.length})`}>
-        <DataTable<Org['costObjects'][number] & { id: string }> rows={data.costObjects.map((c) => ({ ...c, id: `${c.type}-${c.code}` }))} empty="No cost objects" columns={[
-          { key: 'type', header: 'Type', render: (c) => label(c.type) },
-          { key: 'code', header: 'Code', render: (c) => <span className="font-mono text-xs font-semibold">{c.code}</span> },
-          { key: 'name', header: 'Name' },
-          { key: 'companyCode', header: 'Company' },
-        ]} />
-      </Card>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title={`Currencies (${data.currencies.length})`}>
-          <DataTable<Org['currencies'][number]> rows={data.currencies} empty="No currencies" columns={[
-            { key: 'code', header: 'Code', render: (c) => <span className="font-mono text-xs font-semibold">{c.code}</span> },
-            { key: 'name', header: 'Name' },
-            { key: 'decimals', header: 'Decimals', align: 'right' },
-            { key: 'active', header: 'Status', render: (c) => <StatusChip status={c.active ? 'ACTIVE' : 'INACTIVE'} /> },
-          ]} />
-        </Card>
-        <Card title={`FX rates (${data.fxRates.length})`}>
-          <p className="mb-3 text-xs text-slate-500">Spend is normalised to {data.tenant.baseCurrency} with the latest rate valid on the document date. Rates are never edited; add a later-dated rate.</p>
-          <DataTable<Org['fxRates'][number] & { id: string }> rows={data.fxRates.map((r) => ({ ...r, id: `${r.from}${r.to}${r.validFrom}` }))} empty="No FX rates yet" columns={[
-            { key: 'pair', header: 'Pair', render: (r) => <span className="font-mono text-xs font-semibold">{r.from}/{r.to}</span> },
-            { key: 'rate', header: 'Rate', align: 'right', render: (r) => <span className="font-mono text-xs">{r.rate}</span> },
-            { key: 'validFrom', header: 'Valid from', render: (r) => date(r.validFrom) },
-            { key: 'source', header: 'Source' },
-          ]} />
-          {isAdmin && <FxRateForm currencies={data.currencies.filter((c) => c.active).map((c) => c.code)} base={data.tenant.baseCurrency} />}
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-function FxRateForm({ currencies, base }: { currencies: string[]; base: string }) {
-  const [f, setF] = useState({ from_ccy: currencies.find((c) => c !== base) ?? '', to_ccy: base, rate: '', valid_from: today(), source: 'RBI reference rate' });
-  const [invalid, setInvalid] = useState<string | null>(null);
-  const cmd = useCommand((body: Record<string, unknown>) => api.post('/admin/fx-rates', body), {
-    success: `${f.from_ccy}/${f.to_ccy} rate added`, onSuccess: () => setF((x) => ({ ...x, rate: '' })),
-  });
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
-  const options = currencies.map((c) => ({ value: c, label: c }));
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    if (f.from_ccy === f.to_ccy) { setInvalid('From and to currency must differ.'); return; }
-    if (!f.rate.trim() || Number.isNaN(Number(f.rate)) || Number(f.rate) <= 0) { setInvalid('Rate must be a positive number.'); return; }
-    if (!f.valid_from || !f.source.trim()) { setInvalid('Valid-from date and source are required.'); return; }
-    setInvalid(null);
-    cmd.mutate({ from_ccy: f.from_ccy, to_ccy: f.to_ccy, rate: f.rate.trim(), valid_from: f.valid_from, source: f.source.trim() });
-  }
-  return (
-    <form onSubmit={submit} className="mt-4 space-y-3 border-t border-slate-100 pt-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Add rate</p>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Field label="From">{(id) => <Select id={id} value={f.from_ccy} onChange={set('from_ccy')} options={options} />}</Field>
-        <Field label="To">{(id) => <Select id={id} value={f.to_ccy} onChange={set('to_ccy')} options={options} />}</Field>
-        <Field label={`Rate (1 ${f.from_ccy} = ? ${f.to_ccy})`}>{(id) => <Input id={id} inputMode="decimal" required value={f.rate} onChange={set('rate')} placeholder="e.g. 83.2450" />}</Field>
-        <Field label="Valid from">{(id) => <Input id={id} type="date" required value={f.valid_from} onChange={set('valid_from')} />}</Field>
-        <div className="sm:col-span-2"><Field label="Source">{(id) => <Input id={id} required value={f.source} onChange={set('source')} />}</Field></div>
-      </div>
-      {invalid && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{invalid}</p>}
-      <ProblemBox error={cmd.error} />
-      <div className="flex justify-end"><Button type="submit" variant="primary" busy={cmd.isPending}>Add FX rate</Button></div>
-    </form>
-  );
-}
-
-// ---------------------------------------------------------------- users & roles (ADM-04)
-type AppUserRow = { id: string; email: string; name: string; roles: string[]; active: boolean; mfaEnrolled: boolean; supplierUser: boolean;
-  attributes: Record<string, unknown> };
-// The role catalogue comes from the backend (GET /admin/roles); assignment re-validates SoD role pairs and MFA for sensitive roles.
-type RoleRow = { role: string; scopes: string[] };
-const SENSITIVE = ['TENANT_ADMIN', 'FINANCE_CONTROLLER', 'CPO'];
-
-function UsersTab({ isAdmin }: { isAdmin: boolean }) {
-  const { data, isLoading, error } = useApi<AppUserRow[]>(isAdmin ? '/admin/users' : null);
-  const [editing, setEditing] = useState<AppUserRow | null>(null);
-  const [toggling, setToggling] = useState<AppUserRow | null>(null);
-  const [resetting, setResetting] = useState<AppUserRow | null>(null);
-  if (!isAdmin) return <Card title="Users & roles (ADM-04)"><p className="text-sm text-slate-600">User and role administration needs the tenant administrator role.</p></Card>;
-  return (
-    <Card title="Users & roles (ADM-04)">
-      <p className="mb-3 text-sm text-slate-600">Role changes are checked against the segregation-of-duties role pairs (e.g. buyer + receiver) and need MFA for
-        approver, finance and admin roles. Every change is audited with its reason.</p>
-      {isLoading ? <Loading /> : error ? <ProblemBox error={error} /> : (
-        <DataTable<AppUserRow> rows={data ?? []} empty="No users" columns={[
-          { key: 'name', header: 'User', render: (u) => <span><span className="font-medium">{u.name}</span><span className="block text-xs text-slate-500">{u.email}</span></span> },
-          { key: 'roles', header: 'Roles', render: (u) => <span className="text-xs">{u.roles.map((r) => label(r)).join(', ')}</span> },
-          { key: 'supplierUser', header: 'Kind', render: (u) => <span className="text-xs">{u.supplierUser ? 'Supplier (external)' : 'Internal'}</span> },
-          { key: 'mfaEnrolled', header: 'MFA', render: (u) => <span className={`text-xs ${u.mfaEnrolled ? 'text-emerald-700' : 'text-slate-500'}`}>{u.mfaEnrolled ? 'Enrolled' : 'Not enrolled'}</span> },
-          { key: 'attributes', header: 'Scope', render: (u) => <span className="font-mono text-[11px]">{Object.entries(u.attributes ?? {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(',') : String(v)}`).join(' · ') || '–'}</span> },
-          { key: 'active', header: 'Status', render: (u) => <StatusChip status={u.active ? 'ACTIVE' : 'INACTIVE'} /> },
-          { key: 'actions', header: '', render: (u) => (
-            <div className="flex justify-end gap-2">
-              {!u.supplierUser && <Button variant="ghost" onClick={() => setEditing(u)}>Roles</Button>}
-              {u.mfaEnrolled && <Button variant="ghost" onClick={() => setResetting(u)}>Reset MFA</Button>}
-              <Button variant={u.active ? 'danger' : 'secondary'} onClick={() => setToggling(u)}>{u.active ? 'Deactivate' : 'Activate'}</Button>
-            </div>
-          ) },
-        ]} />
-      )}
-      {editing && <RolesDialog user={editing} onClose={() => setEditing(null)} />}
-      {toggling && <ActiveDialog user={toggling} onClose={() => setToggling(null)} />}
-      {resetting && <ResetMfaDialog user={resetting} onClose={() => setResetting(null)} />}
-    </Card>
-  );
-}
-
-function RolesDialog({ user, onClose }: { user: AppUserRow; onClose: () => void }) {
-  const [roles, setRoles] = useState<string[]>(user.roles);
-  const [reason, setReason] = useState('');
-  const cmd = useCommand(() => api.put(`/admin/users/${user.id}/roles`, { roles, reason: reason.trim() }), {
-    success: `${user.email}: roles updated`, onSuccess: onClose,
-  });
-  const catalogue = useApi<RoleRow[]>('/admin/roles');
-  const internalRoles = (catalogue.data ?? []).map((r) => r.role).filter((r) => r !== 'SUPPLIER_USER');
-  const toggle = (r: string) => setRoles((rs) => (rs.includes(r) ? rs.filter((x) => x !== r) : [...rs, r]));
-  return (
-    <Dialog open title={`Roles · ${user.name}`} onClose={onClose}>
-      <div className="space-y-3">
-        <fieldset>
-          <legend className="text-xs font-medium text-slate-700">Roles</legend>
-          <div className="mt-1 grid gap-1.5 sm:grid-cols-3">
-            {catalogue.isLoading && <Loading />}
-            {internalRoles.map((r) => (
-              <label key={r} className="flex items-center gap-2 text-sm">
-                <input type="checkbox" className="h-4 w-4" checked={roles.includes(r)} onChange={() => toggle(r)} />
-                {label(r)}{SENSITIVE.includes(r) && <span className="text-[10px] font-semibold uppercase text-amber-700">MFA</span>}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-        <Field label="Reason (required)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Joined the contracts team, ticket HR-2291" />}</Field>
-        <ProblemBox error={cmd.error} />
-        <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!roles.length || reason.trim().length < 3} busy={cmd.isPending} onClick={() => cmd.mutate()}>Save roles</Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-function ActiveDialog({ user, onClose }: { user: AppUserRow; onClose: () => void }) {
-  const activate = !user.active;
-  const [reason, setReason] = useState('');
-  const cmd = useCommand(() => api.put(`/admin/users/${user.id}/active`, { active: activate, reason: reason.trim() }), {
-    success: `${user.email} ${activate ? 'activated' : 'deactivated'}`, onSuccess: onClose,
-  });
-  return (
-    <Dialog open title={`${activate ? 'Activate' : 'Deactivate'} ${user.name}`} onClose={onClose}>
-      <div className="space-y-3">
-        <p className="text-sm text-slate-700">{activate ? 'The user can sign in again with their existing roles.' : 'The user can no longer sign in. Their history and audit trail are kept.'}</p>
-        <Field label="Reason (required)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={activate ? 'e.g. Returned from leave' : 'e.g. Left the company on 31 Oct'} />}</Field>
-        <ProblemBox error={cmd.error} />
-        <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant={activate ? 'primary' : 'danger'} disabled={reason.trim().length < 3} busy={cmd.isPending} onClick={() => cmd.mutate()}>{activate ? 'Activate' : 'Deactivate'}</Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-function ResetMfaDialog({ user, onClose }: { user: AppUserRow; onClose: () => void }) {
-  const [reason, setReason] = useState('');
-  const cmd = useCommand(() => api.post(`/admin/users/${user.id}/mfa/reset`, { reason: reason.trim() }), {
-    success: `${user.email}: authenticator removed`, onSuccess: onClose,
-  });
-  return (
-    <Dialog open title={`Reset authenticator · ${user.name}`} onClose={onClose}>
-      <div className="space-y-3">
-        <p className="text-sm text-slate-700">Removes the user&apos;s authenticator app, for example after a lost or replaced phone. If MFA is mandatory for
-          their role they are asked to enrol a new one at their next sign-in. Confirm the user&apos;s identity first; you cannot reset your own.</p>
-        <Field label="Reason (required)">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Lost phone, identity checked, ticket IT-4411" />}</Field>
-        <ProblemBox error={cmd.error} />
-        <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="danger" disabled={reason.trim().length < 3} busy={cmd.isPending} onClick={() => cmd.mutate()}>Reset authenticator</Button>
-        </div>
-      </div>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------- industry templates
-type IndustryTemplate = { code: string; name: string; purchaseTypes: string[]; demandSources: string[]; eventTemplates: string[]; contractTemplates: string[];
-  receipt: string; match: string; controls: string[]; kpis: string[]; demoCase: string; ruleOverrides: string[]; applied: boolean };
-
-function TemplatesTab() {
-  const { data, isLoading, error } = useApi<{ current: string; templates: IndustryTemplate[]; ruleSets: Record<string, string> }>('/admin/templates');
-  if (isLoading) return <Loading />;
-  if (error || !data) return <ProblemBox error={error} />;
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-slate-600">Industry packs preconfigure purchase types, sourcing and contract templates, receipt and match rules, controls and KPIs.
-        This tenant runs <span className="font-semibold">{data.templates.find((t) => t.applied)?.name ?? label(data.current)}</span>.</p>
-      <div className="grid gap-4 lg:grid-cols-2">
-        {data.templates.map((t) => (
-          <Card key={t.code} className={t.applied ? 'ring-2 ring-[#1A56DB]' : ''}
-            title={<span>{t.name} <span className="font-mono text-[11px] text-slate-500">{t.code}</span></span>}
-            actions={t.applied ? <StatusChip status="ACTIVE" /> : undefined}>
-            <dl className="space-y-2 text-sm">
-              {([['Purchase types', t.purchaseTypes.map((x) => label(x)).join(', ')], ['Demand', t.demandSources.join('; ')],
-                ['Sourcing', t.eventTemplates.join('; ')], ['Contracts', t.contractTemplates.map((x) => label(x)).join(', ')], ['Receipt', t.receipt],
-                ['Match', t.match], ['Controls', t.controls.join('; ')], ['KPIs', t.kpis.join(', ')], ['Demo case', t.demoCase],
-                ['Rule overrides', t.ruleOverrides.length ? t.ruleOverrides.map((k) => `${k}${data.ruleSets[k] ? ` @${data.ruleSets[k]}` : ''}`).join(', ') : 'none']] as [string, string][])
-                .map(([k, v]) => (
-                  <div key={k} className="grid grid-cols-[110px_1fr] gap-2">
-                    <dt className="text-xs text-slate-500">{k}</dt><dd className="text-slate-800">{v || '–'}</dd>
-                  </div>
-                ))}
-            </dl>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- page
 export default function Admin() {
   const user = useSessionUser();
@@ -572,16 +312,18 @@ export default function Admin() {
         subtitle="Organisation and currencies, rules and thresholds, users, roles and segregation of duties, ERP integration, the audit trail, operations and industry templates." />
       {user && !isAdmin && (
         <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
-          You are signed in as {user.roles.map((r) => label(r)).join(', ')}. You can read the organisation, rules, SoD and templates, but FX rates,
-          users and roles, changing rules, the integration monitor, the audit explorer and operations need the tenant administrator role (admin@axion.example).
+          You are signed in as {user.roles.map((r) => label(r)).join(', ')}. You can read the organisation, rules, SoD and templates, but changing the organisation, FX rates,
+          users and roles, rules and templates, the integration monitor, the audit explorer and operations need the tenant administrator role (admin@axion.example).
         </p>
       )}
       <Tabs tabs={[
         { id: 'org', label: 'Organisation (ADM-01)', content: <OrganisationTab isAdmin={isAdmin} /> },
         { id: 'rules', label: 'Rules & thresholds', content: <RulesTab /> },
+        { id: 'approvals', label: 'Approval matrix (ADM-03)', content: <ApprovalMatrixTab isAdmin={isAdmin} /> },
         { id: 'simulate', label: 'Approval simulation (ADM-03)', content: <SimulationTab /> },
         { id: 'mandatory', label: 'Mandatory fields', content: <MandatoryFieldsTab /> },
         { id: 'users', label: 'Users & roles (ADM-04)', content: <UsersTab isAdmin={isAdmin} /> },
+        { id: 'matrix', label: 'Permission matrix', content: <RolesMatrixTab isAdmin={isAdmin} /> },
         { id: 'sod', label: 'Roles & SoD', content: <SodTab isAdmin={isAdmin} /> },
         { id: 'workflow', label: 'Workflow designer', content: <WorkflowTab /> },
         { id: 'integration', label: 'Integration monitor', content: <IntegrationTab /> },
@@ -592,7 +334,7 @@ export default function Admin() {
         { id: 'ops', label: 'Operations', content: <OpsTab /> },
         { id: 'jobs', label: 'Jobs', content: <JobsTab /> },
         { id: 'delegations', label: 'Delegations', content: <DelegationsTab /> },
-        { id: 'templates', label: 'Industry templates', content: <TemplatesTab /> },
+        { id: 'templates', label: 'Industry templates', content: <TemplatesTab isAdmin={isAdmin} /> },
       ]} />
     </div>
   );

@@ -24,9 +24,11 @@ def _ensure_session_current(session, principal: Principal) -> None:
     sign-in, is refused on the next request. Agent principals and the MFA-enrolment challenge carry no user roles."""
     if principal.agent_code or principal.attributes.get("mfa_enrolment"):
         return
-    row = session.execute(select(AppUser.active, AppUser.roles).where(AppUser.id == principal.user_id)).one_or_none()
+    row = session.execute(select(AppUser.active, AppUser.roles, AppUser.session_version).where(AppUser.id == principal.user_id)).one_or_none()
     if row is None or not row.active:
         raise Problem(401, "ACCOUNT_DISABLED", "This account is deactivated; contact your administrator")
+    if (row.session_version or 1) != principal.session_version:
+        raise Problem(401, "SESSION_REVOKED", "Your sessions were revoked by an administrator or after a password reset; sign in again")
     if sorted(row.roles or []) != sorted(principal.roles or []):
         raise Problem(401, "SESSION_OUTDATED", "Your roles changed since you signed in; sign in again")
 

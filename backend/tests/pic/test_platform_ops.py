@@ -107,7 +107,9 @@ def test_task_notifications_are_deduplicated(approval_task):
     with tenant_tx(axn) as s:
         _as(s, f"requester@{DOMAIN}")
         task = s.get(Task, approval_task)
-        outbox.emit(s, "task.assigned", "TASK", task.id, task.object_ref, {"taskId": str(task.id)})  # a duplicate delivery
+        outbox.emit(s, "task.assigned", "TASK", task.id, task.object_ref,    # a duplicate delivery (the payload the engine emits)
+                    {"taskId": str(task.id), "kind": task.kind, "name": task.name, "role": task.candidate_role, "objectType": task.object_type,
+                     "objectId": str(task.object_id), "objectRef": task.object_ref, "due": task.due_at.isoformat()})
     _relay(axn)
     assert len(_notes(f"plant.controller@{DOMAIN}", f"TASK_ASSIGNED:{approval_task}")) == 1
 
@@ -222,7 +224,10 @@ def test_imported_orders_use_the_existing_mrp_flow(client, login, imported):
     order = next(o for o in run["plannedOrders"] if o["number"] == numbers[0])
     assert order["source_system"] == "SAP_S4" and order["external_ref"] == "PLO-EXT-1" and order["status"] == "CREATED"
     assert run["process"]["currentStep"] == "F1-07"
-    headers = login("mrp.controller")
+    # The imported orders are for plant P200, where mrp.controller is deliberately not assigned (test_import_permissions_and_plant_scope):
+    # the plant-scope control (SEC-AZ) stays on, so the conversion is done by a controller who is assigned to P200.
+    _ensure_user(_tenant_id(), f"mrp.p200@{DOMAIN}", ["MRP_CONTROLLER"], {"plants": ["P100", "P200"]})
+    headers = login("mrp.p200")
     firmed = client.post(f"/v1/planned-orders/{numbers[0]}/firm", headers=headers)
     assert firmed.status_code == 200 and firmed.json()["status"] == "FIRMED"
     pr = client.post(f"/v1/planned-orders/{numbers[0]}/convert", headers=headers)
@@ -308,9 +313,16 @@ def test_configured_connector_posts_over_http(monkeypatch):
             return 200, json.dumps({"result": 7})
         model, op = call["args"][3], call["args"][4]
         if op == "search":
-            return 200, json.dumps({"result": [11] if model == "res.partner" else []})
-        assert op == "create" and model == "account.move"
+            return 200, json.dumps({"result": [11] if model == "res.partner" else [5] if model == "stock.location" else []})
+        if op == "search_read":   # the incoming picking type and its default destination location
+            assert model == "stock.picking.type"
+            return 200, json.dumps({"result": [{"id": 3, "default_location_dest_id": [8, "WH/Stock"]}]})
+        assert op == "create"
         vals = call["args"][5][0]
+        if model == "stock.picking":
+            assert vals["picking_type_id"] == 3 and vals["location_id"] == 5 and vals["location_dest_id"] == 8 and vals["origin"] == "GR|T"
+            return 200, json.dumps({"result": 777})
+        assert model == "account.move"
         assert vals["move_type"] == "in_invoice" and vals["partner_id"] == 11 and vals["payment_reference"] == "1000|INV|TF001|T2|2026"
         return 200, json.dumps({"result": 4242})
 
@@ -325,10 +337,14 @@ def test_configured_connector_posts_over_http(monkeypatch):
                                           payload={"invoice": "T2", "supplier": "TF001", "companyCode": "1000", "grossMinor": 100})
             integration.process(s, message)
             assert message.status == "POSTED" and message.erp_doc_no == "4242"
-            unsupported = integration.enqueue(s, target_system="ODOO", message_type="GOODS_RECEIPT", idempotency_key="GR|T",
-                                              object_type="GOODS_RECEIPT", object_id=uuid.uuid4(), object_ref="GR-T", payload={"gr": "GR-T"})
+            receipt = integration.enqueue(s, target_system="ODOO", message_type="GOODS_RECEIPT", idempotency_key="GR|T",
+                                          object_type="GOODS_RECEIPT", object_id=uuid.uuid4(), object_ref="GR-T", payload={"gr": "GR-T", "po": "PO-T"})
+            integration.process(s, receipt)   # goods receipts are mapped to incoming pickings (stock.picking)
+            assert receipt.status == "POSTED" and receipt.erp_doc_no == "777"
+            unsupported = integration.enqueue(s, target_system="ODOO", message_type="SCF_FINANCING", idempotency_key="SCF|T",
+                                              object_type="INVOICE", object_id=uuid.uuid4(), object_ref="INV-T", payload={"invoice": "T2"})
             integration.process(s, unsupported)
-            assert unsupported.status == "RETRY" and "does not map GOODS_RECEIPT" in unsupported.last_error
+            assert unsupported.status == "RETRY" and "does not map SCF_FINANCING" in unsupported.last_error
             raise _Rollback()
     assert any(c["method"] == "execute_kw" for c in calls)
 

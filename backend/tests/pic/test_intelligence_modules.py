@@ -105,9 +105,11 @@ def test_supplier_risk_monitor_and_capa(client, login):
 
 
 def test_preferred_status_needs_scorecard_evidence(client, login):
-    r = client.post("/v1/suppliers/TF001/categories/ALU-DIECAST/status", json={"status": "PREFERRED", "reason": "Top performer"},
+    # SLA003 is QUALIFIED but has no scorecard yet: no evidence, no PREFERRED. (TF001's receipts are all on time against their delivery
+    # schedules, so its scorecards would legitimately qualify it; promoting it here would change the state later tests rely on.)
+    r = client.post("/v1/suppliers/SLA003/categories/ALU-DIECAST/status", json={"status": "PREFERRED", "reason": "Top performer"},
                     headers=login("supplier.manager"))
-    assert r.status_code == 409 and r.json()["code"] == "RULE_VIOLATION"  # OTIF below 95% / PPM issue on the latest scorecard
+    assert r.status_code == 409 and r.json()["code"] == "RULE_VIOLATION" and "OTIF n/a" in r.json()["detail"]
 
 
 def test_po_change_requests_and_expediting(client, login):

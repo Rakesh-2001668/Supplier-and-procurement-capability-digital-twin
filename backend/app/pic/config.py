@@ -7,6 +7,7 @@ refuses to return weak or development settings (see ``production_problems``).
 """
 import base64
 import binascii
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -191,6 +192,9 @@ class Settings(BaseSettings):
             problems.append("CRON_SECRET must be at least 24 characters when set")
         if self.hsts.lower() not in ("auto", "always", "off"):
             problems.append("PIC_HSTS must be auto, always or off")
+        if os.environ.get("PIC_ESIGN_PROVIDER", "").strip().upper() == "MOCK":
+            problems.append("PIC_ESIGN_PROVIDER=MOCK is the demo e-signature provider and is not allowed in production: "
+                            "configure DOCUSIGN, ADOBE_SIGN, LEEGALITY or EMUDHRA, or unset it")
         return problems
 
 

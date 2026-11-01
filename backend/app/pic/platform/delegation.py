@@ -28,10 +28,10 @@ def _cache(session: Session) -> dict:
     return session.info.setdefault(CACHE_KEY, {"by_delegate": {}, "principals": {}})
 
 
-def principal_of(user: AppUser) -> Principal:
+def principal_of(user: AppUser, session=None) -> Principal:
     roles = list(user.roles or [])
     return Principal(user_id=user.id, tenant_id=user.tenant_id, tenant_code="", email=user.email, name=user.full_name, roles=roles,
-                     scopes=scopes_for(roles), attributes=user.attributes or {}, supplier_id=user.supplier_id)
+                     scopes=scopes_for(roles, session), attributes=user.attributes or {}, supplier_id=user.supplier_id)
 
 
 def is_current(delegation: Delegation, on: Optional[date] = None) -> bool:
@@ -51,7 +51,7 @@ def active_for(session: Session, delegate_id: uuid.UUID) -> list[tuple[Delegatio
         for d in rows:
             if d.delegator_id not in cache["principals"]:
                 user = session.get(AppUser, d.delegator_id)
-                cache["principals"][d.delegator_id] = principal_of(user) if user is not None and user.active else None
+                cache["principals"][d.delegator_id] = principal_of(user, session) if user is not None and user.active else None
             if cache["principals"][d.delegator_id] is not None:
                 pairs.append((d, cache["principals"][d.delegator_id]))
         cache["by_delegate"][delegate_id] = pairs

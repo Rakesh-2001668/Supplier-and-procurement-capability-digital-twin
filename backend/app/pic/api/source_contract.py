@@ -228,7 +228,8 @@ def get_event(ref: str, p: Principal = Depends(require_any(READ, "supplier:porta
 def get_contract(ref: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
     with uow(p) as s:
         contract = by_ref(s, Contract, ref)
-        if "SUPPLIER_USER" in p.roles and contract.supplier_id != p.supplier_id:
+        # a draft is internal work: the supplier meets the contract when it enters negotiation
+        if "SUPPLIER_USER" in p.roles and (contract.supplier_id != p.supplier_id or contract.status == "DRAFT"):
             raise not_found("Contract", ref)
         view = views.contract(s, contract)
         if "SUPPLIER_USER" in p.roles:
@@ -241,6 +242,14 @@ def get_contract(ref: str, p: Principal = Depends(require_any(READ, "supplier:po
 def review_contract(ref: str, p: Principal = Depends(require("contract:manage"))):
     with uow(p) as s:
         return contract_svc.ai_review(s, by_ref(s, Contract, ref, lock=True))
+
+
+@router.get("/contracts/{ref}/clause-review", tags=["F4 Contract"])
+def clause_review(ref: str, p: Principal = Depends(require(READ))):
+    """CLM-02: each clause against the playbook (standard wording, deviation, risk score, fallback suggestion), the supplier redlines
+    waiting for review and the approval route the contract would take."""
+    with uow(p) as s:
+        return contract_svc.clause_review(s, by_ref(s, Contract, ref))
 
 
 class RedlineIn(BaseModel):
@@ -299,24 +308,47 @@ def consumption(ref: str, p: Principal = Depends(require(READ))):
 
 
 class IndexResetIn(BaseModel):
-    index_value: Decimal
+    index_value: Decimal = Field(gt=0, lt=Decimal("1e9"))
     effective_from: date
 
 
 @router.post("/contracts/{ref}/index-resets", tags=["F4 Contract"])
-def index_reset(ref: str, body: IndexResetIn, p: Principal = Depends(require("contract:manage"))):
+def index_reset(ref: str, body: IndexResetIn, p: Principal = Depends(require("contract:manage")), key: Optional[str] = Depends(idempotency_key)):
+    """Always a new price-validity period from ``effective_from`` (never an overwrite); inside the band the price is unchanged."""
     with uow(p) as s:
-        return contract_svc.index_reset(s, by_ref(s, Contract, ref, lock=True), body.index_value, body.effective_from)
+        idem = idempotent(s, f"POST /v1/contracts/{ref}/index-resets", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(contract_svc.index_reset(s, by_ref(s, Contract, ref, lock=True), body.index_value, body.effective_from))
+
+
+class ObligationIn(BaseModel):
+    party: str = Field(pattern="^(BUYER|SUPPLIER)$")
+    description: str = Field(min_length=3, max_length=2000)
+    due_date: date
+    kind: str = Field(default="OBLIGATION", pattern="^(OBLIGATION|MILESTONE)$")
+
+
+@router.post("/contracts/{ref}/obligations", status_code=201, tags=["F4 Contract"])
+def add_obligation(ref: str, body: ObligationIn, p: Principal = Depends(require("contract:manage")), key: Optional[str] = Depends(idempotency_key)):
+    """Add a buyer or supplier obligation, or a milestone, to a contract."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/contracts/{ref}/obligations", key, body)
+        if idem.replay:
+            return idem.replay
+        obligation = contract_svc.add_obligation(s, by_ref(s, Contract, ref, lock=True), party=body.party, description=body.description,
+                                                 due_date=body.due_date, kind=body.kind)
+        return idem.store(row(obligation), 201)
 
 
 class ObligationDone(BaseModel):
-    note: str
+    note: str = Field(min_length=3, max_length=2000)  # the evidence; written to the audit trail
 
 
 @router.post("/obligations/{oid}/complete", tags=["F4 Contract"])
 def complete_obligation(oid: uuid.UUID, body: ObligationDone, p: Principal = Depends(require("contract:manage"))):
     with uow(p) as s:
-        obligation = s.get(Obligation, oid)
+        obligation = s.get(Obligation, oid, with_for_update=True)
         if obligation is None:
             raise not_found("Obligation", oid)
         return row(contract_svc.complete_obligation(s, obligation, body.note))

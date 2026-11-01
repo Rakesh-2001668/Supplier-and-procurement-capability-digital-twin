@@ -8,11 +8,11 @@ import { date, inr } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, useSessionUser } from '../../invoices/_components';
 
-type Obligation = { id: string; contract: string; contractStatus: string; supplier: string | null; party: 'BUYER' | 'SUPPLIER'; description: string;
-  dueDate: string; status: string; daysToDue: number };
-type Tracker = { items: Obligation[]; overdue: number; dueSoon: number; completed: number };
+type Obligation = { id: string; contract: string; contractStatus: string; supplier: string | null; party: 'BUYER' | 'SUPPLIER'; kind?: string; description: string;
+  dueDate: string; status: string; daysToDue: number; completedAt?: string | null; onTime?: boolean | null };
+type Tracker = { items: Obligation[]; overdue: number; dueSoon: number; completed: number; completedOnTime?: number; onTimePct?: string | null };
 type Renewal = { contract: string; title: string; supplier: string | null; status: string; validTo: string; noticeOn: string; daysToExpiry: number;
-  expiringIn90: boolean; targetValueMinor: number };
+  noticeDue?: boolean; expiringIn90: boolean; targetValueMinor: number; renewalTask?: { id: string; dueAt: string } | null };
 
 // The tracker reports OPEN/DUE_SOON/OVERDUE for open obligations and the stored status otherwise (DONE once completed).
 const isDone = (s: string) => s === 'DONE' || s === 'COMPLETED';
@@ -55,10 +55,13 @@ export default function Obligations() {
 
       {tracker.isLoading ? <Loading /> : tracker.error || !tracker.data ? <ProblemBox error={tracker.error} /> : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            <Kpi label="Obligation on-time %" value={tracker.data.onTimePct ? `${tracker.data.onTimePct}%` : '–'}
+              tone={tracker.data.onTimePct ? (Number(tracker.data.onTimePct) >= 95 ? 'good' : Number(tracker.data.onTimePct) >= 85 ? 'warn' : 'bad') : 'default'}
+              hint="completed on or before the due date / (completed + open past due)" />
             <Kpi label="Overdue" value={tracker.data.overdue} tone={tracker.data.overdue ? 'bad' : 'good'} hint="past due date, not completed" />
             <Kpi label="Due in 30 days" value={tracker.data.dueSoon} tone={tracker.data.dueSoon ? 'warn' : 'default'} />
-            <Kpi label="Completed" value={completed} tone={completed ? 'good' : 'default'} />
+            <Kpi label="Completed" value={completed} tone={completed ? 'good' : 'default'} hint={tracker.data.completedOnTime !== undefined ? `${tracker.data.completedOnTime} on time` : undefined} />
             <Kpi label="Tracked" value={tracker.data.items.length} hint={party ? `${party.toLowerCase()} obligations` : 'buyer and supplier'} />
           </div>
 
@@ -71,12 +74,14 @@ export default function Obligations() {
           </>}>
             <DataTable<Obligation> rows={items} empty="No obligations match" columns={[
               { key: 'status', header: 'Status', render: (o) => <StateChip status={o.status} /> },
-              { key: 'description', header: 'Obligation', className: 'min-w-[220px]' },
+              { key: 'description', header: 'Obligation', className: 'min-w-[220px]', render: (o) => (
+                <span>{o.kind === 'MILESTONE' ? <span className="mr-1 text-[11px] font-semibold uppercase text-slate-500">milestone</span> : null}{o.description}</span>
+              ) },
               { key: 'party', header: 'Party', render: (o) => <StatusChip status={o.party} /> },
               { key: 'contract', header: 'Contract', render: (o) => <span>{contractLink(o.contract)}<span className="block text-xs text-slate-500">{o.contractStatus.replace(/_/g, ' ').toLowerCase()}</span></span> },
               { key: 'supplier', header: 'Supplier', render: (o) => o.supplier ?? '–' },
               { key: 'dueDate', header: 'Due', render: (o) => <span className="whitespace-nowrap">{date(o.dueDate)}</span> },
-              { key: 'daysToDue', header: 'Days', align: 'right', render: (o) => isDone(o.status) ? '–' : (
+              { key: 'daysToDue', header: 'Days', align: 'right', render: (o) => isDone(o.status) ? (o.onTime === false ? <span className="text-red-700">completed late</span> : o.onTime ? 'on time' : '–') : (
                 <span className={o.daysToDue < 0 ? 'font-semibold text-red-700' : o.daysToDue <= 30 ? 'text-amber-700' : ''}>
                   {o.daysToDue < 0 ? `${-o.daysToDue} late` : o.daysToDue}
                 </span>
@@ -142,7 +147,10 @@ function RenewalCalendar() {
           { key: 'title', header: 'Title', className: 'min-w-[220px]' },
           { key: 'supplier', header: 'Supplier', render: (r) => r.supplier ?? '–' },
           { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status} /> },
-          { key: 'noticeOn', header: 'Notice on', render: (r) => date(r.noticeOn) },
+          { key: 'noticeOn', header: 'Notice on', render: (r) => (
+            <span>{date(r.noticeOn)}{r.renewalTask ? <Link href={`/pic/contracts/${encodeURIComponent(r.contract)}`} className="ml-2 text-xs font-semibold text-amber-800 hover:underline">decision open</Link>
+              : r.noticeDue ? <span className="ml-2 text-xs text-slate-500">notice period reached</span> : null}</span>
+          ) },
           { key: 'validTo', header: 'Expires', render: (r) => date(r.validTo) },
           { key: 'daysToExpiry', header: 'Days left', align: 'right', render: (r) => (
             <span className={r.expiringIn90 ? 'font-semibold text-amber-700' : r.daysToExpiry < 0 ? 'text-red-700' : ''}>{r.daysToExpiry}</span>

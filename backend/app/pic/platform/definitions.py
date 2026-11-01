@@ -79,6 +79,7 @@ def _baseline_steps(session: Session, key: str) -> dict:
 def validate(session: Session, key: str, definition: Any) -> dict:
     """{"valid": bool, "errors": [{code, message, step?}], "warnings": [...]}. Pure with respect to the database (reads only)."""
     from app.pic.platform.auth import ROLE_SCOPES
+    from app.pic.platform import roles as roles_mod
     import app.pic.services  # noqa: F401  (registers the task handlers the check looks for)
     errors: list = []
     warnings: list = []
@@ -122,7 +123,7 @@ def validate(session: Session, key: str, definition: Any) -> dict:
                 err("TASK_KIND_UNKNOWN", f"Step {sid}: no handler for task kind {s['taskKind']!r} in code "
                                          f"(available: {', '.join(sorted(kinds))})", sid)
         for role in s.get("roles") or []:
-            if role not in ROLE_SCOPES:
+            if role not in ROLE_SCOPES and role not in roles_mod.known_roles(session):
                 err("ROLE_UNKNOWN", f"Step {sid}: role {role!r} does not exist", sid)
         sla = s.get("slaBusinessDays")
         if sla is not None and (not isinstance(sla, int) or isinstance(sla, bool) or not 1 <= sla <= 60):

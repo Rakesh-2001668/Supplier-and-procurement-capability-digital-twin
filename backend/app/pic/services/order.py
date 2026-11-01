@@ -17,7 +17,7 @@ from app.pic.platform.core import StateMachine, link, next_number, upstream_chai
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount
 from app.pic.platform.serialize import jsonable, row
-from app.pic.services import po_controls
+from app.pic.services import org_guard, po_controls
 from app.pic.services import requisition as req_svc
 from app.pic.services import source
 from app.pic.services import supplier as supplier_svc
@@ -105,9 +105,19 @@ def create_from_requisition(session: Session, *, requisition: str, lines: list[i
             if contract.status not in ("ACTIVE", "EXPIRING"):
                 raise rule_violation(f"{contract.number} is {contract.status}; only executed contracts can be referenced", "CLM-PO")
             contract_line = session.execute(select(ContractLine).where(ContractLine.contract_id == contract.id,
-                                                                       ContractLine.material_id == pr_line.material_id)).scalars().first()
+                                                                       ContractLine.material_id == pr_line.material_id)
+                                            .order_by((ContractLine.plant == pr_line.plant).desc(), ContractLine.line_no)).scalars().first()
             if contract_line is None:
                 raise rule_violation(f"{contract.number} has no line for this material", "CLM-PO")
+            if contract_line.plant != pr_line.plant:
+                raise rule_violation(f"{contract.number} prices this material for plant {contract_line.plant}, not {pr_line.plant}", "CLM-PO")
+            from app.pic.services import contract as contract_svc
+
+            committed = contract_svc.committed_qty(session, contract_line)  # released plus what other open drafts already reserve
+            limit = contract_line.target_qty * (1 + D(contract.over_tolerance_pct) / 100)
+            if committed + qty > limit:
+                raise rule_violation(f"{contract.number} line {contract_line.line_no}: {committed} of {contract_line.target_qty} {contract_line.uom} is "
+                                     f"already committed; {qty} more exceeds the contract quantity (+{contract.over_tolerance_pct}% tolerance)", "CLM-PO")
             validity = source.contract_price(session, contract_line.id, when)
             if validity is None:
                 raise rule_violation(f"{contract.number} has no published price valid on {when}", "CLM-PO")
@@ -191,6 +201,11 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
     p = principal(session)
     supplier = session.get(Supplier, supplier_id)
     contract = session.get(Contract, items[0][1].contract_id) if items[0][1].contract_id else None
+    # ADM-01: a deactivated organisation record is refused on a new order (its requisition may predate the deactivation)
+    org_guard.ensure_active(session, "purchase order", company_code=pr.company_code, plant=pr.plant, purchasing_org="1000")
+    for pr_line, _ in items:
+        org_guard.ensure_active(session, "purchase order", plant=pr_line.plant, storage_location=pr_line.storage_location,
+                                cost_object=((pr_line.account_assignment_type or "").upper(), pr_line.account_assignment_code))
     matrix = rules.resolve(session, "PURCHASE-TYPE-MATRIX", company_code=pr.company_code)
     receipt_rule = rules.resolve(session, "RCV-TOLERANCE", company_code=pr.company_code, supplier_group=supplier.supplier_group)
     tolerance = ({"over_pct": jsonable(contract.over_tolerance_pct), "under_pct": jsonable(contract.under_tolerance_pct),
@@ -220,7 +235,8 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
         price = price_override or inherited_price
         deviation = False
         if price_override and allocation.contract_line_id:
-            tol = D(tolerance.get("price_pct", 0))
+            line_contract = session.get(Contract, allocation.contract_id) if allocation.contract_id else None  # a PO may mix several contracts
+            tol = D(line_contract.price_tolerance_pct) if line_contract else D(tolerance.get("price_pct", 0))
             deviation = abs(Decimal(price_override - inherited_price)) > Decimal(inherited_price) * tol / 100
             if deviation and not deviation_reason:
                 raise rule_violation("Price deviates from the contract beyond tolerance; a deviation reason is required", "P07")

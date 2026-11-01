@@ -125,7 +125,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
   const user = useMemo<SessionUser | null>(() => (profileCookie ? readSessionUser() : null), [profileCookie]);
   const [menuOpen, setMenuOpen] = useState(false);
   // Sign-in and the public supplier registration page render without the workspace chrome.
-  const isLogin = pathname === '/pic/login' || pathname === '/pic/register' || pathname.startsWith('/pic/register/');
+  const isLogin = pathname === '/pic/login' || pathname === '/pic/activate' || pathname === '/pic/register' || pathname.startsWith('/pic/register/');
   const live = useLiveStream(!isLogin && !!user);
   const tenant = useApi<{ name: string; templateLabel: string }>(!isLogin && user ? '/tenant' : null);
 

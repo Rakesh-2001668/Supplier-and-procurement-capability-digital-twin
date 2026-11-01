@@ -1,0 +1,46 @@
+{
+  "client": "Kaveri Auto Components Pvt Ltd (fictional)",
+  "companyCodes": [
+    "1000"
+  ],
+  "currency": "INR",
+  "encoding": "UTF-8",
+  "extractId": "KAC-CLM-20261101-INIT",
+  "extractType": "INITIAL",
+  "extractedAt": "2026-11-01T02:30:00+05:30",
+  "files": {
+    "CLM_AMENDMENT.csv": {
+      "rows": 9,
+      "sha256": "9a8ed2959558d8a3e6756742a15675a2a3071ad5111d05cfe6273beadd9aa93b"
+    },
+    "CLM_CLAUSE.csv": {
+      "rows": 1575,
+      "sha256": "ce6c2917471b818a411ee9a3fc66b451707b47f4ca991731a22d71471d2bb815"
+    },
+    "CLM_CONTRACT.csv": {
+      "rows": 60,
+      "sha256": "0acb99af7f4a23883136313ab75c93ea0e0f3896defc0228a27ed5c6c1192f9a"
+    },
+    "CLM_LINE.csv": {
+      "rows": 78,
+      "sha256": "b17701382bd5891e350673d0cd3a6dfa65487b365e8300ba2232107035b08cad"
+    },
+    "CLM_OBLIGATION.csv": {
+      "rows": 365,
+      "sha256": "af1f829ef2a1a71035837c867cbd8a2ea938dfc763bd1f99551eceede1f5ca95"
+    },
+    "CLM_REBATE.csv": {
+      "rows": 6,
+      "sha256": "5d67b514c745eec2e0b466ffb2fcc04b2bcff6ae3bd9c072d6ca70bd825a95e9"
+    },
+    "CLM_REDLINE.csv": {
+      "rows": 3,
+      "sha256": "1b10bfc773cbefe117294c39f9ec5fc748b62a83756a9fed1ca3fdca0e73e5e2"
+    }
+  },
+  "illustrative": "ILLUSTRATIVE SAMPLE: fictional contracts, not legal advice",
+  "keyDate": "2026-10-31",
+  "release": "mock",
+  "sourceSystem": "CLM_REPOSITORY",
+  "system": "contract register export"
+}

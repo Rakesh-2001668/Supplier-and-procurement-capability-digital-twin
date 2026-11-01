@@ -37,6 +37,7 @@ class CompanyCode(TenantScoped, Base):
     gstin: Mapped[Optional[str]] = mapped_column(String(15))
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     fiscal_year_start_month: Mapped[int] = mapped_column(Integer, default=4)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")  # deactivated instead of deleted once referenced
 
 
 class Plant(TenantScoped, Base):
@@ -49,6 +50,7 @@ class Plant(TenantScoped, Base):
     # Factory calendar: working weekdays (0=Mon) and holidays.
     working_days: Mapped[list] = mapped_column(ARRAY(Integer), default=lambda: [0, 1, 2, 3, 4, 5])
     holidays: Mapped[list] = mapped_column(ARRAY(Date), default=list)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")  # deactivated instead of deleted once referenced
 
 
 class StorageLocation(TenantScoped, Base):
@@ -57,6 +59,7 @@ class StorageLocation(TenantScoped, Base):
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     code: Mapped[str] = mapped_column(String(10), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")  # deactivated instead of deleted once referenced
 
 
 class CostObject(TenantScoped, Base):
@@ -69,6 +72,7 @@ class CostObject(TenantScoped, Base):
     company_code: Mapped[str] = mapped_column(String(10), nullable=False)
     owner_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     department_head_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")  # deactivated instead of deleted once referenced
 
 
 class AppUser(TenantScoped, Base):
@@ -83,6 +87,10 @@ class AppUser(TenantScoped, Base):
     supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     mfa_enrolled: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Bumped to sign the user out everywhere (admin "revoke sessions", password reset): the token carries the value it was issued at.
+    session_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    # True from the admin invitation until the user sets a password through the single-use activation link.
+    activation_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
 
 class NumberRange(TenantScoped, Base):

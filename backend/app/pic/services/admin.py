@@ -31,22 +31,22 @@ def _admin(session: Session) -> None:
 
 # ---------------------------------------------------------------- ADM-01 organisation, calendars, currencies
 def organisation(session: Session) -> dict:
+    from app.pic.services import org_admin
     tenant = session.get(Tenant, principal(session).tenant_id)
     template = TEMPLATES.get(tenant.industry_template, {})
+    views = {key: org_admin.list_all(session, kind) for key, kind in org_admin.KINDS.items()}
+    sloc: dict[str, list] = {}
+    for s_ in views["storage-locations"]:
+        sloc.setdefault(s_["plant"], []).append(s_)
     return {
         "tenant": {"code": tenant.code, "name": tenant.name, "industryTemplate": tenant.industry_template, "templateName": template.get("name"),
                    "baseCurrency": tenant.base_currency, "timezone": tenant.timezone},
-        "companyCodes": [{"code": c.code, "name": c.name, "gstin": c.gstin, "currency": c.currency, "fiscalYearStartMonth": c.fiscal_year_start_month}
-                         for c in session.execute(select(CompanyCode).order_by(CompanyCode.code)).scalars()],
-        "plants": [{"code": p.code, "name": p.name, "companyCode": p.company_code, "stateCode": p.state_code, "workingDays": p.working_days,
-                    "holidays": [h.isoformat() for h in (p.holidays or [])],
-                    "storageLocations": [{"code": s.code, "name": s.name} for s in session.execute(
-                        select(StorageLocation).where(StorageLocation.plant == p.code).order_by(StorageLocation.code)).scalars()]}
-                   for p in session.execute(select(Plant).order_by(Plant.code)).scalars()],
-        "costObjects": [{"type": c.type, "code": c.code, "name": c.name, "companyCode": c.company_code}
-                        for c in session.execute(select(CostObject).order_by(CostObject.type, CostObject.code)).scalars()],
-        "currencies": [{"code": c.code, "name": c.name, "decimals": c.decimals, "active": c.active}
-                       for c in session.execute(select(Currency).order_by(Currency.code)).scalars()],
+        "companyCodes": views["company-codes"],
+        "plants": [{**p, "storageLocations": sloc.get(p["code"], [])} for p in views["plants"]],
+        "costObjects": views["cost-objects"],
+        "purchasingOrgs": views["purchasing-orgs"],
+        "purchasingGroups": views["purchasing-groups"],
+        "currencies": views["currencies"],
         "fxRates": [{"from": r.from_ccy, "to": r.to_ccy, "rate": str(r.rate), "validFrom": r.valid_from.isoformat(), "source": r.source}
                     for r in session.execute(select(FxRate).order_by(FxRate.from_ccy, FxRate.valid_from.desc())).scalars()],
     }
@@ -104,25 +104,27 @@ def add_plant_holidays(session: Session, plant_code: str, holidays: list[date], 
 
 # ---------------------------------------------------------------- ADM-04 users and roles
 def users(session: Session) -> list[dict]:
-    return [{"id": str(u.id), "email": u.email, "name": u.full_name, "roles": u.roles, "active": u.active, "mfaEnrolled": u.mfa_enrolled,
-             "supplierUser": u.supplier_id is not None, "attributes": u.attributes}
-            for u in session.execute(select(AppUser).order_by(AppUser.supplier_id.is_not(None), AppUser.email)).scalars()]
+    from app.pic.services import user_admin
+    return [user_admin.view(u) for u in session.execute(select(AppUser).order_by(AppUser.supplier_id.is_not(None), AppUser.email)).scalars()]
 
 
 def assign_roles(session: Session, user: AppUser, roles_: list[str], reason: str) -> AppUser:
+    from app.pic.services import role_admin
     _admin(session)
     p = principal(session)
-    unknown = [r for r in roles_ if r not in ROLE_SCOPES]
-    if unknown:
-        raise Problem(422, "UNKNOWN_ROLE", f"Unknown role(s): {', '.join(unknown)}")
-    if user.supplier_id is not None and set(roles_) != {"SUPPLIER_USER"}:
-        raise Problem(422, "SUPPLIER_USER_ROLES", "Supplier users can only hold SUPPLIER_USER")
+    if user.supplier_id is not None:
+        unknown = [r for r in roles_ if r not in ROLE_SCOPES]
+        if unknown:
+            raise Problem(422, "UNKNOWN_ROLE", f"Unknown role(s): {', '.join(unknown)}")
+        if set(roles_) != {"SUPPLIER_USER"}:
+            raise Problem(422, "SUPPLIER_USER_ROLES", "Supplier users can only hold SUPPLIER_USER")
+    elif "SUPPLIER_USER" in roles_:
+        raise Problem(422, "SUPPLIER_USER_ROLES", "SUPPLIER_USER is reserved for supplier portal users")
     if user.id == p.user_id and "TENANT_ADMIN" in user.roles and "TENANT_ADMIN" not in roles_:
         raise Problem(409, "SELF_LOCKOUT", "You cannot remove your own administrator role")
-    for a, b, rule in TOXIC_PAIRS:
-        if a & set(roles_) and b & set(roles_):
-            raise Problem(409, "SOD_CONFLICT", f"Role combination not allowed ({rule})", rule_ref=rule.split(":")[0])
-    if SENSITIVE_ROLES & set(roles_) and not user.mfa_enrolled:
+    if user.supplier_id is None:
+        role_admin.check_assignment(session, roles_, user)  # known roles (built-in and the tenant's own), role pairs and scope pairs
+    if SENSITIVE_ROLES & set(roles_) and not user.mfa_enrolled and not user.activation_pending:
         raise Problem(409, "MFA_REQUIRED", "Approver, finance and admin roles need MFA enrolment (§14)")
     before = list(user.roles)
     user.roles = sorted(set(roles_))

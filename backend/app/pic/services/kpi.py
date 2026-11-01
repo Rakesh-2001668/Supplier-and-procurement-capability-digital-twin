@@ -326,10 +326,12 @@ def m07_expiring(c: Ctx) -> Result:
 
 
 def m07_obligations(c: Ctx) -> Result:
-    row = c.one("SELECT count(*) FILTER (WHERE status IN ('DONE', 'COMPLETED', 'FULFILLED', 'MET')), "
+    # on time = completed on or before the due date in IST (UTC+05:30, a fixed offset: no tz database needed). A completion without a timestamp predates completion tracking: it counts as met.
+    row = c.one("SELECT count(*) FILTER (WHERE status IN ('DONE', 'COMPLETED', 'FULFILLED', 'MET') "
+                "AND (completed_at IS NULL OR ((completed_at AT TIME ZONE 'UTC') + interval '5 hours 30 minutes')::date <= due_date)), "
                 "count(*) FILTER (WHERE status IN ('DONE', 'COMPLETED', 'FULFILLED', 'MET') OR due_date < :today) FROM pic.obligation WHERE true"
                 + c.when("due_date"), today=clock.today())
-    return pct(row[0], row[1], {"definition": "obligations met / obligations due"})
+    return pct(row[0], row[1], {"definition": "obligations completed on or before the due date / obligations due (completed, or open past the due date)"})
 
 
 # ---------------------------------------------------------------- M08 purchase orders

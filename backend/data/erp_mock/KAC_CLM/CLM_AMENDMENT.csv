@@ -1,0 +1,10 @@
+CONTRACT_NO,SEQ,KIND,STATUS,EFFECTIVE_FROM,DECIDED_ON,REASON,CHANGES,BEFORE
+KAC-MA-0001,1,TERMS,EFFECTIVE,2025-09-01,2025-08-27,"Payment terms aligned to 45 days (MSME rule, MSMED Act section 15).","{""paymentTerms"": ""N45""}","{""paymentTerms"": ""N60""}"
+KAC-QC-0002,1,EXTENSION,EFFECTIVE,2026-02-10,2026-02-05,Extended by 12 months to follow the master agreement.,"{""validTo"": ""2027-02-13""}","{""validTo"": ""2026-02-13""}"
+KAC-RC-0002,1,TERMS,EFFECTIVE,2026-01-01,2025-12-27,Payment terms changed to 45 days.,"{""paymentTerms"": ""N45""}","{""paymentTerms"": ""N60""}"
+KAC-RC-0002,2,VARIATION,REJECTED,2026-09-01,2026-08-27,Supplier asked for a 12% rate increase; not approved.,"{""priceFactor"": ""1.12""}","{""priceFactor"": ""1.000""}"
+KAC-SA-0001,1,VARIATION,EFFECTIVE,2026-07-01,2026-06-26,Quarterly aluminium price revision: unit prices up 6.4%.,"{""priceFactor"": ""1.064""}","{""priceFactor"": ""1.000""}"
+KAC-SA-0003,1,VARIATION,EFFECTIVE,2026-04-01,2026-03-27,Target quantity raised for the new model launch.,"{""qtyFactor"": ""1.25""}","{""qtyFactor"": ""1.00""}"
+KAC-SA-0003,2,TERMS,EFFECTIVE,2026-08-01,2026-07-27,Liability clause moved to the playbook fallback (cap 50% of annual value) after Legal review.,"{""clauses"": [""LIABILITY""]}","{""clauses"": [""LIABILITY""]}"
+KAC-SOW-0004,1,EXTENSION,EFFECTIVE,2026-09-20,2026-09-15,Programme extended to complete the last die batch.,"{""validTo"": ""2026-12-23""}","{""validTo"": ""2026-09-30""}"
+KAC-VC-0004,1,TERMINATION,EFFECTIVE,2026-09-15,2026-09-10,Terminated for cause: repeated non-remittance of provident fund and service-level breaches in three consecutive months.,"{""forCause"": true}","{""status"": ""ACTIVE"", ""validTo"": ""2027-03-31""}"

@@ -24,17 +24,20 @@ async function forward(request: NextRequest, context: { params: Promise<{ path: 
   if (ip) headers.set('x-forwarded-for', ip);
 
   const hasBody = !['GET', 'HEAD'].includes(request.method);
-  let upstream: Response;
-  try {
-    upstream = await fetch(target, {
-      method: request.method,
-      headers,
-      // Raw bytes, not text: multipart uploads (invoice scans, ERP CSV imports) must pass through unchanged.
-      body: hasBody ? await request.arrayBuffer() : undefined,
-      cache: 'no-store',
-      signal: request.signal,
-    });
-  } catch {
+  // Raw bytes, not text: multipart uploads (invoice scans, ERP CSV imports) must pass through unchanged.
+  const body = hasBody ? await request.arrayBuffer() : undefined;
+  // A reused keep-alive socket the API already closed fails at once with a network error. Reads and writes that carry an
+  // Idempotency-Key are safe to send again, so retry that single failure once instead of showing "API unavailable".
+  const retryable = !hasBody || headers.has('idempotency-key');
+  let upstream: Response | undefined;
+  for (let attempt = 0; attempt < (retryable ? 2 : 1) && !upstream; attempt += 1) {
+    try {
+      upstream = await fetch(target, { method: request.method, headers, body, cache: 'no-store', signal: request.signal });
+    } catch {
+      if (request.signal.aborted) break;
+    }
+  }
+  if (!upstream) {
     return Response.json(
       { code: 'API_UNAVAILABLE', title: 'API_UNAVAILABLE', detail: 'The procurement API is not reachable. Check that it is running.' },
       { status: 502, headers: { 'content-type': 'application/problem+json' } },

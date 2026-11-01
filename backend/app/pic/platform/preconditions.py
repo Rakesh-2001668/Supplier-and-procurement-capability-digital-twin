@@ -30,6 +30,12 @@ REQUIRED = {
     ("POST", "/v1/purchase-orders/{ref}/versions"),
     ("POST", "/v1/purchase-orders/{ref}/resubmit"),
     ("PUT", "/v1/process-definitions/{key}/versions/{version}"),
+    # M07 contract commands that change a signed-off document: nobody acts on a contract version they have not seen
+    ("POST", "/v1/contracts/{ref}/submit"),
+    ("POST", "/v1/contracts/{ref}/activate"),
+    ("POST", "/v1/contracts/{ref}/terminate"),
+    ("POST", "/v1/contracts/{ref}/index-resets"),
+    ("POST", "/v1/contracts/{ref}/amendments"),
 }
 DETAIL_ROUTE = re.compile(r"^/v1/[a-z0-9-]+/\{[a-z_]+\}$")  # /v1/<collection>/{ref}: the document's own URL
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")

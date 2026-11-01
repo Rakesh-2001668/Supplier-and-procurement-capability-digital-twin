@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { legacyDemoAllowed } from '@/lib/pic/deployment';
 
-// Pages that work without a session: sign-in, and supplier self-registration from an invitation link (F8-01).
-const PUBLIC_PAGES = ['/pic/login', '/pic/register'];
+// Pages that work without a session: sign-in, supplier self-registration from an invitation link (F8-01), and account activation / password reset from an administrator's link.
+const PUBLIC_PAGES = ['/pic/login', '/pic/register', '/pic/activate'];
 
 function isWorkspace(pathname: string): boolean {
   return pathname === '/pic' || pathname.startsWith('/pic/');

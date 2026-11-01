@@ -507,7 +507,7 @@ def escalation_mode(body: dict, level: int) -> str:
 def _has_eligible(session: Session, task: Task, role: str, scope: dict) -> bool:
     """Is there at least one active internal user who could work the task as ``role`` (role, scope and four-eyes exclusions)?"""
     users = session.execute(select(AppUser).where(AppUser.active.is_(True), AppUser.supplier_id.is_(None), AppUser.roles.any(role))).scalars()
-    return any(_can_work_as(delegation.principal_of(u), task, role, scope) is None for u in users)
+    return any(_can_work_as(delegation.principal_of(u, session), task, role, scope) is None for u in users)
 
 
 def _escalate(session: Session, task: Task) -> dict:

@@ -167,6 +167,7 @@ class Contract(TenantScoped, Base):
     termination_reason: Mapped[Optional[str]] = mapped_column(Text)
     framework_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract.id"))  # call-off of a master agreement
     jurisdiction: Mapped[Optional[str]] = mapped_column(String(10))  # governing-law code of the clause library variant (IN-MH, IN-DL, ...)
+    category: Mapped[Optional[str]] = mapped_column(String(40))  # category whose clause overlay (CLM-PLAYBOOK.categoryClauses) the draft used
 
 
 class ContractLine(TenantScoped, Base):
@@ -182,6 +183,7 @@ class ContractLine(TenantScoped, Base):
     target_qty: Mapped[Decimal] = mapped_column(QTY, nullable=False)
     released_qty: Mapped[Decimal] = mapped_column(QTY, default=0)
     released_value_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    thresholds_hit: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")  # consumption alerts raised for this line
 
 
 class PriceValidity(TenantScoped, Base):
@@ -205,6 +207,7 @@ class Clause(TenantScoped, Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     position: Mapped[str] = mapped_column(String(15), nullable=False)  # STANDARD | FALLBACK | NON_STANDARD
     risk_score: Mapped[int] = mapped_column(Integer, default=0)
+    standard_text: Mapped[Optional[str]] = mapped_column(Text)  # the library wording the clause was drafted from; None for a clause added later
 
 
 class Obligation(TenantScoped, Base):
@@ -214,6 +217,10 @@ class Obligation(TenantScoped, Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(15), default="OPEN")
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, default="OBLIGATION", server_default="OBLIGATION")  # OBLIGATION | MILESTONE
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    completion_note: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class Signature(TenantScoped, Base):

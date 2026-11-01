@@ -14,6 +14,8 @@ first four; the rest cover backup/DR, releases, secrets, incidents and privacy r
 | [secret-rotation.md](secret-rotation.md) | Scheduled rotation, suspected leak, staff change |
 | [incident-response.md](incident-response.md) | Any Sev1/Sev2: outage, security incident, personal-data breach |
 | [privacy-requests.md](privacy-requests.md) | DPDP data-principal requests: access, erasure, retention reporting |
+| [clause_library.md](clause_library.md) | Loading the client's legal-approved clause library, the mock e-signature provider and the mock contract data (and how to replace each), the If-Match decision |
+| [admin_operations.md](admin_operations.md) | Provisioning a tenant, organisation setup, user invitations and resets, custom roles, template packs |
 
 ## Signals (all from `GET /metrics`, Prometheus text, `Authorization: Bearer $PIC_METRICS_TOKEN`)
 

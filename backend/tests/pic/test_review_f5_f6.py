@@ -75,6 +75,9 @@ def _po(s, lines: list[tuple], supplier: str = "TF001", purpose: str = "Review F
         unit_price_minor: int = None) -> PurchaseOrder:
     """lines: (material, qty, price_est_minor). Created, approved and transmitted inside the caller's transaction."""
     _as(s, "buyer")
+    # BP M06: TF001 is not qualified for FASTENERS, so a fastener line goes through the one-time-vendor exception (reason + approver)
+    one_time_reason = ("Test purchase of fasteners from a supplier not yet qualified for FASTENERS: one-time exception"
+                       if any(m.startswith("FK-") for m, _, _ in lines) and not contract else None)
     pr = requisition.create(s, origin="MANUAL", purpose_code="BUFFER_BUILD", purpose_text=purpose, plant="P100",
                             lines=[{"item_type": "MATERIAL", "purchase_type": "STOCK", "material": m, "qty": str(q), "price_est_minor": p,
                                     "need_date": _need().isoformat(), "storage_location": "0001"} for m, q, p in lines])
@@ -82,7 +85,8 @@ def _po(s, lines: list[tuple], supplier: str = "TF001", purpose: str = "Review F
     _approve(s, pr.id)
     _as(s, "buyer")
     po = order.create_from_requisition(s, requisition=pr.number, lines=[10 * (i + 1) for i in range(len(lines))],
-                                       supplier_code=None if contract else supplier, contract_ref=contract, unit_price_minor=unit_price_minor)[0]
+                                       supplier_code=None if contract else supplier, contract_ref=contract, unit_price_minor=unit_price_minor,
+                                       one_time_vendor_reason=one_time_reason)[0]
     _approve(s, po.id, "Price as per quotation")
     assert po.status == "TRANSMITTED", po.status
     return po
@@ -516,7 +520,8 @@ def test_rejected_po_is_corrected_and_resubmitted_or_cancelled_in_approval(tx):
     requisition.submit(s, pr)
     _approve(s, pr.id)
     _as(s, "buyer")
-    po = order.create_from_requisition(s, requisition=pr.number, lines=[10], supplier_code="TF001", release_qty=Decimal(400))[0]
+    po = order.create_from_requisition(s, requisition=pr.number, lines=[10], supplier_code="TF001", release_qty=Decimal(400),
+                                       one_time_vendor_reason="Test purchase of fasteners from a supplier not yet qualified for FASTENERS: one-time exception")[0]
     assert po.status == "IN_APPROVAL"
     task = s.execute(select(Task).where(Task.object_id == po.id, Task.status == "OPEN")).scalar_one()
     _as(s, "buyer.lead")
@@ -665,7 +670,8 @@ def test_asn_and_service_entry_creation_honour_the_idempotency_key(client, login
             pr_id, pr_no = pr.id, pr.number
         sc.approve_all(pr_id, now)
         with sc.act("buyer", now) as s:
-            po = order.create_from_requisition(s, requisition=pr_no, lines=[10], supplier_code="TF001")[0]
+            po = order.create_from_requisition(s, requisition=pr_no, lines=[10], supplier_code="TF001",
+                                               one_time_vendor_reason="Test purchase of fasteners from a supplier not yet qualified for FASTENERS: one-time exception")[0]
             po_id, po_no = po.id, po.number
         sc.approve_all(po_id, now, "Price as per quotation")
         with sc.act("tf.sales", now) as s:

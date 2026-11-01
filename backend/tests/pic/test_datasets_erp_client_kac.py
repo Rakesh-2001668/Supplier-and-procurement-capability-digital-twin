@@ -16,7 +16,7 @@ from sqlalchemy import func, select
 
 from app.pic.db import system_tx, tenant_tx
 from app.pic.models import (
-    AuditEvent, Contract, ContractLine, ErpDocument, Invoice, Material, MaverickHit, Payment, PoLine, PriceValidity, PurchaseOrder, SpendLine,
+    AuditEvent, BankChangeRequest, Contract, ContractLine, ErpDocument, Invoice, Material, MaverickHit, Payment, PoLine, PriceValidity, PurchaseOrder, SpendLine,
     Supplier, SupplierBankAccount, Tenant, Timer,
 )
 from app.pic.platform import clock, crypto
@@ -291,7 +291,12 @@ def test_delta_extract_updates_masters_and_refuses_bank_changes(loaded, tmp_path
         assert vendor.status == "BLOCKED" and vendor.screening["erpBlock"] == "SPERR"
         event = db.execute(select(AuditEvent).where(AuditEvent.object_id == vendor.id, AuditEvent.action == "ERP_DELTA")).scalar_one()
         assert event.actor == "integration:SAP_S4" and event.after == {"status": "BLOCKED"}
+        # the SAP change is never applied: the live account stays, the new one waits as an inactive record of an MDM-04 bank change
         unchanged = db.execute(select(SupplierBankAccount).join(Supplier, Supplier.id == SupplierBankAccount.supplier_id)
-                               .where(Supplier.code == "100003")).scalar_one()
+                               .where(Supplier.code == "100003", SupplierBankAccount.active.is_(True))).scalar_one()
         assert crypto.decrypt(loaded["tenant_id"], "bank", unchanged.account_enc) != "99990000111122"
+        proposed = db.execute(select(SupplierBankAccount).join(Supplier, Supplier.id == SupplierBankAccount.supplier_id)
+                              .where(Supplier.code == "100003", SupplierBankAccount.active.is_(False))).scalar_one()
+        assert crypto.decrypt(loaded["tenant_id"], "bank", proposed.account_enc) == "99990000111122"
+        assert db.execute(select(BankChangeRequest.status).where(BankChangeRequest.bank_account_id == proposed.id)).scalar_one() == "PENDING_CALLBACK"
     assert all(v.get("loaded", 0) == 0 for v in result["objects"].values())

@@ -60,6 +60,7 @@ class Principal:
     attributes: dict = field(default_factory=dict)
     supplier_id: Optional[uuid.UUID] = None
     agent_code: Optional[str] = None
+    session_version: int = 1  # the user's app_user.session_version when the token was issued (revocation)
 
     @property
     def actor(self) -> str:
@@ -76,11 +77,27 @@ class Principal:
         return self.attributes.get(key, default)
 
 
-def scopes_for(roles: list[str]) -> set[str]:
+def scopes_for(roles: list[str], session=None) -> set[str]:
+    """Scopes of built-in roles; with a tenant session also those of the tenant's own roles (platform/roles.py)."""
     scopes: set[str] = set()
     for role in roles:
         scopes |= ROLE_SCOPES.get(role, set())
+    if session is not None and any(r not in ROLE_SCOPES for r in roles):
+        from app.pic.platform import roles as roles_mod
+        scopes |= roles_mod.scopes_of(session, roles)
     return scopes
+
+
+def custom_scopes(user, tenant, session=None) -> list[str]:
+    """Scopes granted by the user's tenant-defined roles, for the ``xs`` token claim (empty for built-in roles only)."""
+    if not any(r not in ROLE_SCOPES for r in user.roles or []):
+        return []
+    from app.pic.platform import roles as roles_mod
+    if session is not None:
+        return sorted(roles_mod.scopes_of(session, user.roles))
+    from app.pic.db import tenant_tx
+    with tenant_tx(tenant.id) as s:
+        return sorted(roles_mod.scopes_of(s, user.roles))
 
 
 def hash_password(password: str) -> str:
@@ -94,7 +111,7 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def issue_token(user, tenant, amr: Optional[list[str]] = None) -> str:
+def issue_token(user, tenant, amr: Optional[list[str]] = None, session=None) -> str:
     settings = get_settings()
     # Token lifetime follows the wall clock even when the business clock is pinned.
     issued = datetime.now(timezone.utc)
@@ -106,6 +123,8 @@ def issue_token(user, tenant, amr: Optional[list[str]] = None) -> str:
         "name": user.full_name,
         "roles": list(user.roles),
         "attrs": user.attributes or {},
+        "xs": custom_scopes(user, tenant, session),
+        "sv": int(getattr(user, "session_version", None) or 1),
         "sup": str(user.supplier_id) if user.supplier_id else None,
         "iat": int(issued.timestamp()),
         "exp": int((issued + timedelta(minutes=settings.jwt_ttl_minutes)).timestamp()),
@@ -116,8 +135,8 @@ def issue_token(user, tenant, amr: Optional[list[str]] = None) -> str:
     return jwt.encode(claims, settings.jwt_secret, algorithm=ALGORITHM)
 
 
-def token_response(user, tenant, amr: Optional[list[str]] = None) -> dict:
-    return {"access_token": issue_token(user, tenant, amr), "token_type": "bearer", "roles": user.roles, "tenant": tenant.code}
+def token_response(user, tenant, amr: Optional[list[str]] = None, session=None) -> dict:
+    return {"access_token": issue_token(user, tenant, amr, session), "token_type": "bearer", "roles": user.roles, "tenant": tenant.code}
 
 
 # ---------------------------------------------------------------- short-lived signed challenges (MFA, enrolment, OIDC state)
@@ -152,6 +171,10 @@ def principal_from_token(token: str) -> Principal:
     except JWTError as exc:
         raise Problem(401, "UNAUTHENTICATED", f"Invalid or expired token: {exc}")
     roles = claims.get("roles", [])
+    extra: set[str] = set()
+    if claims.get("xs"):
+        from app.pic.platform import roles as roles_mod
+        extra = set(claims["xs"]) & set(roles_mod.assignable_scopes())  # never trust a platform-level scope in a token
     return Principal(
         user_id=uuid.UUID(claims["sub"]),
         tenant_id=uuid.UUID(claims["tid"]),
@@ -159,9 +182,10 @@ def principal_from_token(token: str) -> Principal:
         email=claims.get("email", ""),
         name=claims.get("name", ""),
         roles=roles,
-        scopes=scopes_for(roles),
+        scopes=scopes_for(roles) | extra,
         attributes=claims.get("attrs") or {},
         supplier_id=uuid.UUID(claims["sup"]) if claims.get("sup") else None,
+        session_version=int(claims.get("sv") or 1),
     )
 
 

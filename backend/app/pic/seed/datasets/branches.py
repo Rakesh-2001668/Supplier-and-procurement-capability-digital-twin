@@ -629,6 +629,9 @@ def apply(tenant_code: str, password: str) -> dict:
     with sc.act("buyer", at(d8, 11, 35)) as s:
         po_c = order.create_from_requisition(s, requisition=topup_no, lines=[10], release_qty=Decimal(100))[0]
         po_c_id, po_c_no = po_c.id, po_c.number
+    # The third call-off of DC-345 to one supplier inside the 7-day window trips the split control (PO-SPLIT, BP M08-C3): the order is
+    # routed for approval instead of released touchless. The buyer lead reviews the evidence and releases it.
+    sc.approve_all(po_c_id, at(d8, 11, 37), "Split check reviewed: three scheduled call-offs of one top-up requisition, not a split of a larger buy")
     _relay(sc, at(d8, 11, 40))
     sc.approve_all(block_id, at(d8, 12), "Aftermarket variant data complete")
     with sc.act("category.manager", at(d8, 14)) as s:

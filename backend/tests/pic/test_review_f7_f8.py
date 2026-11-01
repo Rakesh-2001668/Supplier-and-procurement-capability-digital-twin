@@ -323,10 +323,13 @@ def test_payment_is_reconciled_only_when_the_erp_posts_it():
         assert "reconciled" in [st for st in workflow.history(s, instance)["path"] if st["step"] == "F7-09"][0]["outcome"]
         again = payables.reconcile(s, "1000")
         assert payment.number not in [i["ref"] for i in again["items"]]
-    assert connectors.maps("SAP_S4", "SUPPLIER_CREDIT_MEMO") and not connectors.maps("TALLY_PRIME", "SUPPLIER_CREDIT_MEMO")
-    assert not connectors.maps("DYNAMICS_365", "PAYMENT") and not connectors.maps("ODOO", "GOODS_RECEIPT")
+    # every ERP connector now maps the seven core documents; a type none of them maps (supply-chain-finance posting) and an
+    # unknown target system are the unmapped cases the guard still refuses before anything is written
+    assert all(connectors.maps(system, "SUPPLIER_CREDIT_MEMO") for system in ("SAP_S4", "TALLY_PRIME", "DYNAMICS_365", "ODOO"))
+    assert not connectors.maps("DYNAMICS_365", "SCF_FINANCING") and not connectors.maps("ODOO", "SCF_FINANCING")
+    assert not connectors.maps("NO_SUCH_ERP", "PAYMENT")
     with pytest.raises(Problem) as unmapped:
-        connectors.require_mapped("DYNAMICS_365", "PAYMENT")
+        connectors.require_mapped("DYNAMICS_365", "SCF_FINANCING")
     assert unmapped.value.code == "MESSAGE_TYPE_NOT_MAPPED"
 
 

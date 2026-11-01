@@ -122,9 +122,14 @@ def contract(session: Session, c: Contract) -> dict:
                                  .order_by(PriceValidity.valid_from)).scalars().all()
     clauses = session.execute(select(Clause).where(Clause.contract_id == c.id)).scalars().all()
     signatures = session.execute(select(Signature).where(Signature.contract_id == c.id)).scalars().all()
+    from app.pic.services.contract import DEMO_SIGNATURE_LABEL, signature_provider
+    sig_rows = [row(x, extra={"documentHash": x.document_hash, "provider": signature_provider(x.envelope_ref),
+                              "demoSignature": signature_provider(x.envelope_ref) == "MOCK",
+                              "label": DEMO_SIGNATURE_LABEL if signature_provider(x.envelope_ref) == "MOCK" else None}) for x in signatures]
     return row(c, extra={"supplier": _supplier(session, c.supplier_id), "lines": rows(lines), "priceValidity": rows(validities),
                          "clauses": rows(clauses), "pendingRedlines": _pending_redlines(session, c),
-                         "signatures": [row(x, extra={"documentHash": x.document_hash}) for x in signatures], "process": _process(session, "CONTRACT", c),
+                         "signatures": sig_rows, "demoSignature": any(x["demoSignature"] for x in sig_rows),
+                         "process": _process(session, "CONTRACT", c),
                          "lineage": lineage(session, "CONTRACT", c.id)})
 
 

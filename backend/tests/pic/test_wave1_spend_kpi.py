@@ -349,7 +349,8 @@ def test_saved_views_crud_etag_sharing_and_validation(client, login):
     assert client.get("/v1/saved-views?screen=tasks", headers=other).json() == []  # private to the owner
     stale = client.patch(f"/v1/saved-views/{view['id']}", json={"shared": True}, headers={**mine, "If-Match": '"99"'})
     assert stale.status_code == 412
-    ok = client.patch(f"/v1/saved-views/{view['id']}", json={"shared": True, "name": "Overdue"}, headers={**mine, "If-Match": view["etag"]})
+    ok = client.patch(f"/v1/saved-views/{view['id']}", json={"shared": True, "name": "Overdue"}, headers={**mine, "If-Match": listed["Overdue approvals"]["etag"]})
+    # (the etag read after the second default: un-defaulting the first view changed its row version)
     assert ok.status_code == 200 and ok.json()["shared"] is True and ok.headers["ETag"]
     shared = client.get("/v1/saved-views?screen=tasks", headers=other).json()
     assert [v["name"] for v in shared] == ["Overdue"] and shared[0]["mine"] is False

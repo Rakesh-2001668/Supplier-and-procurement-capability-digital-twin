@@ -11,15 +11,14 @@ import { useApi, useCommand } from '@/lib/pic/hooks';
 import { AmendKind, AmendmentDialog, AmendmentsTab, AmendmentSummary, useAmendmentRule } from './_amendments';
 import { ExtractionTab } from './_extraction';
 import { RebatesTab } from './_rebates';
+import { ClauseReviewTab, PendingRedline, PositionChip } from './_clauses';
 
 type ContractLine = { id: string; line_no: number; description: string; plant: string; uom: string; target_qty: string; released_qty: string;
   released_value_minor: number };
 type PriceValidity = { id: string; contract_line_id: string; valid_from: string; valid_to: string; unit_price_minor: number; index_value: string | null;
   reason: string; published: boolean };
 type Clause = { id: string; code: string; title: string; text: string; position: string; risk_score: number };
-type Signature = { id: string; party: string; signer_name: string; signed_at: string; envelope_ref: string };
-type PendingRedline = { clause: string; proposedText: string | null; proposedPosition: string | null; originalText: string | null;
-  originalPosition: string | null; by: string; at: string };
+type Signature = { id: string; party: string; signer_name: string; signed_at: string; envelope_ref: string; provider?: string; demoSignature?: boolean; label?: string | null };
 type IndexRef = { index: string; base: string; band_pct: string; reset?: string };
 type Contract = {
   id: string; number: string; type: string; title: string; status: string; supplier: { id: string; code: string; name: string };
@@ -28,14 +27,19 @@ type Contract = {
   thresholds_hit: number[] | null; rule_set_version: string; activated_at: string | null; version: number;
   terminated_at: string | null; termination_reason: string | null; framework_contract_id: string | null; jurisdiction: string | null;
   lines: ContractLine[]; priceValidity: PriceValidity[]; clauses: Clause[]; signatures: Signature[]; pendingRedlines?: PendingRedline[];
+  demoSignature?: boolean;
 };
 type Brief = { number: string; title: string; type: string; status: string; validFrom: string; validTo: string; targetValueMinor: number };
 type Framework = { contract: string; type: string; jurisdiction: string | null; framework: Brief | null; callOffs: Brief[] };
-type Review = { risk: number; findings: { clause: string; position: string; risk: number; fallback: string | null }[]; aiRef: string };
+type Review = { risk: number; riskBand?: string; findings: { clause: string; position: string; risk: number; fallback: string | null; textDeviates?: boolean;
+  suggestedPosition?: string | null }[]; aiRef: string };
 type Consumption = { contract: string; status: string; thresholdsHit: number[] | null;
-  lines: { line: number; description: string; targetQty: string; releasedQty: string; releasedValueMinor: number; consumedPct: string;
-    currentPriceMinor: number | null; offContract: { po: string; line: number; qty: string; unitPriceMinor: number; leakageMinor: number }[] }[];
-  obligations: { id: string; party: string; description: string; dueDate: string; status: string }[] };
+  lines: { line: number; description: string; targetQty: string; releasedQty: string; releasedValueMinor: number; consumedPct: string; thresholdsHit?: number[];
+    currentPriceMinor: number | null; offContract: { po: string; line: number; qty: string; unitPriceMinor: number; valueMinor?: number; leakageMinor: number }[];
+    priceDeviations?: { po: string; line: number; qty: string; unitPriceMinor: number; contractPriceMinor: number; excessMinor: number; reason: string | null }[] }[];
+  compliance?: { targetValueMinor: number; releasedValueMinor: number; consumedValuePct: string; offContractValueMinor: number; priceLeakageMinor: number;
+    offContractLines: number; priceDeviationLines: number; complianceRatePct: string | null; definition: string };
+  obligations: { id: string; party: string; kind?: string; description: string; dueDate: string; status: string; completedAt?: string | null }[] };
 type IndexResult = { contract: string; changePct: string; adjustPct: string; lines: { line: number; oldPriceMinor: number; newPriceMinor: number }[] };
 
 const REVIEWABLE = ['DRAFT', 'IN_NEGOTIATION'];
@@ -124,6 +128,11 @@ export default function ContractPage() {
                 restore the original text in the Clauses tab. Until then the clause counts as non-standard and the contract cannot be submitted.
               </p>
             )}
+            {c.demoSignature && (
+              <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Demo signature – not legally binding. At least one signature of this contract came from the MOCK e-signature provider (demo and test use only).
+              </p>
+            )}
             {c.status === 'OUT_FOR_SIGNATURE' && (
               <p className="text-sm text-slate-600">Signatures: buyer {parties.has('BUYER') ? '✓ signed' : '– pending'} · supplier {parties.has('SUPPLIER') ? '✓ signed' : '– pending (signs in the supplier portal)'}.</p>
             )}
@@ -133,29 +142,8 @@ export default function ContractPage() {
         extraTabs={c ? [
           {
             id: 'clauses', label: `Clauses (${c.clauses.length}${nonStandard ? `, ${nonStandard} deviating` : ''}${pending.length ? `, ${pending.length} to review` : ''})`, content: (
-              <ul className="space-y-3">
-                {c.clauses.length ? c.clauses.map((x) => {
-                  const redline = pending.find((r) => r.clause === x.code);
-                  return (
-                    <li key={x.id} className={`rounded-lg border p-3 ${redline ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200'}`}>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs text-slate-500">{x.code}</span>
-                        <span className="text-sm font-semibold">{x.title}</span>
-                        <PositionChip position={x.position} />
-                        <span className="text-xs text-slate-600">risk {x.risk_score}</span>
-                        {redline && <span className="text-xs font-semibold text-amber-800">supplier redline · {redline.by} · {dateTime(redline.at)}</span>}
-                        {redline && manager && c.status === 'IN_NEGOTIATION' && (
-                          <Button className="ml-auto" onClick={() => setReviewing(redline)}>Review redline</Button>
-                        )}
-                      </div>
-                      <p className="mt-1 text-sm text-slate-700">{x.text}</p>
-                      {redline && redline.originalText && (
-                        <p className="mt-2 rounded bg-white p-2 text-xs text-slate-600"><span className="font-semibold uppercase text-slate-500">Replaced text</span><br />{redline.originalText}</p>
-                      )}
-                    </li>
-                  );
-                }) : <Empty title="No clauses" />}
-              </ul>
+              <ClauseReviewTab key={`${c.version}-${c.clauses.map((x) => `${x.position}${x.risk_score}${x.text.length}`).join('')}`} contractNumber={c.number}
+                status={c.status} canManage={manager} onReview={setReviewing} />
             ),
           },
           {
@@ -165,6 +153,9 @@ export default function ContractPage() {
                 { key: 'signer_name', header: 'Signer' },
                 { key: 'signed_at', header: 'Signed', render: (s) => dateTime(s.signed_at) },
                 { key: 'envelope_ref', header: 'E-sign envelope', render: (s) => <span className="font-mono text-xs">{s.envelope_ref}</span> },
+                { key: 'provider', header: 'Provider', render: (s) => (s.demoSignature
+                  ? <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900" title="Signed through the MOCK e-signature provider">Demo signature – not legally binding</span>
+                  : <span className="text-xs text-slate-600">{label(s.provider ?? 'INTERNAL')}</span>) },
               ]} />
             ),
           },
@@ -265,20 +256,15 @@ function RedlineReviewDialog({ contract, redline, onClose }: { contract: Contrac
   );
 }
 
-function PositionChip({ position }: { position: string }) {
-  const tone = position === 'STANDARD' ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : position === 'FALLBACK' ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-red-50 text-red-800 ring-red-200';
-  return <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ring-1 ring-inset ${tone}`}>{position.replace(/_/g, ' ')}</span>;
-}
-
 function ReviewPanel({ review }: { review: Review }) {
   return (
     <div className="rounded-lg bg-slate-50 p-3 text-sm">
       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI contract review (explainable)</p>
-      <p className="mt-1">Contract risk <span className="font-semibold">{review.risk}/100</span> · {review.findings.length ? `${review.findings.length} clause(s) deviate from the playbook` : 'all clauses on standard playbook positions'}</p>
+      <p className="mt-1">Contract risk <span className="font-semibold">{review.risk}/100{review.riskBand ? ` (${review.riskBand.toLowerCase()})` : ''}</span> · {review.findings.length ? `${review.findings.length} clause(s) deviate from the playbook` : 'all clauses on standard playbook positions'}</p>
       {review.findings.length > 0 && (
         <ul className="mt-1 space-y-1">
           {review.findings.map((f) => (
-            <li key={f.clause}><span className="font-mono text-xs">{f.clause}</span> · <PositionChip position={f.position} /> risk {f.risk}{f.fallback ? <> — playbook fallback: <span className="italic">{f.fallback}</span></> : null}</li>
+            <li key={f.clause}><span className="font-mono text-xs">{f.clause}</span> · <PositionChip position={f.position} /> risk {f.risk}{f.textDeviates ? ' · wording changed from the library' : ''}{f.fallback ? <> — playbook fallback: <span className="italic">{f.fallback}</span></> : null}{f.suggestedPosition ? <> · suggested position {label(f.suggestedPosition)}</> : null}</li>
           ))}
         </ul>
       )}
@@ -321,10 +307,12 @@ function LinesWithValidity({ contract }: { contract: Contract }) {
 function ConsumptionTab({ path, canManage }: { path: string; canManage: boolean }) {
   const { data, isLoading, error } = useApi<Consumption>(`${path}/consumption`);
   const [done, setDone] = useState<{ id: string; description: string } | null>(null);
+  const [adding, setAdding] = useState(false);
   if (isLoading) return <Loading />;
   if (error) return <ProblemBox error={error} />;
   if (!data) return null;
   const leakage = data.lines.flatMap((l) => l.offContract.map((o) => ({ ...o, id: `${o.po}-${o.line}`, item: l.description })));
+  const priceDeviations = data.lines.flatMap((l) => l.priceDeviations ?? []);
   return (
     <div className="space-y-5">
       <div className="space-y-3">
@@ -334,7 +322,7 @@ function ConsumptionTab({ path, canManage }: { path: string; canManage: boolean 
             <div key={l.line}>
               <div className="flex flex-wrap justify-between gap-2 text-sm">
                 <span><span className="font-mono text-xs text-slate-500">Line {l.line}</span> {l.description}</span>
-                <span className="tabular-nums text-slate-700">{qty(l.releasedQty)} of {qty(l.targetQty)} · <span className="font-semibold">{l.consumedPct}% consumed</span> · current price {inr(l.currentPriceMinor)}</span>
+                <span className="tabular-nums text-slate-700">{qty(l.releasedQty)} of {qty(l.targetQty)} · <span className="font-semibold">{l.consumedPct}% consumed</span>{l.thresholdsHit?.length ? ` (alerts ${l.thresholdsHit.join('/')}%)` : ''} · current price {inr(l.currentPriceMinor)}</span>
               </div>
               <div className="mt-1 h-2 rounded-full bg-slate-100" role="progressbar" aria-valuenow={pctValue} aria-valuemin={0} aria-valuemax={100} aria-label={`Line ${l.line} consumption`}>
                 <div className="h-2 rounded-full bg-[#1A56DB]" style={{ width: `${pctValue}%` }} />
@@ -344,6 +332,34 @@ function ConsumptionTab({ path, canManage }: { path: string; canManage: boolean 
         })}
         <p className="text-xs text-slate-500">Alerts fire at the configured consumption thresholds{data.thresholdsHit?.length ? ` – reached: ${data.thresholdsHit.join('%, ')}%` : ''}.</p>
       </div>
+
+      {data.compliance && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ['Compliance rate', data.compliance.complianceRatePct ? `${data.compliance.complianceRatePct}%` : '–', 'released on contract / (released + bought off-contract)'],
+            ['Released value', inr(data.compliance.releasedValueMinor), `${data.compliance.consumedValuePct}% of ${inr(data.compliance.targetValueMinor)}`],
+            ['Off-contract buying', inr(data.compliance.offContractValueMinor), `${data.compliance.offContractLines} PO line(s) outside the contract`],
+            ['Price leakage', inr(data.compliance.priceLeakageMinor), `${data.compliance.priceDeviationLines} flagged contract-priced line(s) plus off-contract above contract price`],
+          ].map(([k, v, hint]) => (
+            <div key={k} className="rounded-lg border border-slate-200 p-3"><p className="text-xs uppercase tracking-wide text-slate-500">{k}</p>
+              <p className="text-lg font-semibold tabular-nums">{v}</p><p className="text-xs text-slate-500">{hint}</p></div>
+          ))}
+        </div>
+      )}
+
+      {priceDeviations.length > 0 && (
+        <div>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Orders priced outside the contract tolerance (flagged)</h3>
+          <DataTable<(typeof priceDeviations)[number]> rows={priceDeviations} columns={[
+            { key: 'po', header: 'PO', render: (o) => <Link href={`/pic/purchase-orders/${encodeURIComponent(o.po)}`} className="font-medium text-[#1A56DB] hover:underline">{o.po} / {o.line}</Link> },
+            { key: 'qty', header: 'Qty', align: 'right', render: (o) => qty(o.qty) },
+            { key: 'contractPriceMinor', header: 'Contract price', align: 'right', render: (o) => inr(o.contractPriceMinor) },
+            { key: 'unitPriceMinor', header: 'Ordered at', align: 'right', render: (o) => inr(o.unitPriceMinor) },
+            { key: 'excessMinor', header: 'Excess', align: 'right', render: (o) => <span className="font-semibold text-red-700">{inr(o.excessMinor)}</span> },
+            { key: 'reason', header: 'Reason given', render: (o) => o.reason ?? '–' },
+          ]} />
+        </div>
+      )}
 
       <div>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Off-contract leakage</h3>
@@ -357,9 +373,12 @@ function ConsumptionTab({ path, canManage }: { path: string; canManage: boolean 
       </div>
 
       <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Obligations</h3>
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Obligations and milestones</h3>
+          {canManage && !['EXPIRED', 'TERMINATED', 'RENEWED'].includes(data.status) && <Button onClick={() => setAdding(true)}>Add obligation</Button>}
+        </div>
         <DataTable<Consumption['obligations'][number]> rows={data.obligations} empty="No obligations" columns={[
-          { key: 'description', header: 'Obligation' },
+          { key: 'description', header: 'Obligation', render: (o) => <span>{o.kind === 'MILESTONE' ? <span className="mr-1 text-[11px] font-semibold uppercase text-slate-500">milestone</span> : null}{o.description}</span> },
           { key: 'party', header: 'Party', render: (o) => label(o.party) },
           { key: 'dueDate', header: 'Due', render: (o) => {
             const overdue = o.status === 'OPEN' && new Date(o.dueDate) < new Date();
@@ -370,7 +389,35 @@ function ConsumptionTab({ path, canManage }: { path: string; canManage: boolean 
         ]} />
       </div>
       {done && <ObligationDialog obligation={done} onClose={() => setDone(null)} />}
+      {adding && <AddObligationDialog contractNumber={data.contract} onClose={() => setAdding(false)} />}
     </div>
+  );
+}
+
+function AddObligationDialog({ contractNumber, onClose }: { contractNumber: string; onClose: () => void }) {
+  const [party, setParty] = useState('SUPPLIER');
+  const [kind, setKind] = useState('OBLIGATION');
+  const [description, setDescription] = useState('');
+  const [due, setDue] = useState('');
+  const [key] = useState(() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
+  const add = useCommand(() => api.post(`/contracts/${encodeURIComponent(contractNumber)}/obligations`, { party, kind, description: description.trim(), due_date: due },
+    { idempotencyKey: key }), { success: 'Obligation added', onSuccess: onClose });
+  return (
+    <Dialog open title={`Add obligation · ${contractNumber}`} onClose={onClose}>
+      <div className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Party">{(id) => <Select id={id} value={party} onChange={(e) => setParty(e.target.value)} options={[{ value: 'SUPPLIER', label: 'Supplier' }, { value: 'BUYER', label: 'Buyer (us)' }]} />}</Field>
+          <Field label="Type">{(id) => <Select id={id} value={kind} onChange={(e) => setKind(e.target.value)} options={[{ value: 'OBLIGATION', label: 'Obligation' }, { value: 'MILESTONE', label: 'Milestone' }]} />}</Field>
+        </div>
+        <Field label="Description (at least 3 characters)">{(id) => <Textarea id={id} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field>
+        <Field label="Due date">{(id) => <Input id={id} type="date" value={due} onChange={(e) => setDue(e.target.value)} />}</Field>
+        <ProblemBox error={add.error} />
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={description.trim().length < 3 || !due} busy={add.isPending} onClick={() => add.mutate()}>Add</Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -383,7 +430,7 @@ function ObligationDialog({ obligation, onClose }: { obligation: { id: string; d
       <Field label="Evidence / note (required)">{(id) => <Textarea id={id} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Forecast shared by e-mail on …" />}</Field>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" disabled={!note.trim()} busy={complete.isPending} onClick={() => complete.mutate()}>Mark done</Button>
+        <Button variant="primary" disabled={note.trim().length < 3} busy={complete.isPending} onClick={() => complete.mutate()}>Mark done</Button>
       </div>
     </Dialog>
   );

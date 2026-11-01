@@ -17,7 +17,7 @@ from app.pic.platform import audit, clock, outbox, rules, workflow
 from app.pic.platform.core import StateMachine, next_number
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount
-from app.pic.services import guided_buying, mandatory, mdm, request_templates, sales_order, source
+from app.pic.services import guided_buying, mandatory, mdm, org_guard, request_templates, sales_order, source
 from app.pic.services.common import material_by_number, principal
 
 PROCESS = "pic.requisition"
@@ -124,12 +124,16 @@ def search(session: Session, query: str, plant: Optional[str] = None) -> dict:
 
 # ---------------------------------------------------------------- create
 def create(session: Session, *, origin: str, lines: list[dict], plant: str, purpose_code: Optional[str] = None,
-           purpose_text: Optional[str] = None, origin_ref: Optional[str] = None, company_code: str = "1000") -> Requisition:
+           purpose_text: Optional[str] = None, origin_ref: Optional[str] = None, company_code: str = "1000",
+           purchasing_org: Optional[str] = None, purchasing_group: Optional[str] = None) -> Requisition:
     p = principal(session)
     if origin == "MRP" and not (p.is_agent or "MRP_CONTROLLER" in p.roles):
         raise Problem(403, "FORBIDDEN", "Only MRP conversion creates MRP-origin requisitions", rule_ref="P02")
     if not lines:
         raise rule_violation("A requisition needs at least one line", "REQ-02")
+    # ADM-01: a deactivated organisation record is refused on a new document (company code, plants, locations, cost objects)
+    org_guard.ensure_active(session, "requisition", company_code=company_code, plant=plant, purchasing_org=purchasing_org,
+                            purchasing_group=purchasing_group)
     pr = Requisition(tenant_id=current_tenant(session), number=next_number(session, "REQUISITION"), origin=origin,
                      origin_ref=origin_ref, purpose_code=purpose_code, purpose_text=purpose_text, requester_id=p.user_id,
                      company_code=company_code, plant=plant, status="DRAFT", created_by=p.user_id)
@@ -200,6 +204,9 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
             contract_line = None
         if contract_line is None or contract_line.material_id != material.id:
             raise rule_violation("The contract line does not match the material", "P03")
+        referenced = session.get(Contract, contract_line.contract_id)
+        if referenced.status not in ("ACTIVE", "EXPIRING"):
+            raise rule_violation(f"{referenced.number} is {referenced.status}; only executed contracts can be referenced", "CLM-PO")
         validity = source.contract_price(session, contract_line.id, max(clock.today(), session.get(Contract, contract_line.contract_id).valid_from))
         if validity is not None:
             data = {**data, "price_est_minor": validity.unit_price_minor}
@@ -228,6 +235,8 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
     if declared > len(quotes):
         raise rule_violation(f"line {line_no}: {declared} quote(s) declared but {len(quotes)} quote reference(s) given; record each quote "
                              "with the supplier, its quote reference and date", "QUOTE-POLICY")
+    org_guard.ensure_active(session, "requisition", plant=data.get("plant", pr.plant), storage_location=data.get("storage_location"),
+                            cost_object=((data.get("account_assignment_type") or "").upper(), data.get("account_assignment_code")))
     determination = dict(data.get("source_determination") or {})
     if quotes:
         determination["quotes"] = quotes

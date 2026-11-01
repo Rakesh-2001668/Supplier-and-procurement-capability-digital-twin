@@ -123,7 +123,7 @@ def scan() -> dict[str, dict]:
                     else:  # several producers: the contract is what every one of them sends
                         old_props, new_props = entry["payload"]["properties"], shape["properties"]
                         merged = {k: (old_props[k] if old_props.get(k) == new_props.get(k) else {}) if k in old_props and k in new_props
-                                  else (old_props.get(k) or new_props.get(k)) for k in {**old_props, **new_props}}
+                                  else (old_props.get(k) or new_props.get(k) or {}) for k in {**old_props, **new_props}}
                         entry["payload"] = {"properties": merged, "required": [k for k in entry["payload"]["required"] if k in shape["required"]]}
                     entry["objectType"] = entry["objectType"] or object_type
                     entry["producers"].append(f"{rel}:{node.lineno}")
