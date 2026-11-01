@@ -37,6 +37,7 @@ PACKS = (
     "branches",              # D1  operating cases 9–n: the unexercised gateway branches of F1–F9 (AXN, April 2027)
     "module_cases",           # D1  cases for the operations modules: amendments, auctions, EDI, payment files, … (AXN, May 2027)
     "purchase_types",         # D2  expense, capital asset, consignment, subcontracting (AXN, June 2027)
+    "industry_manufacturing",  # D8  AXN manufacturing controls: Kanban, reorder point, weekly MRP buckets (July 2027)
     "industry_construction",  # D3  tenant CON
     "industry_it",            # D4  tenant ITS
     "industry_logistics",     # D5  tenant LOG

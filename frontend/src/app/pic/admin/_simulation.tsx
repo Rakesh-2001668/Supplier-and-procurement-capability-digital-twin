@@ -43,6 +43,15 @@ const RULES: Record<string, { title: string; fields: FieldSpec[] }> = {
     { name: 'splitPattern', label: 'Split pattern detected', kind: 'bool' },
     { name: 'accountChanged', label: 'Account assignment changed from the requisition', kind: 'bool' },
   ] },
+  'ABAC': { title: 'Attribute-based access on commands (SEC-AZ)', fields: [
+    { name: 'user', label: 'User (e-mail)', kind: 'text', hint: 'e.g. buyer@axion.example' },
+    { name: 'action', label: 'Action', kind: 'select', options: ['REQ_SUBMIT', 'REQ_APPROVE', 'PO_CREATE', 'PO_RELEASE', 'PO_APPROVE', 'GR_POST',
+      'INVOICE_APPROVE', 'INVOICE_POST', 'PAYMENT_RUN', 'CONTRACT_SIGN', 'AWARD_APPROVE', 'SUPPLIER_CHANGE', 'MASTER_CHANGE'] },
+    { name: 'companyCode', label: 'Company code', kind: 'text' },
+    { name: 'plant', label: 'Plant', kind: 'text' },
+    { name: 'category', label: 'Category', kind: 'text' },
+    { name: 'valueMinor', label: 'Document value (₹)', kind: 'money' },
+  ] },
   'DMN-03': { title: 'Invoice match tolerances', fields: [
     { name: 'poUnitPriceMinor', label: 'PO unit price (₹)', kind: 'money' },
     { name: 'invoiceUnitPriceMinor', label: 'Invoice unit price (₹)', kind: 'money' },
@@ -52,7 +61,7 @@ const RULES: Record<string, { title: string; fields: FieldSpec[] }> = {
 };
 
 const DEFAULTS: Record<string, string> = {
-  valueMinor: '150000', annualValueMinor: '6000000', valueDeltaMinor: '0', channel: 'OTHER', purchaseType: 'STOCK', kind: 'VARIATION',
+  user: 'buyer@axion.example', action: 'PO_RELEASE', plant: 'P100', valueMinor: '150000', annualValueMinor: '6000000', valueDeltaMinor: '0', channel: 'OTHER', purchaseType: 'STOCK', kind: 'VARIATION',
   supplierStatus: 'QUALIFIED', priceSources: 'CONTRACT', lateProb: '0.05', poUnitPriceMinor: '1000', invoiceUnitPriceMinor: '1005',
   availableQty: '100', invoicedQty: '100',
 };

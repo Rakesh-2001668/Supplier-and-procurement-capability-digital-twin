@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock.expired_written_off",
+  "title": "stock.expired_written_off",
+  "description": "Payload (outbox_event.payload) of stock.expired_written_off on EXPIRY_WRITE_OFF. Produced by services/ind_healthcare.py.",
+  "type": "object",
+  "properties": {
+    "lines": {
+      "type": "integer"
+    },
+    "valueMinor": {}
+  },
+  "required": [
+    "lines",
+    "valueMinor"
+  ],
+  "additionalProperties": true
+}

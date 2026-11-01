@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
 from app.pic.models import ActionLog, Supplier, SupplierMasterChange, Task
+from app.pic.platform import abac
 from app.pic.platform import audit, clock, crypto, integration, outbox, rules, sod, workflow
 from app.pic.platform.core import next_number
 from app.pic.platform.errors import Problem, illegal_transition
@@ -196,6 +197,7 @@ def _duplicates(session: Session, supplier: Supplier, gstin: str) -> list[dict]:
 
 # ---------------------------------------------------------------- request
 def request_change(session: Session, supplier: Supplier, *, field_group: str, values: dict, reason: str) -> SupplierMasterChange:
+    abac.guard(session, "MASTER_CHANGE", supplier)
     require_supplier_user(session, supplier.id)
     p = principal(session)
     rule = rules.resolve(session, RULE)

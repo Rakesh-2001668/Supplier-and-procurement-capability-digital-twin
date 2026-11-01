@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:cold_chain.rejected",
+  "title": "cold_chain.rejected",
+  "description": "Payload (outbox_event.payload) of cold_chain.rejected on COLD_CHAIN_READING. Produced by services/ind_healthcare.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "valueMinor": {}
+  },
+  "required": [
+    "material",
+    "valueMinor"
+  ],
+  "additionalProperties": true
+}

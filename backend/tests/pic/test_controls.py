@@ -33,7 +33,7 @@ def _axn_id():
 
 @pytest.fixture(scope="module")
 def beta_tenant():
-    tenant_id = reference.create_tenant("BETA", "Beta Logistics Pvt Ltd", "LOGISTICS")
+    tenant_id = reference.create_tenant("BETA", "Beta Logistics Pvt Ltd", "LOGISTICS", mfa_enforce=False)
     reference.bootstrap(tenant_id, company=("2000", "Beta Logistics Pvt Ltd", "29AAACB1111C1ZJ"), plants=[("B100", "Bengaluru", "29")],
                         cost_objects=[("COST_CENTER", "9100", "Fleet")])
     with tenant_tx(tenant_id) as s:

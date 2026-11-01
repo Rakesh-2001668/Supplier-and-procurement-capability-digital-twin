@@ -59,7 +59,7 @@ export type Requisition = {
 };
 
 export const PURCHASE_TYPES = ['NON_STOCK', 'SERVICE', 'EXPENSE', 'ASSET'];
-export const ACCOUNT_TYPES = ['COST_CENTER', 'WBS', 'ORDER', 'ASSET'];
+export const ACCOUNT_TYPES = ['COST_CENTER', 'WBS', 'ORDER', 'ASSET', 'SALES_ORDER'];
 /** Purchase types that need an account assignment before submission (P08). */
 export const NEEDS_ACCOUNT = ['NON_STOCK', 'SERVICE', 'EXPENSE', 'ASSET'];
 
@@ -88,7 +88,8 @@ export function AccountAssignment({ type, code, onChange, costObjects, required 
         <Select id={id} value={type} onChange={(e) => onChange(e.target.value, '')}
           options={[{ value: '', label: '— none —' }, ...ACCOUNT_TYPES.map((t) => ({ value: t, label: label(t) }))]} />
       )}</Field>
-      <Field label={`Account assignment code${required ? ' *' : ''}`} hint={type && !matching.length ? 'No master data for this type; enter the code' : undefined}>{(id) => (
+      <Field label={`Account assignment code${required ? ' *' : ''}`} hint={type === 'SALES_ORDER' ? 'Customer order, e.g. SO-88120 or SO-88120/10 (checked against planning demand)'
+          : type && !matching.length ? 'No master data for this type; enter the code' : undefined}>{(id) => (
         matching.length ? (
           <Select id={id} value={code} onChange={(e) => onChange(type, e.target.value)} disabled={!type}
             options={[{ value: '', label: 'Select…' }, ...matching.map((c) => ({ value: c.code, label: `${c.code} · ${c.name}` }))]} />

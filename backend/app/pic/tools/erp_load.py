@@ -71,7 +71,7 @@ HSN_FILE = BACKEND_DIR / "data" / "reference" / "hsn_gst_rates.csv"
 REQUIRED = ["T001", "T001W", "CSKS", "PRPS", "T052", "T007S", "LFA1", "ADRC", "LFB1", "LFBK", "MARA", "MAKT", "MARC", "MBEW", "EINA_EINE",
             "EORD", "EKKO", "EKPO", "A016_KONP", "EKKN", "EKET", "EKBE", "RBKP", "RSEG", "BSEG_KR", "BSIK", "BSAK", "ACDOCA_PERIOD_TOTALS",
             "GL_BALANCES", "PIC_MAP_MATKL"]
-OPTIONAL = ["GL_RECON_ITEMS", "PIC_MAP_TAXONOMY", "T023T"]
+OPTIONAL = ["GL_RECON_ITEMS", "PIC_MAP_TAXONOMY", "T023T", "CONTRACT_TEXT"]
 UOM = {"ST": "EA", "PC": "EA", "EA": "EA", "KG": "KG", "L": "L", "M": "M", "SET": "SET", "AU": "AU", "LE": "AU", "MON": "MON", "PAC": "PAC",
        "PAA": "PR", "PR": "PR", "TO": "TON", "TON": "TON", "M2": "M2", "M3": "M3", "H": "HR", "HR": "HR", "D": "DAY", "DAY": "DAY", "KM": "KM"}
 MTART_TYPE = {"ROH": "STOCK", "HALB": "STOCK", "VERP": "STOCK", "ERSA": "STOCK", "HIBE": "STOCK", "FHMI": "STOCK", "NLAG": "NON_STOCK",
@@ -796,8 +796,6 @@ def _stage_ap(st: Staged) -> None:
         elif dup_key in seen_keys:
             reason = ("DUPLICATE_INVOICE", f"supplier invoice {r.get('XBLNR')} of {vendor} ({fiscal}) is already open as {seen_keys[dup_key]}: "
                       "posted twice in SAP - reverse one before payment")
-        elif (minor(r.get("QBSHB")) or 0) != 0:
-            reason = ("WITHHOLDING_NOT_SUPPORTED", "withholding tax on the open item: PIC has no withholding amount on invoices yet")
         elif not lines:
             reason = ("DOCUMENT_NOT_FOUND", "no RBKP/RSEG or BSEG_KR lines for the open item")
         if reason:
@@ -810,9 +808,17 @@ def _stage_ap(st: Staged) -> None:
             net_fi = sum(minor(l.get("WRBTR")) or 0 for l in lines)
             tax = sum(minor(l.get("WMWST")) or 0 for l in lines)
             gross = net_fi + tax
-        if gross != amount:
-            rep.reject("openAp", "BSIK", r, key, "PARTIAL_OR_WITHHELD", f"open amount {money(amount)} differs from the document gross {money(gross)}",
+        # TDS / withholding tax (QBSHB = the tax withheld at payment). Classic withholding: the open item is the full gross and the tax
+        # is deducted when paying; extended withholding: the open item is already gross less the tax. Both load, with
+        # invoice.withholding_tax_minor = the tax, so the payment run pays gross - credit notes - retention - TDS.
+        withholding = minor(r.get("QBSHB")) or 0
+        if withholding < 0 or (withholding and withholding >= gross):
+            rep.reject("openAp", "BSIK", r, key, "WITHHOLDING_INVALID", f"withholding tax {money(withholding)} must be between 0 and the gross {money(gross)}",
                        amount=signed)
+            continue
+        if gross != amount and not (withholding and gross - withholding == amount):
+            rep.reject("openAp", "BSIK", r, key, "PARTIAL_OR_WITHHELD", f"open amount {money(amount)} differs from the document gross {money(gross)}"
+                       + (f" and from gross less the withholding tax {money(gross - withholding)}" if withholding else ""), amount=signed)
             continue
         out_lines = []
         for k, l in enumerate(lines, start=1):
@@ -825,7 +831,8 @@ def _stage_ap(st: Staged) -> None:
                               "description": ((po_row or {}).get("TXZ01") or l.get("SGTXT") or "ERP invoice line")[:200]})
         st.ap_items.append({"key": key, "belnr": r["BELNR"], "gjahr": r["GJAHR"], "vendor": vendor, "xblnr": r["XBLNR"], "bldat": bldat,
                             "budat": day(r.get("BUDAT")), "due": due, "gross": gross, "tax": tax, "net": gross - tax, "block": r.get("ZLSPR") or "",
-                            "ebeln": r.get("EBELN") or None, "lines": out_lines, "zterm": r.get("ZTERM"), "fiscal": fiscal})
+                            "ebeln": r.get("EBELN") or None, "lines": out_lines, "zterm": r.get("ZTERM"), "fiscal": fiscal,
+                            "withholding": withholding, "open": amount})
 
 
 def _stage_gl(st: Staged) -> None:
@@ -855,6 +862,7 @@ class Loader:
         self.principal = IntegrationPrincipal(user_id=uuid.UUID(int=0), tenant_id=tenant.id, tenant_code=tenant_code, email="integration.sap_s4",
                                               name="SAP S/4HANA inbound", roles=[], scopes={"spend:read"}, agent_code=None)
         self.audit_actions = {}
+        self.sensitive: list[dict] = []    # bank / tax-ID differences found by a delta, for route_sensitive (MDM-04)
 
     def tx(self):
         if self.when:
@@ -999,12 +1007,14 @@ class Loader:
         rep, tid = self.st.report, self.tenant_id
         if sup.gstin_hash != crypto.blind_index(tid, v["gstin"]):
             rep.reject("vendors", "LFA1", {}, sup.code, "SENSITIVE_CHANGE", "GSTIN differs from the PIC master: raise an MDM-04 tax-ID change")
-            return
+            # plaintext stays in memory for route_sensitive (MDM-04); it is never written to the report or the run record
+            self.sensitive.append({"supplier": sup.code, "kind": "TAX", "values": {"gstin": v["gstin"], "pan": v["gstin"][2:12]}})
         if v["bank"]:
             current = s.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == sup.id, SupplierBankAccount.active.is_(True))).scalars().first()
             if current is not None and (current.ifsc != v["bank"]["ifsc"] or crypto.decrypt(tid, "bank", current.account_enc) != v["bank"]["account"]):
                 rep.reject("vendorBanks", "LFBK", {}, sup.code, "SENSITIVE_CHANGE", "bank account differs from PIC: raise a bank change (call-back, "
                            "dual approval, cooling-off) - not applied from the ERP")
+                self.sensitive.append({"supplier": sup.code, "kind": "BANK", "values": dict(v["bank"])})
         changes = {}
         status = "BLOCKED" if (v["blocked"] or v["deleted"]) else ("ACTIVE" if sup.status == "BLOCKED" and (sup.screening or {}).get("erpBlock") else sup.status)
         for attr, value in (("legal_name", v["name"]), ("payment_terms", v["terms"]), ("address", v["address"]), ("contact_email", v["email"]),
@@ -1127,6 +1137,15 @@ class Loader:
                                                    band="", over=first["over"], under=first["under"])
                     s.add(Clause(tenant_id=tid, contract_id=contract.id, code=template["code"], title=template["title"], text=text, position="STANDARD",
                                  risk_score=0, created_by=self.principal.user_id))
+                texts = [r.get("TEXT") or "" for r in st.extract.rows("CONTRACT_TEXT") if r.get("EBELN") == ebeln]  # optional: signed contract text
+                if any(texts):
+                    from app.pic.services import clause_extract  # TD 12.4: clauses read from the contract text, low confidence left for review
+
+                    s.flush()
+                    result = clause_extract.from_migration(s, contract, "\n".join(texts), f"{SOURCE} CONTRACT_TEXT {ebeln}")
+                    if result.get("pending") or result.get("discrepancies"):
+                        rep.warn("CLAUSES_FOR_REVIEW", ebeln, f"extraction {result['extraction']}: {result['applied']} clause(s) applied, "
+                                 f"{result['pending']} to review, {result.get('discrepancies', 0)} difference(s) from the contract record")
                 instance = workflow.start(s, "pic.contract", "CONTRACT", contract.id, contract.number, {"trigger": "migration", "source": SOURCE})
                 workflow.step(s, instance, "F4-08", outcome=f"migrated from {SOURCE} agreement {ebeln}: active, "
                               f"{sum(len(i['conditions']) for i in a['items'])} price validity period(s) published")
@@ -1299,6 +1318,7 @@ class Loader:
                                   supplier_invoice_no=item["xblnr"], fiscal_year=item["fiscal"], company_code=st.bukrs, supplier_id=supplier.id,
                                   po_id=po.id if po else None, invoice_date=item["bldat"], channel="ERP_MIGRATION", currency="INR",
                                   net_minor=item["net"], tax_minor=item["tax"], gross_minor=item["gross"], status="POSTED",
+                                  withholding_tax_minor=item.get("withholding", 0),
                                   payment_block=bool(item["block"]) or supplier.status in ("BLOCKED", "MERGED"), due_date=item["due"],
                                   erp_doc_no=item["belnr"], posting_key=f"{self.code}|{st.bukrs}|{supplier.code}|{item['xblnr']}",
                                   posted_at=clock.at_ist(item["budat"] or item["bldat"], 10), payment_status="UNPAID", rule_set_version="MIGRATION",
@@ -1324,7 +1344,8 @@ class Loader:
                 workflow.wait(s, instance, "F7-07", outcome=f"due {item['due'].isoformat()}" + (f"; payment block {item['block']}" if item["block"] else ""))
                 audit.record(s, "INVOICE", invoice.id, "MIGRATED", object_ref=invoice.number,
                              after={"erpDocument": item["belnr"], "fiscalYear": item["gjahr"], "supplier": supplier.code, "grossMinor": item["gross"],
-                                    "due": item["due"], "paymentBlock": invoice.payment_block})
+                                    "due": item["due"], "paymentBlock": invoice.payment_block,
+                                    **({"withholdingTaxMinor": item["withholding"]} if item.get("withholding") else {})})
                 existing.add((item["belnr"], item["fiscal"]))
                 new += 1
             rep.counts["openAp"]["loaded"] += new
@@ -1404,8 +1425,10 @@ class Loader:
             for code, net, invoiced in s.execute(select(Supplier.code, PoLine.net_minor, PoLine.invoiced_minor).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id)
                                                  .join(Supplier, Supplier.id == PurchaseOrder.supplier_id).where(PurchaseOrder.erp_doc_no.is_not(None))).all():
                 open_value[code] += max(0, net - invoiced)
-            ap_loaded = s.execute(select(Supplier.code, Invoice.gross_minor, Invoice.due_date).join(Supplier, Supplier.id == Invoice.supplier_id)
-                                  .where(Invoice.channel == "ERP_MIGRATION", Invoice.status.in_(("POSTED",)))).all()
+            open_by_belnr = {i["belnr"]: i["open"] for i in st.ap_items}      # the ERP's open amount (gross less extended withholding tax)
+            ap_loaded = [(code, open_by_belnr.get(belnr, gross), due) for code, gross, due, belnr in s.execute(
+                select(Supplier.code, Invoice.gross_minor, Invoice.due_date, Invoice.erp_doc_no).join(Supplier, Supplier.id == Invoice.supplier_id)
+                .where(Invoice.channel == "ERP_MIGRATION", Invoice.status.in_(("POSTED",)))).all()]
             contracts = s.execute(select(Contract).where(Contract.rule_set_version.is_not(None))).scalars().all()
             contracts = [c for c in contracts if c.number in st.agreements]
         return tie_out(st, loaded, open_value, [(c, g, d) for c, g, d in ap_loaded], contracts)
@@ -1463,7 +1486,7 @@ def tie_out(st: Staged, loaded: Optional[dict] = None, open_value: Optional[dict
     ageing_extract, ageing_loaded = Counter(), Counter()
     for item in st.ap_extract:
         ageing_extract[_bucket(item["due"], st.key_date)] += item["amount"]
-    loaded_items = ([(i["vendor"], i["gross"], i["due"]) for i in st.ap_items] if validate_only else (ap_loaded or []))
+    loaded_items = ([(i["vendor"], i["open"], i["due"]) for i in st.ap_items] if validate_only else (ap_loaded or []))
     for _code, gross, due in loaded_items:
         ageing_loaded[_bucket(due, st.key_date)] += gross
     gl_ap = -sum(v for (b, acc), v in st.ap_gl_balance.items() if b == st.bukrs and acc.startswith("16"))
@@ -1510,23 +1533,98 @@ def tie_out(st: Staged, loaded: Optional[dict] = None, open_value: Optional[dict
 
 
 # ---------------------------------------------------------------- entry points
-def load(tenant_code: str, directory, *, validate_only: bool = False, report_dir=None, when: Optional[datetime] = None) -> dict:
-    """Validate (and unless validate_only, load) one extract into a tenant. Returns the summary stored by the dataset pack."""
+STEPS = ("org", "vendors", "materials", "agreements", "open_pos", "open_ap", "spend")
+DELTA_STEPS = ("vendors", "materials", "agreements", "open_pos", "open_ap")     # a delta never re-bootstraps the org or reloads the history
+
+
+def load(tenant_code: str, directory, *, validate_only: bool = False, report_dir=None, when: Optional[datetime] = None, delta: bool = False,
+         steps: Optional[list] = None) -> dict:
+    """Validate (and unless validate_only, load) one extract directory into a tenant. Returns the summary stored by the dataset pack.
+    ``delta``: a later extract of an already loaded tenant: only the incremental steps run (masters, agreements, open POs and
+    items), no GL tie-out of the history, and bank / tax-ID differences are routed to MDM-04 (``route_sensitive``)."""
+    return load_extract(tenant_code, read_extract(directory), validate_only=validate_only, report_dir=report_dir, when=when, delta=delta, steps=steps)
+
+
+def table_extract(tenant_code: str, tables: dict, manifest: Optional[dict] = None) -> Extract:
+    """An in-memory extract from live pulls (``platform/sap_pull``) or a file drop, in the SAP table layout. The context the stage
+    functions need and a pull does not carry is taken from the tenant: company code (T001), plants (T001W) and the material-group
+    to category map (PIC_MAP_MATKL). No file hashes: the integrity check of a pull is the connector's transport."""
+    from app.pic.models import CompanyCode
+    with system_tx() as s:
+        tenant = s.execute(select(Tenant).where(Tenant.code == tenant_code)).scalar_one_or_none()
+    if tenant is None:
+        raise ExtractError(f"Tenant {tenant_code} does not exist")
+    full = {k: list(v) for k, v in tables.items()}
+    with tenant_tx(tenant.id) as s:
+        company = s.execute(select(CompanyCode).order_by(CompanyCode.code)).scalars().first()
+        if company is None:
+            raise ExtractError(f"Tenant {tenant_code} has no company code: run the initial load first")
+        if "T001" not in full:
+            full["T001"] = [{"BUKRS": company.code, "BUTXT": company.name, "GSTIN": company.gstin or "", "WAERS": company.currency}]
+        if "T001W" not in full:
+            full["T001W"] = [{"WERKS": p.code, "NAME1": p.name, "BUKRS": p.company_code, "REGIO": p.state_code, "GSTIN": ""}
+                             for p in s.execute(select(Plant)).scalars()]
+        if "PIC_MAP_MATKL" not in full:
+            full["PIC_MAP_MATKL"] = [{"MATKL": g, "PIC_CATEGORY": c} for g, c in sorted({(m.material_group, m.category) for m in s.execute(select(Material)).scalars()})]
+    for rows in full.values():
+        for index, row in enumerate(rows, start=2):
+            row.setdefault("_row", index)
+    meta = {"extractType": "DELTA", "sourceSystem": SOURCE, "companyCodes": [full["T001"][0]["BUKRS"]], "keyDate": clock.today().isoformat(), **(manifest or {})}
+    return Extract(directory=None, manifest=meta, tables=full)
+
+
+def route_sensitive(tenant_code: str, tenant_id, sensitive: list[dict], reference: str) -> list[dict]:
+    """Bank and tax-ID differences found by a delta go to MDM-04 instead of being applied: a tax-ID change request (dual approval)
+    or a bank change request (call-back, dual approval, cooling-off). Each is isolated in its own transaction; a supplier with a
+    change already in approval is reported, not duplicated."""
+    from app.pic.platform.errors import Problem
+    from app.pic.services import supplier as supplier_svc
+
+    principal = IntegrationPrincipal(user_id=uuid.UUID(int=0), tenant_id=tenant_id, tenant_code=tenant_code, email="integration.sap_s4",
+                                     name="SAP S/4HANA inbound", roles=[], scopes=set(), agent_code=None)
+    results = []
+    for item in sensitive:
+        outcome = {"supplier": item["supplier"], "kind": item["kind"]}
+        try:
+            with tenant_tx(tenant_id, principal.user_id, principal) as s:
+                supplier = s.execute(select(Supplier).where(Supplier.code == item["supplier"])).scalar_one()
+                if item["kind"] == "TAX":
+                    change = master_changes.request_change(s, supplier, field_group="TAX", values=item["values"],
+                                                           reason=f"SAP master data differs from PIC (ERP sync {reference})")
+                    outcome.update(status="ROUTED", request=change.number, process="MDM-04 tax-ID change")
+                else:
+                    b = item["values"]
+                    change = supplier_svc.request_bank_change(s, supplier, bank_account=b["account"], ifsc=b["ifsc"], holder_name=b["holder"])
+                    outcome.update(status="ROUTED", request=change.number, process="MDM-04 bank change")
+                audit.record(s, "SUPPLIER", supplier.id, "ERP_SENSITIVE_CHANGE_ROUTED", object_ref=supplier.code, actor=ACTOR,
+                             after={"kind": item["kind"], "request": outcome["request"], "sync": reference})
+        except Problem as exc:
+            outcome.update(status="PENDING" if exc.code in ("CHANGE_PENDING",) else "NOT_ROUTED", detail=exc.detail[:300])
+        results.append(outcome)
+    return results
+
+
+def load_extract(tenant_code: str, extract: Extract, *, validate_only: bool = False, report_dir=None, when: Optional[datetime] = None,
+                 delta: bool = False, steps: Optional[list] = None, reference: Optional[str] = None) -> dict:
+    """The load behind ``load`` and the live sync: stage, validate, apply the chosen steps, tie out (not for a delta), report."""
     started = time.monotonic()
-    extract = read_extract(directory)
     st = stage(extract)
     timings = {}
     loader = None
+    chosen = tuple(steps) if steps else (DELTA_STEPS if delta else STEPS)
+    unknown = [s_ for s_ in chosen if s_ not in STEPS]
+    if unknown:
+        raise ExtractError(f"unknown load step(s) {', '.join(unknown)}; known: {', '.join(STEPS)}")
     if not validate_only:
         loader = Loader(tenant_code, st, when)
-        for step in ("org", "vendors", "materials", "agreements", "open_pos", "open_ap", "spend"):
+        for step in chosen:
             t0 = time.monotonic()
             getattr(loader, step)()
             timings[step] = round(time.monotonic() - t0, 1)
             log.info("erp load %s: %s done in %.1fs", tenant_code, step, timings[step])
-        tie = loader.tie_out()
+        tie = loader.tie_out() if not delta else None
     else:
-        tie = tie_out(st)
+        tie = tie_out(st) if not delta else None
     rep = st.report
     summary = {
         "tenant": tenant_code, "extract": {k: extract.manifest.get(k) for k in ("extractId", "extractType", "sourceSystem", "client", "keyDate",
@@ -1543,6 +1641,8 @@ def load(tenant_code: str, directory, *, validate_only: bool = False, report_dir
     }
     if loader:
         summary["duplicates"] = _duplicates(loader)
+        if loader.sensitive:
+            summary["sensitive"] = route_sensitive(tenant_code, loader.tenant_id, loader.sensitive, reference or str(extract.manifest.get("extractId")))
     if report_dir:
         write_report(summary, Path(report_dir))
     return summary
@@ -1576,14 +1676,15 @@ def write_report(summary: dict, directory: Path) -> None:
         for r in summary["rejects"]["rows"]:
             writer.writerow([r["object"], r["file"], r["row"], r["key"], r["reason"], r["detail"],
                              money(r["amountMinor"]) if r.get("amountMinor") is not None else ""])
-    with open(directory / "tieout_spend.csv", "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["company_code", "period", "extract", "rejected", "loaded", "gl", "gl_minus_loaded", "difference_pct", "reconciling_items",
-                         "unexplained", "status"])
-        for p in summary["tieOut"]["spend"]["periods"]:
-            writer.writerow([p["companyCode"], p["period"], money(p["extractMinor"]), money(p["rejectedMinor"]), money(p["loadedMinor"]),
-                             money(p["glMinor"]), money(p["glMinusLoadedMinor"]), p["differencePct"], money(p["reconcilingItemsMinor"]),
-                             money(p["unexplainedMinor"]), p["status"]])
+    if summary.get("tieOut"):      # a delta has no history tie-out
+        with open(directory / "tieout_spend.csv", "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["company_code", "period", "extract", "rejected", "loaded", "gl", "gl_minus_loaded", "difference_pct", "reconciling_items",
+                             "unexplained", "status"])
+            for p in summary["tieOut"]["spend"]["periods"]:
+                writer.writerow([p["companyCode"], p["period"], money(p["extractMinor"]), money(p["rejectedMinor"]), money(p["loadedMinor"]),
+                                 money(p["glMinor"]), money(p["glMinusLoadedMinor"]), p["differencePct"], money(p["reconcilingItemsMinor"]),
+                                 money(p["unexplainedMinor"]), p["status"]])
     (directory / "summary.json").write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
 
 
@@ -1598,6 +1699,10 @@ def format_report(summary: dict) -> str:
         lines.append(f"  {obj}: " + ", ".join(f"{r} {n}" for r, n in reasons.items()))
     if summary["warnings"]["counts"]:
         lines.append("warnings: " + ", ".join(f"{k} {v}" for k, v in summary["warnings"]["counts"].items()))
+    if not summary.get("tieOut"):
+        lines.append(f"delta load: no history tie-out; sensitive differences routed to MDM-04: {len(summary.get('sensitive') or [])}")
+        lines.append(f"duration {summary['durationSeconds']} s {summary.get('stepSeconds') or ''}")
+        return "\n".join(lines)
     spend = summary["tieOut"]["spend"]
     lines.append(f"spend tie-out (±{spend['tolerancePct']} % vs GL): {spend['byStatus']}")
     lines.append(f"{'cc':5} {'period':8} {'extract':>16} {'loaded':>16} {'GL':>16} {'GL-loaded':>13} {'%':>7}  status")
@@ -1629,12 +1734,16 @@ def main(argv=None) -> int:
     parser.add_argument("--validate-only", action="store_true", help="validate and tie out the extract; write nothing to the database")
     parser.add_argument("--report", action="store_true", help="print the load and tie-out report")
     parser.add_argument("--report-dir", default=None, help="write rejects.csv, tieout_spend.csv and summary.json (default data/erp_load_reports/<tenant>)")
+    parser.add_argument("--delta", action="store_true", help="a later extract of a loaded tenant: masters, agreements, open POs and items only; "
+                        "bank / tax-ID differences go to MDM-04; no GL tie-out of the history")
+    parser.add_argument("--steps", default=None, help=f"comma-separated subset of {','.join(STEPS)}")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     import app.pic.services  # noqa: F401  (registers the outbox consumers, timers and posting handlers)
     report_dir = args.report_dir or str(BACKEND_DIR / "data" / "erp_load_reports" / args.tenant)
     try:
-        summary = load(args.tenant, args.dir, validate_only=args.validate_only, report_dir=report_dir)
+        summary = load(args.tenant, args.dir, validate_only=args.validate_only, report_dir=report_dir, delta=args.delta,
+                       steps=[s.strip() for s in args.steps.split(",") if s.strip()] if args.steps else None)
     except ExtractError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

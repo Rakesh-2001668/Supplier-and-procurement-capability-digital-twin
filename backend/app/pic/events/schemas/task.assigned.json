@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:task.assigned",
+  "title": "task.assigned",
+  "description": "Payload (outbox_event.payload) of task.assigned on TASK. Produced by platform/workflow.py.",
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": "string"
+    },
+    "kind": {},
+    "name": {},
+    "role": {},
+    "objectType": {},
+    "objectId": {
+      "type": "string"
+    },
+    "objectRef": {},
+    "due": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "taskId",
+    "kind",
+    "name",
+    "role",
+    "objectType",
+    "objectId",
+    "objectRef",
+    "due"
+  ],
+  "additionalProperties": true
+}

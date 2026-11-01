@@ -21,9 +21,10 @@ from app.pic.platform.money import line_amount, pct_of
 from app.pic.platform.errors import Problem
 from app.pic.platform.rules import Rule
 
-KEYS = ("DMN-01", "PO-APPROVAL", "AWARD-APPROVAL", "CONTRACT-APPROVAL", "CONTRACT-AMENDMENT", "DMN-02", "DMN-03")
+KEYS = ("DMN-01", "PO-APPROVAL", "AWARD-APPROVAL", "CONTRACT-APPROVAL", "CONTRACT-AMENDMENT", "DMN-02", "DMN-03", "ABAC", "MANDATORY-FIELDS")
 SCOPE_ALIASES = {"companyCode": "company_code", "plant": "plant", "category": "category", "purchaseType": "purchase_type",
-                 "company_code": "company_code", "purchase_type": "purchase_type"}
+                 "company_code": "company_code", "purchase_type": "purchase_type", "supplierGroup": "supplier_group",
+                 "supplier_group": "supplier_group"}
 
 
 def _int(inputs: dict, name: str, default: Optional[int] = None) -> int:
@@ -50,13 +51,13 @@ def _bool(inputs: dict, name: str) -> bool:
 
 def _band(rule: Rule, value_minor: int) -> tuple[int, Optional[int]]:
     for index, band in enumerate(rule.body["bands"]):
-        if band["upTo"] is None or value_minor < band["upTo"]:
+        if band["upTo"] is None or value_minor <= band["upTo"]:
             return index, band["upTo"]
     return -1, None
 
 
 def _band_text(index: int, up_to: Optional[int], value: int) -> str:
-    bound = "no upper limit" if up_to is None else f"below {up_to} (exclusive)"
+    bound = "no upper limit" if up_to is None else f"up to and including {up_to}"
     return f"value {value} falls in band {index + 1} ({bound})"
 
 
@@ -180,9 +181,58 @@ def _dmn03(rule: Rule, inputs: dict, session: Session, scope: dict) -> dict:
             "duplicateWindow": {"amountMinor": b.get("dupAmountMinor"), "days": b.get("dupDays")}}
 
 
+def _abac(rule: Rule, inputs: dict, session: Session, scope: dict) -> dict:
+    """SEC-AZ: would this user (e-mail / userId, or an explicit attributes object) be allowed this action on this object? Uses
+    abac.evaluate, the function the services' abac.authorize calls, so the answer is the enforcement's answer."""
+    from app.pic.models import AppUser
+    from app.pic.platform import abac
+    action = str(inputs.get("action") or "").upper()
+    if not action:
+        raise Problem(422, "SIMULATION_INPUT", "Input 'action' is required (e.g. PO_RELEASE)", rule_ref="ADM-03")
+    attributes = inputs.get("attributes")
+    who = None
+    if attributes is None:
+        query = select(AppUser)
+        if inputs.get("userId"):
+            query = query.where(AppUser.id == inputs["userId"])
+        elif inputs.get("user"):
+            query = query.where(AppUser.email == str(inputs["user"]).lower())
+        else:
+            raise Problem(422, "SIMULATION_INPUT", "Give 'user' (e-mail), 'userId' or an 'attributes' object", rule_ref="ADM-03")
+        user = session.execute(query).scalar_one_or_none()
+        if user is None:
+            raise Problem(404, "NOT_FOUND", "No such user", rule_ref="ADM-03")
+        attributes, who = dict(user.attributes or {}), user.email
+    dims = {"company_code": inputs.get("companyCode") or scope.get("company_code"), "plant": inputs.get("plant") or scope.get("plant"),
+            "category": inputs.get("category") or scope.get("category")}
+    value = int(inputs["valueMinor"]) if inputs.get("valueMinor") is not None else None
+    result = abac.evaluate(rule.body, attributes, action, dims, value)
+    reasons = [abac.describe(v) for v in result["violations"]] or (
+        [f"no ABAC check is configured for {action}"] if not result["known"] else ["attributes allow this action on this object"])
+    return {"decision": "ALLOW" if result["allowed"] else ("DENY" if result["enforced"] else "ALLOW_AUDITED"), "mode": result["mode"],
+            "user": who, "checked": result["checked"], "violations": result["violations"], "reasons": reasons}
+
+
+def _mandatory_fields(rule: Rule, inputs: dict, session: Session, scope: dict) -> dict:
+    """TD §6 / P14: which mandatory fields a document would miss. Inputs: ``document`` (REQUISITION, PO_RELEASE, GR_POST, INVOICE_CAPTURE,
+    SUPPLIER_REGISTER), ``header`` (object of the fields filled) and ``lines`` (array of objects). Same function as the enforcement."""
+    from app.pic.services import mandatory
+    document = str(inputs.get("document") or "").upper()
+    if document not in mandatory.CATALOGUE:
+        raise Problem(422, "SIMULATION_INPUT", f"Input 'document' must be one of {', '.join(mandatory.CATALOGUE)}", rule_ref="ADM-03")
+    header, lines = inputs.get("header") or {}, inputs.get("lines") or []
+    if not isinstance(header, dict) or not isinstance(lines, list) or not all(isinstance(l, dict) for l in lines):
+        raise Problem(422, "SIMULATION_INPUT", "'header' must be an object and 'lines' an array of objects", rule_ref="ADM-03")
+    missing = mandatory.evaluate(rule.body, document, header, lines)
+    header_fields, line_fields = mandatory.required_fields(rule.body, document)
+    return {"decision": "REFUSED" if missing else "ACCEPTED", "missingFields": missing, "requiredHeader": header_fields, "requiredLines": line_fields,
+            "reasons": [f"{len(missing)} mandatory field(s) missing: {', '.join(missing)}"] if missing else ["all mandatory fields present"]}
+
+
 EVALUATORS: dict[str, Callable[[Rule, dict, Session, dict], dict]] = {
+    "MANDATORY-FIELDS": _mandatory_fields,
     "DMN-01": _dmn01, "PO-APPROVAL": _po_approval, "AWARD-APPROVAL": _award, "CONTRACT-APPROVAL": _contract,
-    "CONTRACT-AMENDMENT": _amendment, "DMN-02": _dmn02, "DMN-03": _dmn03,
+    "CONTRACT-AMENDMENT": _amendment, "DMN-02": _dmn02, "DMN-03": _dmn03, "ABAC": _abac,
 }
 
 

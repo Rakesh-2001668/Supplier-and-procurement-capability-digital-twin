@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:savings.realised",
+  "title": "savings.realised",
+  "description": "Payload (outbox_event.payload) of savings.realised on SAVINGS_INITIATIVE. Produced by services/savings.py.",
+  "type": "object",
+  "properties": {
+    "invoice": {},
+    "amountMinor": {}
+  },
+  "required": [
+    "invoice",
+    "amountMinor"
+  ],
+  "additionalProperties": true
+}

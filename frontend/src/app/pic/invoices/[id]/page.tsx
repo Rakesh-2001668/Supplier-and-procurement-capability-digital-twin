@@ -9,6 +9,7 @@ import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { BlockChip, hasRole, MatchChip, useSessionUser } from '../_components';
 import { EInvoiceBadge, EInvoicePanel } from '../_ops';
+import { DebitNotesPanel, EarlyPaymentPanel, ScfBadge } from '../_p2p';
 
 type MatchDetail = { invoicedQty?: string; creditedQty?: string; netQty?: string; poQty?: string; receivedQty?: string; acceptedQty?: string;
   alreadyInvoicedQty?: string; sesApprovedMinor?: number; poPriceMinor?: number; invoicePriceMinor?: number };
@@ -23,8 +24,8 @@ type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal
   irn: string | null; irn_valid: boolean | null; net_minor: number; tax_minor: number; gross_minor: number; status: string; match_type: string | null;
   first_pass_matched: boolean | null; payment_block: boolean | null; due_date: string | null; erp_doc_no: string | null; posting_key: string | null;
   posted_at: string | null; payment_status: string | null; rule_set_version: string | null; duplicate_of: string | null;
-  retention_minor?: number;
-  supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[] };
+  retention_minor?: number; payment_option?: string; discount_minor?: number;
+  supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[]; debitNotes?: { id: string }[] };
 type PostResult = { status: string; erpDocument?: string | null; replayed?: boolean; integrationStatus?: string; attempts?: number; error?: string | null };
 
 const RESOLUTIONS = [
@@ -134,6 +135,8 @@ export default function InvoicePage() {
               ['Payment block', <BlockChip key="b" blocked={inv.payment_block} />], ['Due date', date(inv.due_date)],
               ['ERP document', inv.erp_doc_no ?? 'not posted yet'], ['Payment status', inv.payment_status ? <StatusChip key="p" status={inv.payment_status} /> : '–'],
               ['Company code / FY', `${inv.company_code} · ${inv.fiscal_year}`], ['Rules', inv.rule_set_version ?? '–'],
+              ['Payment option', <ScfBadge key="po" option={inv.payment_option} />],
+              ...(inv.discount_minor ? [['Early-payment discount', inr(inv.discount_minor)] as [string, string]] : []),
             ]} />
             {inv.irn && <p className="break-all font-mono text-[11px] text-slate-500">IRN {inv.irn}</p>}
             {inv.duplicate_of && <p className="text-sm text-amber-800">Suspected duplicate of {inv.duplicate_of}</p>}
@@ -207,6 +210,10 @@ export default function InvoicePage() {
               { key: 'gross_minor', header: 'Gross', align: 'right', render: (n) => inr(n.gross_minor) },
             ]} />
           ) },
+          { id: 'debit-notes', label: `Debit notes (${inv.debitNotes?.length ?? 0})`, content: (
+            <DebitNotesPanel invoiceId={inv.id} invoiceStatus={inv.status} canRaise={ap} />
+          ) },
+          ...(['POSTED', 'PAID'].includes(inv.status) ? [{ id: 'early-payment', label: 'Early payment & SCF', content: <EarlyPaymentPanel invoiceId={inv.id} /> }] : []),
           { id: 'payments', label: `Payments (${inv.payments.length})`, content: (
             <DataTable<Payment> rows={inv.payments} empty="Not paid yet" columns={[
               { key: 'number', header: 'Payment' },

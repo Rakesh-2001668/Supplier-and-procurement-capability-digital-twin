@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:supplier.invitation.sent",
+  "title": "supplier.invitation.sent",
+  "description": "Payload (outbox_event.payload) of supplier.invitation.sent on SUPPLIER_INVITATION. Produced by services/invitations.py.",
+  "type": "object",
+  "properties": {
+    "legalName": {},
+    "categories": {},
+    "emailStatus": {}
+  },
+  "required": [
+    "legalName",
+    "categories",
+    "emailStatus"
+  ],
+  "additionalProperties": true
+}

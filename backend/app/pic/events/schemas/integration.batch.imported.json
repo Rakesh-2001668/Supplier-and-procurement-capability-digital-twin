@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:integration.batch.imported",
+  "title": "integration.batch.imported",
+  "description": "Payload (outbox_event.payload) of integration.batch.imported on INTEGRATION_BATCH. Produced by services/erp_import.py.",
+  "type": "object",
+  "properties": {
+    "sourceSystem": {},
+    "kind": {},
+    "batchRef": {},
+    "accepted": {
+      "type": "integer"
+    },
+    "rejected": {},
+    "mrpRuns": {}
+  },
+  "required": [
+    "sourceSystem",
+    "kind",
+    "batchRef",
+    "accepted",
+    "rejected",
+    "mrpRuns"
+  ],
+  "additionalProperties": true
+}

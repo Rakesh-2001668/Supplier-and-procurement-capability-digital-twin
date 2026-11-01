@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:contract.activated",
+  "title": "contract.activated",
+  "description": "Payload (outbox_event.payload) of contract.activated on CONTRACT. Produced by services/contract.py.",
+  "type": "object",
+  "properties": {
+    "supplierId": {
+      "type": "string"
+    },
+    "sourceEventId": {
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    "validFrom": {
+      "type": "string"
+    },
+    "validTo": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "supplierId",
+    "sourceEventId",
+    "validFrom",
+    "validTo"
+  ],
+  "additionalProperties": true
+}

@@ -470,6 +470,69 @@ def _payment_run(sc: Scenario, state: dict, run_day: date):
     sc.note(f"F7 payment run {run['run']} ({run_day}): {len(run['paid'])} invoice(s) paid, {fmt_inr(sum(p['amountMinor'] for p in run['paid']))}")
 
 
+def _pcards(sc: Scenario, state: dict):
+    """Purchasing cards (pending workflow 45): two card holders with per-transaction and monthly limits, a December statement imported and
+    reconciled; a blocked merchant category and a purchase over the per-transaction limit go to the cost-object owner, never the holder."""
+    from app.pic.models import PCardTransaction
+    from app.pic.platform import workflow
+    from app.pic.services import ind_general
+    t = at(date(2026, 10, 12), 10)
+    yield t
+    with sc.act("finance.controller", t) as s:
+        cards = {}
+        for holder, email, last4, per_txn, monthly, cost_object in (
+                ("Ananya Rao", "ananya.rao", "4821", 40_000 * 100, 1 * reference.L + 50_000 * 100, "COST_CENTER:1200"),
+                ("Karthik Reddy", "hyd.admin", "7305", 25_000 * 100, 80_000 * 100, "COST_CENTER:1300")):
+            card = ind_general.issue_card(s, holder_name=holder, issuer="HDFC Bank Corporate Cards", card_last4=last4, per_txn_limit_minor=per_txn,
+                                          monthly_limit_minor=monthly, holder_email=sc.email(email), cost_object=cost_object,
+                                          blocked_mccs=["5813"] if holder == "Karthik Reddy" else [], valid_to=date(2029, 10, 31))
+            cards[last4] = card.number
+    sc.note(f"P-cards {', '.join(cards.values())} issued by finance: ₹40,000 / ₹1.5 L and ₹25,000 / ₹80,000 per transaction / month; "
+            "blocked merchant categories 7995, 6010, 6011, 4829, 5813, 5921 by tenant policy")
+    t = at(date(2027, 1, 5), 10)
+    yield t
+    lines = [
+        {"card_last4": "4821", "txn_ref": "HDFC-2612-0041", "txn_date": date(2026, 12, 9), "merchant": "Staples Office Supplies Bengaluru", "mcc": "5111",
+         "amount_minor": 6_480_00},
+        {"card_last4": "4821", "txn_ref": "HDFC-2612-0063", "txn_date": date(2026, 12, 15), "merchant": "Croma Electronics Koramangala", "mcc": "5732",
+         "amount_minor": 38_900_00},
+        {"card_last4": "4821", "txn_ref": "HDFC-2612-0088", "txn_date": date(2026, 12, 22), "merchant": "Sagar Ratna Restaurant", "mcc": "5812",
+         "amount_minor": 11_250_00},
+        {"card_last4": "7305", "txn_ref": "HDFC-2612-0102", "txn_date": date(2026, 12, 11), "merchant": "Hyderabad Courier Services", "mcc": "4215",
+         "amount_minor": 2_150_00},
+        {"card_last4": "7305", "txn_ref": "HDFC-2612-0119", "txn_date": date(2026, 12, 19), "merchant": "Barrel & Co Lounge Bar", "mcc": "5813",
+         "amount_minor": 14_600_00},
+        {"card_last4": "7305", "txn_ref": "HDFC-2612-0127", "txn_date": date(2026, 12, 27), "merchant": "Nilkamal Furniture Hyderabad", "mcc": "5712",
+         "amount_minor": 42_000_00},
+    ]
+    with sc.act("finance.controller", t) as s:
+        statement = ind_general.import_statement(s, issuer="HDFC Bank Corporate Cards", period="2026-12", lines=lines)
+        view = ind_general.statement_view(s, statement)
+        stmt_id, stmt_no = statement.id, statement.number
+    with tenant_tx(sc.tenant_id) as s:
+        tasks = [(task.id, task.object_ref.split("/")[1]) for task in s.execute(select(Task).where(Task.kind == "PCARD_REVIEW", Task.status == "OPEN")).scalars()]
+    sc.note(f"P-card statement {stmt_no} (Dec 2026, {view['line_count']} lines {fmt_inr(view['total_minor'])}): {view['cleared']} cleared below the PO threshold, "
+            f"{view['exceptions']} exception(s) to the cost-object owners")
+    t = at(date(2027, 1, 7), 14)
+    yield t
+    decisions = {"HDFC-2612-0063": ("APPROVE", "it.manager", "Replacement docking stations for the service desk; no PO as it was urgent"),
+                 "HDFC-2612-0088": ("APPROVE", "it.manager", "Team dinner at the quarter close: within the entertainment policy"),
+                 "HDFC-2612-0119": ("REJECT", "admin.manager", "Bar bill: not a business expense; recover from the holder"),
+                 "HDFC-2612-0127": ("REJECT", "admin.manager", "Over the per-transaction limit and no PO: raise a requisition")}
+    done = []
+    for task_id, txn_ref in tasks:
+        if txn_ref in decisions:
+            decision, who, comment = decisions[txn_ref]
+            with sc.act(who, t) as s:
+                workflow.complete(s, task_id, decision, comment)
+            done.append(f"{txn_ref} {decision.lower()}d" if decision == "APPROVE" else f"{txn_ref} rejected")
+    with tenant_tx(sc.tenant_id) as s:
+        left = s.execute(select(func.count()).select_from(PCardTransaction).where(PCardTransaction.statement_id == stmt_id,
+                                                                                  PCardTransaction.status == "EXCEPTION")).scalar()
+    state["pcards"] = {"cards": cards, "statement": stmt_no, "reviews": done, "openExceptions": left}
+    sc.note(f"P-card reviews: {', '.join(done)}; {left} transaction(s) stay flagged for recovery from the holder")
+
+
 def apply(tenant_code: str, password: str) -> dict:
     if tenant_code != TENANT[0]:
         raise ValueError(f"{KEY} creates tenant {TENANT[0]} only")
@@ -492,6 +555,7 @@ def apply(tenant_code: str, password: str) -> dict:
     processes = [_housekeeping(sc, state, suppliers), _laptop(sc, state), _monitors(sc, state), _chairs(sc, state)]
     processes += [_supplies(sc, state, n, ordered, picks) for n, (ordered, picks) in enumerate(SUPPLY_ORDERS, start=1)]
     processes += [_payment_run(sc, state, run_day) for run_day in PAYMENT_RUNS]
+    processes.append(_pcards(sc, state))
     run_timeline(processes)
     relay(sc, at(date(2027, 3, 31), 20))
 
@@ -532,4 +596,5 @@ def apply(tenant_code: str, password: str) -> dict:
     return {"notes": sc.log, "counts": {**counts, "kpis": kpis, "laptop": state.get("laptop"), "monitors": state.get("monitors"),
                                         "chairs": state.get("chairs"), "housekeeping": state.get("housekeeping"),
                                         "supplyOrders": [o["requisition"] for o in state["supplies"]],
-                                        "paymentRuns": [r["run"] for r in state["runs"]], "paid": sum(len(r["paid"]) for r in state["runs"])}}
+                                        "paymentRuns": [r["run"] for r in state["runs"]], "paid": sum(len(r["paid"]) for r in state["runs"]),
+                                        "pcards": state.get("pcards")}}

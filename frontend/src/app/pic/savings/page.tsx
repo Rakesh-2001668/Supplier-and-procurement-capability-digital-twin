@@ -1,11 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { KeyboardEvent, Suspense, useRef, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Button, Card, DataTable, Dialog, Empty, Field, Input, Kpi, Loading, PageHeader, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { crore, date, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import { PipelineTab } from './_pipeline';
+import { PnlTab } from './_pnl';
 
 type Initiative = {
   id?: string; ownerId?: string; number: string; title: string; stage: string; category: string | null; baselineMethod: string | null;
@@ -119,7 +122,7 @@ function WaterfallView({ number, canValidate }: { number: string; canValidate: b
   );
 }
 
-export default function Savings() {
+function RegisterView() {
   const { data, isLoading, error } = useApi<Initiative[]>('/savings');
   const [selected, setSelected] = useState<string | null>(null);
   const current = selected ?? data?.[0]?.number ?? null;
@@ -130,7 +133,7 @@ export default function Savings() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="SAV-01/02 · Savings register" title="Savings"
+      <PageHeader kpis="M11" eyebrow="SAV-01/02 · Savings register" title="Savings"
         subtitle="Every saving is computed from a ledger with its formula and source document, so finance can audit each rupee."
         actions={canManage && <Button variant="primary" onClick={() => setDialog({ kind: 'new' })}>New initiative</Button>} />
 
@@ -308,4 +311,56 @@ function LoseDialog({ initiative, onClose }: { initiative: Initiative; onClose: 
       </DialogActions>
     </Dialog>
   );
+}
+
+
+const TABS = [
+  { id: 'register', label: 'Register (SAV-01/02)' },
+  { id: 'pipeline', label: 'Pipeline tracker (SPD-08)' },
+  { id: 'pnl', label: 'P&L and budget impact (M11-C4)' },
+];
+
+/** Savings workspace: the active tab lives in `?tab=` so deep links and the browser back button work. */
+function SavingsWorkspace() {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const active = TABS.find((t) => t.id === params.get('tab')) ?? TABS[0];
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  function select(id: string) {
+    const next = new URLSearchParams(params.toString());
+    next.set('tab', id);
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }
+  function onKey(e: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const move = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    const to = e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : move ? (index + move + TABS.length) % TABS.length : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    refs.current[to]?.focus();
+    select(TABS[to].id);
+  }
+  return (
+    <div className="space-y-4">
+      <div role="tablist" aria-label="Savings views" className="flex flex-wrap gap-1 border-b border-slate-200">
+        {TABS.map((t, i) => {
+          const on = t.id === active.id;
+          return (
+            <button key={t.id} ref={(el) => { refs.current[i] = el; }} id={`savings-tab-${t.id}`} role="tab" type="button" aria-selected={on} aria-controls="savings-panel"
+              tabIndex={on ? 0 : -1} onClick={() => select(t.id)} onKeyDown={(e) => onKey(e, i)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${on ? 'border-[#1A56DB] text-[#1A56DB]' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+      <div role="tabpanel" id="savings-panel" aria-labelledby={`savings-tab-${active.id}`}>
+        {active.id === 'pipeline' ? <PipelineTab /> : active.id === 'pnl' ? <PnlTab /> : <RegisterView />}
+      </div>
+    </div>
+  );
+}
+
+export default function Savings() {
+  return <Suspense fallback={<Loading />}><SavingsWorkspace /></Suspense>;
 }

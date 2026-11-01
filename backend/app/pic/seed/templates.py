@@ -18,7 +18,12 @@ TEMPLATES = {
         "controls": ["PPAP / IATF 16949 qualification", "Quota arrangements", "Safety stock"],
         "kpis": ["OTIF", "PPM", "Inventory turns", "PPV"],
         "demoCase": "Dual source: Trichy Forge 60% @ 398, Kovai Diecast 40% @ 405 (capacity-constrained scenario)",
-        "ruleOverrides": {},
+        # Industry controls (wave 1): ERS on scheduling agreements (settled per period from accepted call-off deliveries) and Kanban cards for C-parts.
+        # The weekly / monthly MRP buckets and reorder-point planning are chosen per material through its MRP type (PW, PM, VB).
+        "ruleOverrides": {
+            "SELF-BILLING": {"enabled": True, "contractTypes": ["SCHEDULING_AGREEMENT"], "suppliers": [], "basis": "ACCEPTED_GOODS_RECEIPT"},
+            "KANBAN": {"enabled": True, "purposeCode": "KANBAN_REPLENISHMENT", "autoRequisition": True},
+        },
     },
     "CONSTRUCTION": {
         "name": "Construction & Projects",
@@ -32,7 +37,14 @@ TEMPLATES = {
         "kpis": ["Cost to complete", "Commitments vs budget", "Variation %"],
         "demoCase": "WBS C-2207 'Tower B structure', subcontract SC-118 rebar & formwork, SES at 35% progress, 5% retention",
         "ruleOverrides": {"BUDGET": {"hardFor": ["ASSET", "WBS", "COST_CENTER"], "softFor": ["ORDER"]},
-                          "PROJECT-CONTROLS": {"retentionPct": "5", "advanceRecovery": True, "variationAsAmendment": True}},
+                          "PROJECT-CONTROLS": {"retentionPct": "5", "advanceRecovery": True, "variationAsAmendment": True},
+                          # Advance: at most maxPct of the order value, against an advance bank guarantee, approved by finance, recovered pro rata
+                          # from every running bill. Performance guarantee: at least minPct of the order value; retention release and final payment
+                          # wait for a valid one; expiry alerts go to the contract manager.
+                          "ADVANCE-PAYMENT": {"enabled": True, "maxPct": "15", "needsGuarantee": True, "approverRole": "FINANCE_CONTROLLER",
+                                              "recovery": "PRO_RATA"},
+                          "PERFORMANCE-GUARANTEE": {"enabled": True, "minPct": "5", "requiredFor": ["RETENTION_RELEASE", "FINAL_PAYMENT"],
+                                                    "alertDays": [60, 30, 7], "releaseAfter": "RETENTION_RELEASED"}},
     },
     "IT_SERVICES": {
         "name": "IT & Professional Services",
@@ -45,7 +57,10 @@ TEMPLATES = {
         "controls": ["InfoSec and data-privacy assessment", "IP clauses", "Auto-renewal alerts"],
         "kpis": ["Rate compliance", "Licence utilisation", "Renewal savings"],
         "demoCase": "SOW-4410 cloud migration T&M, rate card RC-22, timesheet SES 320 h",
-        "ruleOverrides": {"CONTRACT-APPROVAL": {"renewalNoticeDays": 90}},
+        # Licence utilisation: an entitlement whose peak use over lookbackDays is below minUtilisationPct is flagged UNUSED, flagLeadDays
+        # before the renewal alert (renewalNoticeDays before the term ends).
+        "ruleOverrides": {"CONTRACT-APPROVAL": {"renewalNoticeDays": 90},
+                          "LICENCE-UTILISATION": {"enabled": True, "minUtilisationPct": "80", "lookbackDays": 90, "flagLeadDays": 30}},
     },
     "LOGISTICS": {
         "name": "Logistics & Transportation",
@@ -73,7 +88,11 @@ TEMPLATES = {
         "controls": ["Regulatory approvals (CDSCO / USFDA where applicable)", "Recall traceability", "Clinical sign-off in award"],
         "kpis": ["Contract compliance", "Expiry write-offs", "Stock-outs"],
         "demoCase": "Consignment implant KN-77, lot/expiry tracking, usage-triggered PO",
-        "ruleOverrides": {"AWARD-APPROVAL": {"clinicalSignOff": True}},
+        # Cold chain: an excursion longer than maxExcursionMinutes (per material range) quarantines the stock and opens a quality task.
+        # Clinical sign-off: the clinical lead approves every award (or only clinicalCategories) after the value-based chain.
+        "ruleOverrides": {"AWARD-APPROVAL": {"clinicalSignOff": True, "clinicalRole": "CLINICAL_LEAD"},
+                          "COLD-CHAIN": {"enabled": True, "maxExcursionMinutes": 30, "taskRole": "QUALITY_INSPECTOR"},
+                          "PAR-LEVEL": {"enabled": True}},
     },
     "GENERAL": {
         "name": "General Enterprise (Indirect)",
@@ -87,7 +106,12 @@ TEMPLATES = {
         "kpis": ["Catalogue adoption %", "PR cycle time", "Maverick %"],
         "demoCase": "Laptop catalogue order via punch-out, 78,500, single approval",
         # Desktop receipt (gr) above the threshold, receipt-less (2-way) below it: "2-way under threshold, 3-way above".
-        "ruleOverrides": {"PURCHASE-TYPE-MATRIX": {"EXPENSE": {"gr": True, "ir": True, "ses": False, "receiptlessBelowMinor": 1 * L}}},
+        "ruleOverrides": {"PURCHASE-TYPE-MATRIX": {"EXPENSE": {"gr": True, "ir": True, "ses": False, "receiptlessBelowMinor": 1 * L}},
+                          # Purchasing cards: policy ceilings, blocked merchant categories (ISO 18245: 7995 betting, 6010/6011 cash, 4829 money
+                          # transfer, 5813 bars, 5921 liquor stores), PO required above poRequiredAboveMinor, statement-to-PO match tolerance.
+                          "PCARD": {"enabled": True, "maxPerTransactionMinor": 1 * L, "maxMonthlyMinor": 5 * L,
+                                    "blockedMccs": ["7995", "6010", "6011", "4829", "5813", "5921"], "poRequiredAboveMinor": 25_000 * 100,
+                                    "matchToleranceMinor": 100, "matchWindowDays": 45, "reviewRole": "COST_OBJECT_OWNER"}},
     },
 }
 

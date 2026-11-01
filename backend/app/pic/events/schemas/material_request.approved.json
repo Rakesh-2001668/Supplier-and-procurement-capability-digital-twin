@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:material_request.approved",
+  "title": "material_request.approved",
+  "description": "Payload (outbox_event.payload) of material_request.approved on MATERIAL_REQUEST. Produced by services/mdm.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "materialId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "material",
+    "materialId"
+  ],
+  "additionalProperties": true
+}

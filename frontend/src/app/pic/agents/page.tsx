@@ -7,6 +7,8 @@ import { api } from '@/lib/pic/api';
 import { dateTime, inr, label, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, useSessionUser } from '../invoices/_components';
+import { ModelsPanel } from './_models';
+import { AcceptanceCell, Acceptance, AiSwitchCard, SuspensionNote } from './_control';
 
 type Agent = { id: string; code: string; name: string; module: string; purpose: string; autonomy_level: string; run_as_role: string;
   value_limit_minor: number | null; categories: string[]; kill_switch: boolean; model_version: string; min_acceptance_rate: string | null };
@@ -92,6 +94,8 @@ function KillSwitchDialog({ agent, onClose }: { agent: Agent; onClose: () => voi
 
 export default function Agents() {
   const { data, isLoading, error } = useApi<Agent[]>('/agents');
+  const acceptance = useApi<Acceptance[]>('/agents-acceptance');
+  const accepted = (code: string) => acceptance.data?.find((a) => a.code === code);
   const user = useSessionUser();
   const canManage = hasRole(user, 'CPO', 'TENANT_ADMIN');
   const [selected, setSelected] = useState<string | null>(null);
@@ -107,8 +111,10 @@ export default function Agents() {
 
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="AIX-03 · Agent console" title="AI agents"
+      <PageHeader kpis="M12" eyebrow="AIX-03 · Agent console" title="AI agents"
         subtitle="Every agent runs as a named role with a value limit and an autonomy level. Each run is logged with its evidence, confidence and model version." />
+
+      <AiSwitchCard canManage={canManage} />
 
       <Card title="Autonomy levels">
         <ol className="grid gap-2 text-sm sm:grid-cols-5">
@@ -136,6 +142,7 @@ export default function Agents() {
             { key: 'run_as_role', header: 'Runs as', render: (r) => label(r.run_as_role) },
             { key: 'value_limit_minor', header: 'Value limit', align: 'right', render: (r) => (r.value_limit_minor === null ? 'No limit' : inr(r.value_limit_minor)) },
             { key: 'model_version', header: 'Model', render: (r) => <span className="font-mono text-xs">{r.model_version}</span> },
+            { key: 'acceptance', header: 'Acceptance', render: (r) => <AcceptanceCell item={accepted(r.code)} /> },
             { key: 'kill_switch', header: 'Kill switch', render: (r) => (
               <div className="flex items-center gap-2">
                 <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ring-1 ring-inset ${r.kill_switch ? 'bg-red-50 text-red-800 ring-red-200' : 'bg-emerald-50 text-emerald-800 ring-emerald-200'}`}>
@@ -145,6 +152,7 @@ export default function Agents() {
                   className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${r.kill_switch ? 'bg-red-600' : 'bg-slate-300'}`}>
                   <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition ${r.kill_switch ? 'translate-x-4' : 'translate-x-0.5'}`} />
                 </button>
+                <SuspensionNote item={accepted(r.code)} />
               </div>
             ) },
             { key: 'actions', header: '', render: (r) => (
@@ -166,6 +174,8 @@ export default function Agents() {
       </Card>
 
       <RecommendationsInbox />
+
+      <ModelsPanel canManage={canManage} />
 
       {current ? (
         <Card title={<span>Runs · <span className="font-mono">{current.code}</span> · {current.name}</span>}

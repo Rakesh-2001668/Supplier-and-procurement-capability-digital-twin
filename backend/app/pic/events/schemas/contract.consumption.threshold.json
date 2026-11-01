@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:contract.consumption.threshold",
+  "title": "contract.consumption.threshold",
+  "description": "Payload (outbox_event.payload) of contract.consumption.threshold on CONTRACT. Produced by services/contract.py.",
+  "type": "object",
+  "properties": {
+    "threshold": {},
+    "consumedPct": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "threshold",
+    "consumedPct"
+  ],
+  "additionalProperties": true
+}

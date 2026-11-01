@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Button, Card, DataTable, Dialog, Field, Input, LinkButton, PageHeader, ProblemBox, StatusChip } from '@/components/pic/ui';
+import { Button, Card, DataTable, Dialog, Field, Input, LinkButton, PageHeader, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
-import { dateTime, label } from '@/lib/pic/format';
+import { dateTime } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { emailValid } from '../register/tax';
+import { SegmentChip } from './[code]/_segment';
 import { useSupplierManager } from './roles';
 
 type Supplier = { id: string; code: string; legal_name: string; status: string; state_code: string; segment: string | null; risk_tier: string | null;
@@ -19,10 +20,12 @@ export default function Suppliers() {
   const list = useList<Supplier>('/suppliers');
   const canRegister = useSupplierManager();
   const [inviting, setInviting] = useState(false);
+  const [segment, setSegment] = useState('');
   const categories = Array.from(new Set(list.items.flatMap((s) => Object.keys(s.categories ?? {})))).sort();
+  const rows = list.items.filter((r) => !segment || (segment === 'UNSEGMENTED' ? !r.segment : r.segment === segment));
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="SLM-02 · Supplier lifecycle" title="Suppliers"
+      <PageHeader kpis="M06" eyebrow="SLM-02 · Supplier lifecycle" title="Suppliers"
         subtitle="Status is held per category: a supplier can be Qualified for one category and only Registered for another. Only Qualified or Preferred suppliers can be invited to sourcing."
         actions={<>
           <LinkButton href="/pic/suppliers/risk">Risk monitor (SLM-04)</LinkButton>
@@ -30,9 +33,14 @@ export default function Suppliers() {
           {canRegister && <Button onClick={() => setInviting(true)}>Invite supplier</Button>}
           {canRegister && <LinkButton variant="primary" href="/pic/suppliers/new">Register supplier</LinkButton>}
         </>} />
-      <Card title="Supplier base">
+      <Card title="Supplier base" actions={
+        <Select aria-label="Filter suppliers by segment" value={segment} onChange={(e) => setSegment(e.target.value)} options={[
+          { value: '', label: 'All segments' }, { value: 'STRATEGIC', label: 'Strategic' }, { value: 'LEVERAGE', label: 'Leverage' },
+          { value: 'BOTTLENECK', label: 'Bottleneck' }, { value: 'ROUTINE', label: 'Routine' }, { value: 'UNSEGMENTED', label: 'Not segmented' },
+        ]} />
+      }>
         <DataTable<Supplier>
-          rows={list.items} loading={list.isLoading} error={list.error} hasMore={list.hasNextPage} onLoadMore={() => list.fetchNextPage()}
+          rows={rows} loading={list.isLoading} error={list.error} hasMore={list.hasNextPage} onLoadMore={() => list.fetchNextPage()}
           loadingMore={list.isFetchingNextPage} rowHref={(r) => `/pic/suppliers/${encodeURIComponent(r.code)}`} empty="No suppliers"
           columns={[
             { key: 'code', header: 'Code' },
@@ -49,7 +57,7 @@ export default function Suppliers() {
             { key: 'screening', header: 'Screening', render: (r) => (r.screening?.outcome ? <StatusChip status={r.screening.outcome} /> : '–') },
             { key: 'state_code', header: 'State' },
             { key: 'payment_terms', header: 'Terms' },
-            { key: 'segment', header: 'Segment', render: (r) => (r.segment ? label(r.segment) : '–') },
+            { key: 'segment', header: 'Segment', render: (r) => <SegmentChip segment={r.segment} /> },
           ]}
         />
       </Card>

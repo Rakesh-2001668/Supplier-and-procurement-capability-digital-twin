@@ -23,6 +23,9 @@ class Tenant(Base):
     industry_template: Mapped[str] = mapped_column(String(40), nullable=False, default="MANUFACTURING")
     base_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
     timezone: Mapped[str] = mapped_column(String(40), nullable=False, default="Asia/Kolkata")
+    # New tenants start with MFA enforced for approver / finance / admin roles (bootstrap writes rule MFA with enforce=true);
+    # the bundled demo tenants stay false until the operator flips them.
+    mfa_enforce: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -101,6 +104,7 @@ class RuleSet(TenantScoped, Base):
     plant: Mapped[Optional[str]] = mapped_column(String(10))
     category: Mapped[Optional[str]] = mapped_column(String(40))
     purchase_type: Mapped[Optional[str]] = mapped_column(String(30))
+    supplier_group: Mapped[Optional[str]] = mapped_column(String(30))  # BP M10: tolerances by company code and supplier group
     effective_from: Mapped[date] = mapped_column(Date, nullable=False)
     effective_to: Mapped[Optional[date]] = mapped_column(Date)
     body: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -242,6 +246,17 @@ class ProcessDefinition(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     definition: Mapped[dict] = mapped_column(JSONB, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Versioned, editable definitions (item 49): DRAFT -> ACTIVE -> RETIRED. ``active`` mirrors status == ACTIVE. Version 1 of
+    # each flow is shared (tenant_id NULL); a tenant's own drafts and published versions carry its tenant_id (RLS in migration
+    # 0013) and take precedence over the shared one for that tenant. Version numbers are unique per key across both.
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="ACTIVE", server_default="ACTIVE")
+    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.tenant.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")  # ETag of an editable draft
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    base_version: Mapped[Optional[int]] = mapped_column(Integer)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class ProcessInstance(TenantScoped, Base):
@@ -329,6 +344,9 @@ class IntegrationMessage(TenantScoped, Base):
     next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[Optional[str]] = mapped_column(Text)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Field mapping (item 50): what the connector actually received, and the mapping version that produced it.
+    outbound_payload: Mapped[Optional[dict]] = mapped_column(JSONB)
+    mapping_version: Mapped[Optional[int]] = mapped_column(Integer)
 
 
 class ErpDocument(TenantScoped, Base):
@@ -362,6 +380,11 @@ class Agent(TenantScoped, Base):
     kill_switch: Mapped[bool] = mapped_column(Boolean, default=False)
     model_version: Mapped[str] = mapped_column(String(40), nullable=False)
     min_acceptance_rate: Mapped[float] = mapped_column(Numeric(4, 3), default=0.7)
+    # Why and when the switch was turned on (automatic drift suspension or a person); acceptance_reset_at restarts the feedback window
+    suspended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    suspension_reason: Mapped[Optional[str]] = mapped_column(Text)
+    suspended_by: Mapped[Optional[str]] = mapped_column(String(80))
+    acceptance_reset_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class AgentRun(TenantScoped, Base):

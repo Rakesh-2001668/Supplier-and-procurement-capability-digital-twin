@@ -1,25 +1,49 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { Card, DataTable, Empty, Kpi, Loading } from '@/components/pic/ui';
-import { crore, inr, label } from '@/lib/pic/format';
-import { useApi } from '@/lib/pic/hooks';
+import { Button, Card, DataTable, Empty, Field, Input, Kpi, Loading, Select } from '@/components/pic/ui';
+import { SavedViews } from '@/components/pic/views';
+import { api } from '@/lib/pic/api';
+import { crore, dateTime, inr, label } from '@/lib/pic/format';
+import { useApi, useCommand } from '@/lib/pic/hooks';
 import { rupeeTick, SpendProblem } from './shared';
 
-type CubeRow = { spendMinor: number; lines: number; contractCoveragePct: string | null } & Record<string, string | number | null>;
-type Cube = { dimensions: string[]; totalMinor: number; contractedPct: string | null; maverickPct: string | null; rows: CubeRow[] };
+type CubeRow = Record<string, string | number | boolean | null> & {
+  spendMinor: number; lines: number; invoices: number; pos: number; contractedMinor: number; maverickMinor: number; priceVarianceMinor: number;
+  priceVarianceLastMinor: number; consumptionMinor: number; contractCoveragePct: string;
+};
+type Freshness = { asOf: string | null; stale: boolean; dirtyPeriods: string[]; durationMs: number | null; summaryRows: number };
+type Cube = {
+  dimensions: string[]; currency: string; totalMinor: number; contractedPct: string; maverickPct: string; rows: CubeRow[]; truncated: boolean; freshness: Freshness;
+  totals: CubeRow; documentCurrencyTotals?: Record<string, number>;
+  commitments?: { totals: { committedMinor: number; receivedNotInvoicedMinor: number } };
+};
+type Me = { scopes: string[] };
 
 const DIMENSIONS = [
-  { value: 'category', label: 'Category' },
-  { value: 'supplier', label: 'Supplier' },
-  { value: 'plant', label: 'Plant' },
-  { value: 'period', label: 'Period' },
-  { value: 'material_group', label: 'Material group' },
-  { value: 'cost_object', label: 'Cost object' },
-];
+  ['category', 'Category (leaf)'], ['category_l1', 'Category L1'], ['category_l2', 'Category L2'], ['category_l3', 'Category L3'], ['category_l4', 'Category L4'],
+  ['supplier', 'Supplier'], ['parent_supplier', 'Parent supplier'], ['plant', 'Plant'], ['company_code', 'Company code'], ['cost_object', 'Cost centre / WBS'],
+  ['material_group', 'Material group'], ['period', 'Period'], ['currency', 'Currency'], ['source_system', 'ERP system'], ['contracted', 'Contracted'],
+].map(([value, name]) => ({ value, label: name }));
 const dimLabel = (d: string) => DIMENSIONS.find((x) => x.value === d)?.label ?? label(d);
 const UNASSIGNED = '(not assigned)';
+
+type Filters = {
+  dims: string[]; periodFrom: string; periodTo: string; category: string; supplier: string; parent: string; plant: string; companyCode: string;
+  costCentre: string; wbs: string; currency: string; sourceSystem: string; contracted: '' | 'true' | 'false'; commitments: boolean;
+};
+const INITIAL: Filters = { dims: ['category'], periodFrom: '', periodTo: '', category: '', supplier: '', parent: '', plant: '', companyCode: '', costCentre: '', wbs: '',
+  currency: '', sourceSystem: '', contracted: '', commitments: true };
+
+function queryOf(f: Filters): string {
+  const q = new URLSearchParams({ dims: f.dims.join(','), limit: '500', commitments: String(f.commitments) });
+  const map: [string, string][] = [['period_from', f.periodFrom], ['period_to', f.periodTo], ['category', f.category], ['supplier', f.supplier], ['parent', f.parent],
+    ['plant', f.plant], ['company_code', f.companyCode], ['cost_centre', f.costCentre], ['wbs', f.wbs], ['currency', f.currency], ['source_system', f.sourceSystem],
+    ['contracted', f.contracted]];
+  for (const [k, v] of map) if (v) q.set(k, v);
+  return q.toString();
+}
 
 function ChartTooltip({ active, payload }: { active?: boolean; payload?: { payload: { name: string; spendMinor: number; lines: number } }[] }) {
   if (!active || !payload?.length) return null;
@@ -33,17 +57,22 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: { paylo
   );
 }
 
-/** SPD-04 spend cube: posted invoice lines grouped by up to six dimensions. */
+/** SPD-04 spend cube: summaries by category L1-L4, supplier (parent / child), plant, company, cost centre / WBS, currency and ERP, with filters. */
 export function CubeTab() {
-  const [dims, setDims] = useState<string[]>(['category']);
-  const { data, isLoading, error } = useApi<Cube>(`/spend/cube?dims=${dims.join(',')}`);
+  const [f, setF] = useState<Filters>(INITIAL);
+  const set = <K extends keyof Filters>(key: K, value: Filters[K]) => setF((cur) => ({ ...cur, [key]: value }));
+  const apply = useCallback((saved: Record<string, unknown>) => setF({ ...INITIAL, ...(saved as Partial<Filters>) }), []);
+  const { data, isLoading, error } = useApi<Cube>(`/spend/analysis?${queryOf(f)}`);
+  const me = useApi<Me>('/me');
+  const plants = useApi<{ plants: { code: string; name: string }[] }>('/reference');
+  const refresh = useCommand(() => api.post('/admin/spend/refresh', { full: false }), { success: 'Cube refreshed' });
+  const canRefresh = !!me.data?.scopes.includes('admin:integration');
 
   function toggle(d: string) {
-    setDims((cur) => (cur.includes(d) ? (cur.length > 1 ? cur.filter((x) => x !== d) : cur) : [...cur, d]));
+    setF((cur) => ({ ...cur, dims: cur.dims.includes(d) ? (cur.dims.length > 1 ? cur.dims.filter((x) => x !== d) : cur.dims) : [...cur.dims, d] }));
   }
 
-  const first = data?.dimensions[0] ?? dims[0];
-  // Chart aggregates by the first dimension, largest first.
+  const first = data?.dimensions[0] ?? f.dims[0];
   const chartData = useMemo(() => {
     if (!data) return [];
     const totals = new Map<string, { name: string; spendMinor: number; lines: number }>();
@@ -54,22 +83,24 @@ export function CubeTab() {
       cur.lines += Number(r.lines);
       totals.set(name, cur);
     }
-    return [...totals.values()].sort((a, b) => b.spendMinor - a.spendMinor).slice(0, 20)
-      .map((x) => ({ ...x, rupees: x.spendMinor / 100 }));
+    return [...totals.values()].sort((a, b) => b.spendMinor - a.spendMinor).slice(0, 20).map((x) => ({ ...x, rupees: x.spendMinor / 100 }));
   }, [data, first]);
 
   return (
     <div className="space-y-6">
-      <p className="text-sm text-slate-600">Spend cube from posted invoice lines (all periods). Contracted share is spend covered by a contract or catalogue price; maverick is spend outside them.</p>
+      <p className="text-sm text-slate-600">
+        Spend cube from posted invoice lines, served from precomputed summaries so it answers in well under a second at 50 million lines. Amounts are in the group currency
+        (converted with the exchange rate stored on each line). Contracted is spend on a contract or catalogue price; consumption is the contract-covered part.
+      </p>
       <Card title="Dimensions" actions={<span className="text-xs text-slate-500">The chart groups by the first dimension selected</span>}>
         <fieldset>
           <legend className="sr-only">Group spend by</legend>
           <div className="flex flex-wrap gap-2">
             {DIMENSIONS.map((d) => {
-              const idx = dims.indexOf(d.value);
+              const idx = f.dims.indexOf(d.value);
               const on = idx >= 0;
               return (
-                <label key={d.value} className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm ${on ? 'border-[#1A56DB] bg-blue-50 text-[#1A56DB]' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
+                <label key={d.value} className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 text-sm focus-within:ring-2 focus-within:ring-[#1A56DB] ${on ? 'border-[#1A56DB] bg-blue-50 text-[#1A56DB]' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}>
                   <input type="checkbox" className="accent-[#1A56DB]" checked={on} onChange={() => toggle(d.value)} />
                   {d.label}
                   {on && <span className="rounded bg-white px-1 font-mono text-[10px] text-slate-500 ring-1 ring-slate-200">{idx + 1}</span>}
@@ -80,20 +111,54 @@ export function CubeTab() {
         </fieldset>
       </Card>
 
-      {isLoading ? <Loading /> : error ? <SpendProblem error={error} /> : !data || data.rows.length === 0 || Number(data.totalMinor) === 0 ? (
-        <Empty title="No spend yet" hint="Spend appears when invoices are posted to the ERP." />
+      <Card title="Filters" actions={<SavedViews screen="spend-analysis" filters={f} onApply={apply} />}>
+        <div className="grid gap-3 md:grid-cols-4">
+          <Field label="From month">{(id) => <Input id={id} type="month" value={f.periodFrom} onChange={(e) => set('periodFrom', e.target.value)} />}</Field>
+          <Field label="To month">{(id) => <Input id={id} type="month" value={f.periodTo} onChange={(e) => set('periodTo', e.target.value)} />}</Field>
+          <Field label="Category (any level)" hint="Taxonomy code, e.g. DIRECT or ALU-DIECAST">{(id, d) => <Input id={id} aria-describedby={d} value={f.category} onChange={(e) => set('category', e.target.value.toUpperCase())} />}</Field>
+          <Field label="Plant">{(id) => <Select id={id} value={f.plant} onChange={(e) => set('plant', e.target.value)}
+            options={[{ value: '', label: 'All plants' }, ...(plants.data?.plants ?? []).map((p) => ({ value: p.code, label: `${p.code} · ${p.name}` }))]} />}</Field>
+          <Field label="Supplier code">{(id) => <Input id={id} value={f.supplier} onChange={(e) => set('supplier', e.target.value)} />}</Field>
+          <Field label="Parent supplier code">{(id) => <Input id={id} value={f.parent} onChange={(e) => set('parent', e.target.value)} />}</Field>
+          <Field label="Company code">{(id) => <Input id={id} value={f.companyCode} onChange={(e) => set('companyCode', e.target.value)} />}</Field>
+          <Field label="Currency">{(id) => <Input id={id} value={f.currency} maxLength={3} onChange={(e) => set('currency', e.target.value.toUpperCase())} />}</Field>
+          <Field label="Cost centre">{(id) => <Input id={id} value={f.costCentre} onChange={(e) => set('costCentre', e.target.value)} />}</Field>
+          <Field label="WBS element">{(id) => <Input id={id} value={f.wbs} onChange={(e) => set('wbs', e.target.value)} />}</Field>
+          <Field label="ERP system">{(id) => <Input id={id} value={f.sourceSystem} onChange={(e) => set('sourceSystem', e.target.value)} />}</Field>
+          <Field label="Contracted">{(id) => <Select id={id} value={f.contracted} onChange={(e) => set('contracted', e.target.value as Filters['contracted'])}
+            options={[{ value: '', label: 'Both' }, { value: 'true', label: 'Contracted only' }, { value: 'false', label: 'Not contracted only' }]} />}</Field>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-[#1A56DB]" checked={f.commitments} onChange={(e) => set('commitments', e.target.checked)} /> Include open PO commitments</label>
+          <Button variant="ghost" onClick={() => setF(INITIAL)}>Clear filters</Button>
+        </div>
+      </Card>
+
+      {isLoading ? <Loading /> : error ? <SpendProblem error={error} /> : !data || data.rows.length === 0 ? (
+        <Empty title="No spend for these filters" hint="Spend appears when invoices are posted to the ERP." />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Kpi label="Posted spend" value={inr(data.totalMinor)} hint={crore(data.totalMinor)} />
-            <Kpi label="Contracted" value={data.contractedPct === null ? '–' : `${data.contractedPct}%`} hint="contract or catalogue price" tone="good" />
-            <Kpi label="Maverick" value={data.maverickPct === null ? '–' : `${data.maverickPct}%`} hint="off-contract spend"
-              tone={Number(data.maverickPct) > 0 ? 'warn' : 'default'} />
-            <Kpi label="Cells" value={data.rows.length} hint={data.dimensions.map(dimLabel).join(' × ')} />
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-600" role="status">
+            <span>
+              Cube as of {data.freshness.asOf ? dateTime(data.freshness.asOf) : 'never built'}
+              {data.freshness.stale ? ` · ${data.freshness.dirtyPeriods.length} period(s) waiting for refresh` : ' · up to date'}
+            </span>
+            {canRefresh && <Button busy={refresh.isPending} onClick={() => refresh.mutate()}>Refresh now</Button>}
           </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
+            <Kpi label="Posted spend" value={inr(data.totalMinor)} hint={`${crore(data.totalMinor)} · ${data.currency}`} />
+            <Kpi label="Contracted" value={`${data.contractedPct}%`} hint="contract or catalogue price" tone="good" />
+            <Kpi label="Maverick" value={`${data.maverickPct}%`} hint="off-contract spend" tone={Number(data.maverickPct) > 0 ? 'warn' : 'default'} />
+            <Kpi label="Price variance" value={inr(data.totals.priceVarianceMinor)} hint={`vs last price ${inr(data.totals.priceVarianceLastMinor)}`} tone={data.totals.priceVarianceMinor ? 'warn' : 'default'} />
+            <Kpi label="Invoices / POs" value={`${data.totals.invoices} / ${data.totals.pos}`} hint={`${data.totals.lines} lines`} />
+            {data.commitments && <Kpi label="Open PO commitments" value={inr(data.commitments.totals.committedMinor)} hint={`received not invoiced ${inr(data.commitments.totals.receivedNotInvoicedMinor)}`} />}
+          </div>
+          {data.documentCurrencyTotals && (
+            <p className="text-xs text-slate-600">Document currencies: {Object.entries(data.documentCurrencyTotals).map(([c, a]) => `${c} ${(a / 100).toLocaleString('en-IN')}`).join(' · ')}</p>
+          )}
 
           <Card title={`Spend by ${dimLabel(first).toLowerCase()}`} actions={chartData.length === 20 ? <span className="text-xs text-slate-500">top 20</span> : undefined}>
-            <div style={{ height: Math.max(120, chartData.length * 36 + 40) }}>
+            <div style={{ height: Math.max(120, chartData.length * 36 + 40) }} role="img" aria-label={`Bar chart of spend by ${dimLabel(first).toLowerCase()}`}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 24, bottom: 4, left: 8 }} barCategoryGap={8}>
                   <CartesianGrid horizontal={false} stroke="#e2e8f0" />
@@ -106,14 +171,19 @@ export function CubeTab() {
             </div>
           </Card>
 
-          <Card title="Spend cube">
+          <Card title="Spend cube" actions={data.truncated ? <span className="text-xs text-amber-700">showing the largest 500 cells; narrow the filters</span> : undefined}>
             <DataTable<CubeRow>
+              caption={`Spend grouped by ${data.dimensions.map(dimLabel).join(', ')}`}
               rows={data.rows}
               columns={[
-                ...data.dimensions.map((d) => ({ key: d, header: dimLabel(d), render: (r: CubeRow) => (r[d] == null ? <span className="text-slate-500">{UNASSIGNED}</span> : String(r[d])) })),
+                ...data.dimensions.map((d) => ({ key: d, header: dimLabel(d), render: (r: CubeRow) => (r[d] == null || r[d] === '' ? <span className="text-slate-500">{UNASSIGNED}</span> : String(r[d])) })),
                 { key: 'spendMinor', header: 'Spend', align: 'right' as const, render: (r: CubeRow) => inr(r.spendMinor) },
-                { key: 'lines', header: 'Lines', align: 'right' as const },
-                { key: 'contractCoveragePct', header: 'Contract coverage', align: 'right' as const, render: (r: CubeRow) => (r.contractCoveragePct === null ? '–' : `${r.contractCoveragePct}%`) },
+                { key: 'invoices', header: 'Invoices', align: 'right' as const },
+                { key: 'pos', header: 'POs', align: 'right' as const },
+                { key: 'consumptionMinor', header: 'Contract consumption', align: 'right' as const, render: (r: CubeRow) => inr(r.consumptionMinor) },
+                { key: 'contractCoveragePct', header: 'Coverage', align: 'right' as const, render: (r: CubeRow) => `${r.contractCoveragePct}%` },
+                { key: 'priceVarianceMinor', header: 'Price variance', align: 'right' as const, render: (r: CubeRow) => inr(r.priceVarianceMinor) },
+                { key: 'priceVarianceLastMinor', header: 'vs last price', align: 'right' as const, render: (r: CubeRow) => inr(r.priceVarianceLastMinor) },
               ]}
             />
           </Card>

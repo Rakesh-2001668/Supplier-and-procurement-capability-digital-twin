@@ -101,9 +101,10 @@ export default function SourcingEventPage() {
               ['Close', dateTime(ev.close_at)],
               ['Published', dateTime(ev.published_at)],
               ['Closed / unsealed', ev.unsealed_at ? dateTime(ev.unsealed_at) : sealed && ev.status !== 'DRAFT' ? 'sealed' : '–'],
-              ['Baseline / unit', <>{inr(ev.baseline_price_minor)} <span className="text-xs font-normal text-slate-500">{label(ev.baseline_method)}</span></>],
+              [ev.lines.length > 1 ? 'Baseline (annual value)' : 'Baseline / unit', <>{inr(ev.baseline_price_minor)} <span className="text-xs font-normal text-slate-500">{label(ev.baseline_method)}</span></>],
+              ...(ev.bundle ? [['Bundled from', `${ev.bundle.sourceLines} requirement line(s) · ${ev.bundle.requisitions.join(', ')}${ev.bundle.ref ? ` · ${ev.bundle.ref}` : ''}`] as [string, string]] : []),
               ['Should-cost / unit', sc ? `₹${sc.unitCost}` : '–'],
-              ['Award constraints', cons ? `≤ ${cons.max_suppliers ?? '–'} suppliers · share ${pctStr(cons.min_share)}–${pctStr(cons.max_share)}` : '–'],
+              ['Award constraints', cons ? `≤ ${cons.max_suppliers ?? '–'} suppliers per line · share ${pctStr(cons.min_share)}–${pctStr(cons.max_share)}${riskStr(cons)}` : '–'],
               ['Savings target', ev.savings_target_pct ? `${ev.savings_target_pct}%` : '–'],
             ]} />
             {sc && (
@@ -130,7 +131,9 @@ export default function SourcingEventPage() {
             { key: 'plant', header: 'Plant' },
             { key: 'annual_qty', header: 'Annual qty', align: 'right', render: (l) => qty(l.annual_qty, l.uom) },
             { key: 'monthly_qty', header: 'Monthly qty', align: 'right', render: (l) => qty(l.monthly_qty, l.uom) },
-            { key: 'pr_line_no', header: 'Requisition line', render: (l) => (l.pr_line_no ? `line ${l.pr_line_no}` : '–') },
+            { key: 'lot_code', header: 'Lot', render: (l) => l.lot_code ?? '–' },
+            { key: 'baseline_price_minor', header: 'Baseline / unit', align: 'right', render: (l) => (l.baseline_price_minor ? inr(l.baseline_price_minor) : '–') },
+            { key: 'pr_line_no', header: 'Requisition line', render: (l) => (l.pr_line_no ? `${l.requisition ? `${l.requisition} / ` : ''}line ${l.pr_line_no}` : '–') },
           ]} />
         )}
         extraTabs={ev ? [
@@ -142,7 +145,7 @@ export default function SourcingEventPage() {
                   { key: 'code', header: 'Code', render: (c) => <span className="font-mono text-xs">{c.code}</span> },
                   { key: 'name', header: 'Criterion' },
                   { key: 'weight', header: 'Weight', align: 'right', render: (c) => `${c.weight}%` },
-                  { key: 'how', header: 'Scored by', render: (c) => (c.code === 'PRICE_TCO' ? 'Computed from TCO' : 'Evaluators (0–100)') },
+                  { key: 'how', header: 'Scored by', render: (c) => (c.code === 'PRICE_TCO' ? 'Computed from TCO' : c.data_source && c.data_source !== 'MANUAL' ? `Platform data at close (${label(c.data_source)})` : 'Evaluators (0–100)') },
                 ]} />
                 <p className={`mt-2 text-sm ${weightTotal === 100 ? 'text-slate-600' : 'font-medium text-red-700'}`}>
                   Weights total {weightTotal}/100{ev.weights_locked ? ' · locked at publish' : weightTotal !== 100 ? ' – must total 100 before publishing' : ''}.
@@ -191,6 +194,14 @@ export default function SourcingEventPage() {
       {ev && dialog === 'cancel' && <CancelEventDialog event={ev} onClose={() => setDialog(null)} />}
     </>
   );
+}
+
+function riskStr(c: Record<string, unknown>) {
+  const parts = [
+    c.max_risk_score !== undefined ? `risk ≤ ${String(c.max_risk_score)}` : '', c.max_single_source_pct !== undefined ? `no supplier above ${String(c.max_single_source_pct)}%` : '',
+    c.max_conditional_share_pct !== undefined ? `conditional ≤ ${String(c.max_conditional_share_pct)}%` : '', c.max_total_suppliers !== undefined ? `≤ ${String(c.max_total_suppliers)} suppliers in all` : '',
+  ].filter(Boolean);
+  return parts.length ? ` · ${parts.join(' · ')}` : '';
 }
 
 function pctStr(v: string | number | undefined) {

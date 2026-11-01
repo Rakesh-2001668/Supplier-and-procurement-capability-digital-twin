@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:ai.switch.changed",
+  "title": "ai.switch.changed",
+  "description": "Payload (outbox_event.payload) of ai.switch.changed on TENANT_AI. Produced by platform/agents.py.",
+  "type": "object",
+  "properties": {
+    "enabled": {},
+    "reason": {}
+  },
+  "required": [
+    "enabled",
+    "reason"
+  ],
+  "additionalProperties": true
+}

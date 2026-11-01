@@ -107,5 +107,28 @@ def test_housekeeping_service_contract_entries_and_payments(loaded):
     assert Decimal(kpis["catalogueAdoptionPct"]) > 25 and kpis["guidedBuyingPct"] == "100.0" and Decimal(kpis["maverickPct"]) == 0
 
 
+def test_pcards_limits_statement_and_reviews(loaded):
+    """Wave 1 (item 45): two card holders with limits, a December statement reconciled line by line; blocked category and over-limit
+    lines are reviewed by the cost-object owner (not the holder) and the rejected ones stay flagged."""
+    from app.pic.models import AppUser, PCard, PCardStatement, PCardTransaction, Task, Tenant
+    with system_tx() as s:
+        tenant_id = s.execute(select(Tenant.id).where(Tenant.code == "GEN")).scalar_one()
+    with tenant_tx(tenant_id) as s:
+        cards = {c.card_last4: c for c in s.execute(select(PCard)).scalars()}
+        assert (cards["4821"].per_txn_limit_minor, cards["4821"].monthly_limit_minor) == (40_000_00, 150_000_00)
+        assert (cards["7305"].per_txn_limit_minor, cards["7305"].blocked_mccs, cards["7305"].cost_object_code) == (25_000_00, ["5813"], "1300")
+        statement = s.execute(select(PCardStatement)).scalar_one()
+        assert (statement.period, statement.line_count, statement.status) == ("2026-12", 6, "IMPORTED")  # two rejected lines stay open
+        txns = {t.txn_ref: t for t in s.execute(select(PCardTransaction)).scalars()}
+        assert {k: v.status for k, v in txns.items()} == {
+            "HDFC-2612-0041": "CLEARED", "HDFC-2612-0063": "CLEARED", "HDFC-2612-0088": "CLEARED", "HDFC-2612-0102": "CLEARED",
+            "HDFC-2612-0119": "EXCEPTION", "HDFC-2612-0127": "EXCEPTION"}
+        assert txns["HDFC-2612-0063"].exception_codes == ["NO_PO"] and txns["HDFC-2612-0119"].exception_codes == ["MCC_BLOCKED"]
+        assert txns["HDFC-2612-0127"].exception_codes == ["OVER_TXN_LIMIT", "NO_PO"] and txns["HDFC-2612-0127"].review_note.startswith("Over the")
+        reviews = s.execute(select(Task).where(Task.kind == "PCARD_REVIEW")).scalars().all()
+        holders = {u.email: u.id for u in s.execute(select(AppUser)).scalars()}
+        assert len(reviews) == 3 and all(t.status == "COMPLETED" and t.completed_by not in t.excluded_user_ids for t in reviews)
+        assert holders[f"hyd.admin@{pack.DOMAIN}"] in [u for t in reviews for u in t.excluded_user_ids]
+
 def test_second_apply_is_idempotent(loaded):
     assert [r["status"] for r in datasets.apply_pack("industry_general", PASSWORD)] == ["ALREADY_LOADED"]

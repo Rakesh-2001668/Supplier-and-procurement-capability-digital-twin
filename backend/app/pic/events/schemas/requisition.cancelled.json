@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:requisition.cancelled",
+  "title": "requisition.cancelled",
+  "description": "Payload (outbox_event.payload) of requisition.cancelled on REQUISITION. Produced by services/requisition.py.",
+  "type": "object",
+  "properties": {
+    "reason": {},
+    "previousStatus": {}
+  },
+  "required": [
+    "reason",
+    "previousStatus"
+  ],
+  "additionalProperties": true
+}

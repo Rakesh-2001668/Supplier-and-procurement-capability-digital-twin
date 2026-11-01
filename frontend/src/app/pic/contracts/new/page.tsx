@@ -4,15 +4,17 @@ import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import { Button, Card, Field, Input, LinkButton, Loading, PageHeader, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
 import { api, Paged } from '@/lib/pic/api';
-import { inr, label, rupeesToMinor } from '@/lib/pic/format';
+import { date, inr, label, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, isPositive, useSessionUser } from '../../invoices/_components';
 
-type ContractType = 'SCHEDULING_AGREEMENT' | 'QUANTITY_CONTRACT' | 'VALUE_CONTRACT';
+type ContractType = 'SCHEDULING_AGREEMENT' | 'QUANTITY_CONTRACT' | 'VALUE_CONTRACT' | 'MASTER_AGREEMENT' | 'NDA';
 type Template = { code: string; title: string; text: string };
+type Jurisdiction = { code: string; name: string; seat: string; law: string };
+type ListedContract = { number: string; type: string; status: string; supplier_code: string; title: string; valid_from: string; valid_to: string };
 type Obligation = { party: string; description: string; dueAfterDays: number };
-type Templates = { ruleSet: string; types: ContractType[]; templates: Record<string, Template[]>; obligations: Record<string, Obligation[]>;
-  fallbacks: Record<string, string> };
+type Templates = { ruleSet: string; types: ContractType[]; frameworkTypes: string[]; templates: Record<string, Template[]>; obligations: Record<string, Obligation[]>;
+  fallbacks: Record<string, string>; jurisdictions: Jurisdiction[] };
 type Supplier = { code: string; legal_name: string; status: string; payment_terms: string | null; incoterms: string | null };
 type Material = { number: string; description: string; base_uom: string };
 type Org = { plants: { code: string; name: string }[] };
@@ -23,7 +25,11 @@ const TYPE_TEXT: Record<ContractType, string> = {
   SCHEDULING_AGREEMENT: 'Delivery schedules released against the agreement; index-linked pricing; ERS-eligible.',
   QUANTITY_CONTRACT: 'A fixed total quantity at fixed prices, released by purchase order.',
   VALUE_CONTRACT: 'A total value (typically services or rate cards) consumed by purchase orders.',
+  MASTER_AGREEMENT: 'Commercial terms only: no value, no quantities. Call-off contracts refer to it.',
+  NDA: 'Confidentiality only: no value, no lines, nothing to consume.',
 };
+const CREATABLE: ContractType[] = ['SCHEDULING_AGREEMENT', 'QUANTITY_CONTRACT', 'VALUE_CONTRACT', 'MASTER_AGREEMENT', 'NDA'];
+const FRAMEWORK: ContractType[] = ['MASTER_AGREEMENT', 'NDA'];
 
 const emptyLine = (plant = 'P100'): Line => ({ material: '', description: '', plant, uom: 'EA', target_qty: '', unit_price: '' });
 
@@ -43,6 +49,7 @@ export default function NewContract() {
   const materials = useApi<Paged<Material>>('/materials?limit=200');
   const org = useApi<Org>('/admin/organisation');
   const plants = org.data?.plants ?? [];
+  const contracts = useApi<Paged<ListedContract>>('/contracts?limit=200');
 
   // One key per form: a double-submit or network retry replays the same contract instead of creating two.
   const [idempotencyKey] = useState(() => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`));
@@ -51,6 +58,10 @@ export default function NewContract() {
     incoterms: 'FCA', over_pct: '5', under_pct: '5', price_pct: '0', index: 'LME_AL', index_base: '100.00', band_pct: '3' });
   const [lines, setLines] = useState<Line[]>([emptyLine()]);
   const [invalid, setInvalid] = useState<string | null>(null);
+  const [framework, setFramework] = useState('');
+  const [jurisdiction, setJurisdiction] = useState('');
+  const variant = useApi<{ jurisdictionClauses: Template[] }>(jurisdiction ? `/contract-templates?jurisdiction=${encodeURIComponent(jurisdiction)}` : null);
+  const isFramework = FRAMEWORK.includes(type);
 
   const supplier = suppliers.data?.items.find((s) => s.code.toUpperCase() === f.supplier.trim().toUpperCase());
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
@@ -71,14 +82,17 @@ export default function NewContract() {
     updateLine(i, m ? { material: number, description: lines[i].description || m.description, uom: m.base_uom } : { material: number });
   }
 
+  const masters = (contracts.data?.items ?? []).filter((c) => c.type === 'MASTER_AGREEMENT' && ['ACTIVE', 'EXPIRING'].includes(c.status)
+    && (!f.supplier.trim() || c.supplier_code.toUpperCase() === f.supplier.trim().toUpperCase()));
+
   function submit(e: FormEvent) {
     e.preventDefault();
     if (!f.supplier.trim() || !f.title.trim() || !f.payment_terms.trim()) { setInvalid('Supplier, title and payment terms are required.'); return; }
     if (!f.valid_from || !f.valid_to || f.valid_to <= f.valid_from) { setInvalid('Valid to must be after valid from.'); return; }
     if (supplier?.status === 'BLOCKED') { setInvalid(`${supplier.code} is blocked and cannot be contracted.`); return; }
-    const bad = lines.findIndex((l) => !l.description.trim() || !l.uom.trim() || !l.plant.trim() || !isPositive(l.target_qty) || !isPositive(l.unit_price));
+    const bad = isFramework ? -1 : lines.findIndex((l) => !l.description.trim() || !l.uom.trim() || !l.plant.trim() || !isPositive(l.target_qty) || !isPositive(l.unit_price));
     if (bad >= 0) { setInvalid(`Line ${(bad + 1) * 10}: description, plant, unit, a positive target quantity and unit price are required.`); return; }
-    if ([f.over_pct, f.under_pct, f.price_pct].some((v) => v.trim() === '' || Number.isNaN(Number(v)) || Number(v) < 0)) {
+    if (!isFramework && [f.over_pct, f.under_pct, f.price_pct].some((v) => v.trim() === '' || Number.isNaN(Number(v)) || Number(v) < 0)) {
       setInvalid('Tolerances must be zero or positive percentages.'); return;
     }
     const indexed = type === 'SCHEDULING_AGREEMENT';
@@ -89,9 +103,10 @@ export default function NewContract() {
     create.mutate({
       type, title: f.title.trim(), supplier: f.supplier.trim().toUpperCase(), company_code: '1000', valid_from: f.valid_from, valid_to: f.valid_to,
       payment_terms: f.payment_terms.trim(), incoterms: f.incoterms.trim() || undefined,
+      jurisdiction: jurisdiction || undefined, framework: !isFramework && framework ? framework : undefined,
       tolerances: { over_pct: f.over_pct.trim(), under_pct: f.under_pct.trim(), price_pct: f.price_pct.trim() },
       index_ref: indexed ? { index: f.index.trim().toUpperCase(), base: f.index_base.trim(), band_pct: f.band_pct.trim(), reset: 'QUARTERLY' } : undefined,
-      lines: lines.map((l) => ({
+      lines: isFramework ? [] : lines.map((l) => ({
         material: l.material.trim() || undefined, description: l.description.trim(), plant: l.plant.trim(), uom: l.uom.trim().toUpperCase(),
         target_qty: l.target_qty.trim(), unit_price_minor: rupeesToMinor(l.unit_price),
       })),
@@ -118,9 +133,9 @@ export default function NewContract() {
         <div className="space-y-5 lg:col-span-3">
           <Card title="Contract type">
             {templates.isLoading ? <Loading /> : templates.error || !templates.data ? <ProblemBox error={templates.error} /> : (
-              <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Contract type">
-                {templates.data.types.map((t) => (
-                  <button key={t} type="button" role="radio" aria-checked={type === t} onClick={() => setType(t)}
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3" role="radiogroup" aria-label="Contract type">
+                {templates.data.types.filter((t) => CREATABLE.includes(t)).map((t) => (
+                  <button key={t} type="button" role="radio" aria-checked={type === t} onClick={() => { setType(t); if (FRAMEWORK.includes(t)) setFramework(''); }}
                     className={`rounded-lg border px-3 py-2 text-left text-sm ${type === t ? 'border-[#1A56DB] bg-blue-50 ring-1 ring-[#1A56DB]' : 'border-slate-200 hover:bg-slate-50'}`}>
                     <span className="font-semibold">{label(t)}</span>
                     <span className="mt-0.5 block text-xs text-slate-600">{TYPE_TEXT[t] ?? ''}</span>
@@ -142,11 +157,27 @@ export default function NewContract() {
               <Field label="Payment terms (required)" hint="e.g. N45, or 2/10 N45 for an early-payment discount">{(id) => <Input id={id} required value={f.payment_terms} onChange={set('payment_terms')} />}</Field>
               <Field label="Incoterms">{(id) => <Input id={id} value={f.incoterms} onChange={set('incoterms')} placeholder="e.g. FCA Hosur" />}</Field>
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <Field label="Governing law and forum" hint="Adds the clause-library variant: governing law, dispute resolution, stamp duty, personal data">
+                {(id) => (
+                  <Select id={id} value={jurisdiction} onChange={(e) => setJurisdiction(e.target.value)}
+                    options={[{ value: '', label: 'Playbook default (no variant)' }, ...(templates.data?.jurisdictions ?? []).map((j) => ({ value: j.code, label: `${j.code} · ${j.name} (${j.seat})` }))]} />
+                )}
+              </Field>
+              {!isFramework && (
+                <Field label="Framework (master agreement)" hint={masters.length ? 'Live master agreements of this supplier; the period must lie inside the master agreement' : 'No live master agreement for this supplier'}>
+                  {(id) => (
+                    <Select id={id} value={framework} onChange={(e) => setFramework(e.target.value)}
+                      options={[{ value: '', label: 'None – stand-alone contract' }, ...masters.map((m) => ({ value: m.number, label: `${m.number} · ${date(m.valid_from)} – ${date(m.valid_to)}` }))]} />
+                  )}
+                </Field>
+              )}
+            </div>
+            {!isFramework && <div className="mt-3 grid gap-3 sm:grid-cols-3">
               <Field label="Over-delivery tolerance %">{(id) => <Input id={id} inputMode="decimal" value={f.over_pct} onChange={set('over_pct')} />}</Field>
               <Field label="Under-delivery tolerance %">{(id) => <Input id={id} inputMode="decimal" value={f.under_pct} onChange={set('under_pct')} />}</Field>
               <Field label="Price tolerance %">{(id) => <Input id={id} inputMode="decimal" value={f.price_pct} onChange={set('price_pct')} />}</Field>
-            </div>
+            </div>}
             {type === 'SCHEDULING_AGREEMENT' && (
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
                 <Field label="Price index (required)" hint="Reset quarterly">{(id) => <Input id={id} value={f.index} onChange={set('index')} placeholder="e.g. LME_AL" />}</Field>
@@ -156,7 +187,7 @@ export default function NewContract() {
             )}
           </Card>
 
-          <Card title="Lines" actions={<Button type="button" onClick={() => setLines((ls) => [...ls, emptyLine(plants[0]?.code)])}>Add line</Button>}>
+          {!isFramework && <Card title="Lines" actions={<Button type="button" onClick={() => setLines((ls) => [...ls, emptyLine(plants[0]?.code)])}>Add line</Button>}>
             <datalist id="material-numbers">{materials.data?.items.map((m) => <option key={m.number} value={m.number}>{m.description}</option>)}</datalist>
             <div className="space-y-3">
               {lines.map((l, i) => (
@@ -185,7 +216,9 @@ export default function NewContract() {
               ))}
             </div>
             <p className="mt-3 text-right text-sm">Target value <span className="font-semibold tabular-nums">{inr(Math.round(targetValue))}</span></p>
-          </Card>
+          </Card>}
+          {isFramework && <p role="note" className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700">
+            A {label(type).toLowerCase()} carries no lines, prices or value and nothing is consumed against it. Rebates (contract page) and call-off contracts attach to it later.</p>}
 
           {invalid && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-900">{invalid}</p>}
           <ProblemBox error={create.error} />
@@ -209,6 +242,19 @@ export default function NewContract() {
                     </li>
                   ))}
                 </ol>
+                {jurisdiction && (
+                  <div className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Governing-law variant · {jurisdiction}</p>
+                    <p className="text-xs text-slate-500">Replaces or adds these clauses. The wording is a starting point that Legal reviews.</p>
+                    {variant.isLoading ? <Loading /> : variant.error ? <ProblemBox error={variant.error} /> : (
+                      <ol className="mt-2 space-y-2">
+                        {(variant.data?.jurisdictionClauses ?? []).map((c) => (
+                          <li key={c.code} className="text-sm"><p className="font-medium"><span className="font-mono text-[11px] text-slate-500">{c.code}</span> {c.title}</p><p className="text-slate-700">{c.text}</p></li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                )}
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Obligations created</p>
                   <ul className="mt-1 divide-y divide-slate-100 text-sm">

@@ -69,6 +69,10 @@ class Idempotent:
             self._reserve()
 
     def _reserve(self) -> None:
+        from app.pic.platform import idempotency
+        state = idempotency.STATE.get()
+        if state is not None:
+            state["handled"] = True  # this route replays itself: the HTTP layer only guards concurrency (platform/idempotency.py)
         tenant_id = current_tenant(self.session)
         inserted = self.session.execute(
             insert(IdempotencyRecord)

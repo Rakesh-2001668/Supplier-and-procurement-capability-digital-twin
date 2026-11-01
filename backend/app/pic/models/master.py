@@ -31,6 +31,9 @@ class Supplier(TenantScoped, Base):
     state_code: Mapped[Optional[str]] = mapped_column(String(2))
     country: Mapped[str] = mapped_column(String(2), default="IN")
     segment: Mapped[Optional[str]] = mapped_column(String(20))  # STRATEGIC | LEVERAGE | BOTTLENECK | ROUTINE
+    # Corporate parent (spend cube rolls child suppliers up to the parent; NULL: the supplier is its own parent).
+    parent_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"))
+    supplier_group: Mapped[Optional[str]] = mapped_column(String(30))  # rule scope dimension (tolerances per supplier group)
     risk_tier: Mapped[Optional[str]] = mapped_column(String(10))
     payment_terms: Mapped[str] = mapped_column(String(10), default="N60")
     incoterms: Mapped[Optional[str]] = mapped_column(String(40))
@@ -126,6 +129,9 @@ class TwinSnapshot(TenantScoped, Base):
     ppm: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 1))
     lead_time_days: Mapped[Optional[int]] = mapped_column(Integer)
     as_of: Mapped[date] = mapped_column(Date, nullable=False)
+    # Where the snapshot came from: SEEDED (demo), TWIN_API (twin connector, TD 12.3) or MODEL (late_delivery_prob from the ML model).
+    source: Mapped[str] = mapped_column(String(12), nullable=False, default="SEEDED", server_default="SEEDED")
+    synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class TwinFeedback(TenantScoped, Base):
@@ -152,6 +158,11 @@ class Scorecard(TenantScoped, Base):
     otif_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2))
     ppm: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 1))
     invoice_accuracy_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 2))
+    rfq_invited: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")  # RFQ/RFP events published to the supplier in the period
+    rfq_responded: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    rfq_response_hours: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2))  # average hours from publish to the first bid
+    capa_response_hours: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 2))  # average hours from CAPA opening to the supplier's response
+    esg_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
 
 
 class Material(TenantScoped, Base):
@@ -184,6 +195,7 @@ class Material(TenantScoped, Base):
     holding_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 4))
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
     erp_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")  # material_version history (change requests)
 
 
 class MaterialRequest(TenantScoped, Base):

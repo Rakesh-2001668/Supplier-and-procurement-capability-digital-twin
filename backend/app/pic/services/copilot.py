@@ -41,7 +41,58 @@ def _contract(answer: str, evidence: list, score: float, method: str, action: Op
     }
 
 
+_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_LLM_REQUIRED = {"answer": str}
+LLM_MODEL_VERSION = "copilot-llm-v1"
+
+
+def _numbers(text: str) -> set[str]:
+    return {n.replace(",", "").rstrip(".") for n in _NUMBER.findall(text or "")}
+
+
+def _phrase_with_gateway(session: Session, principal, question: str, contract: dict) -> dict:
+    """Optional LiteLLM phrasing of the deterministic answer (TD 13.3). The model gets the question and the facts the SQL tools
+    produced (after redaction in the gateway client) and may only rephrase them: its JSON answer must be a non-empty string of at
+    most 1,200 characters that contains every number of the deterministic answer and no number outside it. Any other outcome
+    (gateway off, kill switch, budget, failure, schema or number mismatch) keeps the deterministic contract unchanged."""
+    from app.pic.services import llm_gateway
+
+    if not llm_gateway.configured() or contract["confidence"]["score"] < 0.5 or "SUPPLIER_USER" in principal.roles:
+        return contract
+    facts = contract["answer"]
+
+    def validate(text: str) -> dict:
+        data = llm_gateway.json_object(text, _LLM_REQUIRED)
+        answer = data["answer"].strip()
+        if len(answer) > 1200:
+            raise ValueError("answer longer than 1,200 characters")
+        if _numbers(answer) != _numbers(facts):
+            raise ValueError("numbers differ from the facts")
+        return {"answer": answer}
+
+    result = llm_gateway.chat(
+        session, "COPILOT", [
+            {"role": "system", "content": "You are the AlphaHelion procurement copilot. Rephrase the FACTS as a short, plain answer to the QUESTION. "
+                                          "Use only the facts; do not add, drop or change any number, name or date. Reply as JSON: {\"answer\": \"...\"}."},
+            {"role": "user", "content": f"QUESTION: {question}\nFACTS: {facts}"}],
+        validator=validate, json_mode=True, max_tokens=400)
+    if not result.ok:
+        return contract
+    return {**contract, "answer": result.data["answer"],
+            "explanation": {**contract["explanation"], "method": contract["explanation"]["method"] + " + gateway phrasing",
+                            "modelVersion": LLM_MODEL_VERSION, "deterministicAnswer": facts, "gatewayModel": result.model}}
+
+
 def ask(session: Session, principal, question: str) -> dict:
+    """Answer a question: tools produce the deterministic answer contract; the gateway may only rephrase it (see above)."""
+    contract = _ask(session, principal, question)
+    try:
+        return _phrase_with_gateway(session, principal, question.strip(), contract)
+    except Exception:  # noqa: BLE001 - phrasing is optional; the deterministic contract always stands
+        return contract
+
+
+def _ask(session: Session, principal, question: str) -> dict:
     q = question.strip()
     supplier_user = "SUPPLIER_USER" in principal.roles
     for pattern, model, object_type, link in DOC_PATTERNS:

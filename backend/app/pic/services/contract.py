@@ -18,6 +18,7 @@ from app.pic.models import (
     AppUser, Clause, Contract, ContractLine, Material, Obligation, PoLine, PriceValidity, PurchaseOrder, QuotaArrangement, QuotaLine,
     Signature, SourcingEvent, Supplier, Task, Tenant,
 )
+from app.pic.platform import abac
 from app.pic.platform import agents, audit, clock, outbox, rules, workflow
 from app.pic.platform.auth import Principal, scopes_for
 from app.pic.platform.core import StateMachine, link, next_number
@@ -43,6 +44,124 @@ SM = StateMachine("CONTRACT", {
 })
 
 
+FRAMEWORK_TYPES = ("MASTER_AGREEMENT", "NDA")  # no value and no consumption (pending workflow 24)
+CALL_OFF_TYPES = ("SCHEDULING_AGREEMENT", "QUANTITY_CONTRACT", "VALUE_CONTRACT", "RATE_CARD", "SOW")
+FRAMEWORK_LIVE = ("ACTIVE", "EXPIRING")
+# Built-in clause library for the framework types; the CLM-PLAYBOOK rule set wins when it carries the type (tenant-specific wording).
+FRAMEWORK_TEMPLATES = {
+    "MASTER_AGREEMENT": [
+        {"code": "SCOPE", "title": "Scope", "text": "This master agreement sets the commercial terms for call-off contracts and purchase orders placed with "
+                                                    "{supplier}; each call-off refers to it and states its own items, quantities and prices."},
+        {"code": "PAYMENT", "title": "Payment terms", "text": "Payment {terms} from receipt of a correct invoice, unless a call-off states otherwise."},
+        {"code": "PRICE", "title": "Pricing", "text": "Prices are agreed per call-off; this agreement fixes no volume or value commitment."},
+        {"code": "QUALITY", "title": "Quality", "text": "Goods and services conform to the specification of the call-off; the supplier's quality certificates "
+                                                         "stay valid throughout."},
+        {"code": "CONFIDENTIALITY", "title": "Confidentiality", "text": "Each party keeps the other's information confidential for five years after "
+                                                                          "this agreement ends."},
+        {"code": "LIABILITY", "title": "Liability", "text": "Liability under each call-off is capped at 100% of that call-off's annual value."},
+        {"code": "TERMINATION", "title": "Termination", "text": "Either party may terminate with 90 days' written notice; running call-offs continue "
+                                                                 "to their end."}],
+    "NDA": [
+        {"code": "DEFINITION", "title": "Confidential information", "text": "Confidential information is all non-public information disclosed by "
+                                                                            "either party to the other, in any form, including information about {supplier}."},
+        {"code": "USE", "title": "Use and disclosure", "text": "The recipient uses confidential information only for the stated purpose and discloses it "
+                                                                "only to staff and advisers bound by equal duties."},
+        {"code": "TERM", "title": "Term of the duty", "text": "The duty of confidentiality lasts for five years from the date of disclosure; trade secrets "
+                                                              "stay protected as long as they are secret."},
+        {"code": "RETURN", "title": "Return and destruction", "text": "On request or at the end of the purpose the recipient returns or destroys "
+                                                                      "the information and confirms in writing."},
+        {"code": "REMEDIES", "title": "Remedies", "text": "A breach may cause harm that damages cannot repair; the discloser may seek injunctive relief "
+                                                           "in addition to other remedies."}],
+}
+FRAMEWORK_OBLIGATIONS = {
+    "MASTER_AGREEMENT": [{"party": "BUYER", "description": "Annual review of the master agreement terms", "dueAfterDays": 330}],
+    "NDA": [{"party": "SUPPLIER", "description": "Confirm return or destruction of confidential information when the purpose ends", "dueAfterDays": 360}],
+}
+_IN_DATA = "the Digital Personal Data Protection Act, 2023"
+# Governing-law variants of the clause library (pending workflow 25). The wording is a starting point that Legal reviews; a tenant overrides
+# it through CLM-PLAYBOOK.jurisdictions. For India the code is IN-<state> and the seat of arbitration and the courts follow the state.
+JURISDICTIONS = {
+    "IN": {"name": "India", "law": "the laws of India", "seat": "New Delhi", "forum": "the courts at New Delhi",
+           "stamp": "the Indian Stamp Act, 1899 and the stamp law applicable at the place of execution", "data": _IN_DATA},
+    "IN-MH": {"name": "Maharashtra", "law": "the laws of India", "seat": "Mumbai", "forum": "the courts at Mumbai",
+              "stamp": "the Maharashtra Stamp Act, 1958", "data": _IN_DATA},
+    "IN-DL": {"name": "Delhi", "law": "the laws of India", "seat": "New Delhi", "forum": "the courts at New Delhi",
+              "stamp": "the Indian Stamp Act, 1899 as applicable in Delhi", "data": _IN_DATA},
+    "IN-KA": {"name": "Karnataka", "law": "the laws of India", "seat": "Bengaluru", "forum": "the courts at Bengaluru",
+              "stamp": "the Karnataka Stamp Act, 1957", "data": _IN_DATA},
+    "IN-TN": {"name": "Tamil Nadu", "law": "the laws of India", "seat": "Chennai", "forum": "the courts at Chennai",
+              "stamp": "the Indian Stamp Act, 1899 as amended for Tamil Nadu", "data": _IN_DATA},
+    "IN-GJ": {"name": "Gujarat", "law": "the laws of India", "seat": "Ahmedabad", "forum": "the courts at Ahmedabad",
+              "stamp": "the Gujarat Stamp Act, 1958", "data": _IN_DATA},
+    "IN-WB": {"name": "West Bengal", "law": "the laws of India", "seat": "Kolkata", "forum": "the courts at Kolkata",
+              "stamp": "the Indian Stamp Act, 1899 as amended for West Bengal", "data": _IN_DATA},
+    "IN-TG": {"name": "Telangana", "law": "the laws of India", "seat": "Hyderabad", "forum": "the courts at Hyderabad",
+              "stamp": "the Indian Stamp Act, 1899 as applicable in Telangana", "data": _IN_DATA},
+    "IN-HR": {"name": "Haryana", "law": "the laws of India", "seat": "Gurugram", "forum": "the courts at Gurugram",
+              "stamp": "the Indian Stamp Act, 1899 as applicable in Haryana", "data": _IN_DATA},
+    "SG": {"name": "Singapore", "law": "the laws of Singapore", "seat": "Singapore", "forum": "the courts of Singapore",
+           "stamp": "the Stamp Duties Act 1929 of Singapore", "data": "the Personal Data Protection Act 2012"},
+    "GB": {"name": "England and Wales", "law": "the laws of England and Wales", "seat": "London", "forum": "the courts of England and Wales",
+           "stamp": "the stamp taxes applicable in England and Wales", "data": "the UK GDPR and the Data Protection Act 2018"},
+}
+JURISDICTION_CLAUSES = [
+    {"code": "GOVERNING_LAW", "title": "Governing law and forum",
+     "text": "This contract is governed by {law}. Subject to the arbitration clause, {forum} have exclusive jurisdiction."},
+    {"code": "DISPUTES", "title": "Dispute resolution",
+     "text": "Disputes are referred to arbitration by a sole arbitrator appointed by agreement; the seat and venue are {seat} and the language is "
+             "English. For contracts governed by Indian law the Arbitration and Conciliation Act, 1996 applies."},
+    {"code": "STAMP_DUTY", "title": "Stamp duty",
+     "text": "Stamp duty under {stamp} is paid before the contract is relied on; the contract is executed on stamp paper or e-stamped as the law requires."},
+    {"code": "DATA_PROTECTION", "title": "Personal data",
+     "text": "Each party processes personal data under this contract in line with {data} and the other party's written instructions."},
+]
+
+
+def jurisdiction_variants(playbook_body: dict) -> dict:
+    """The jurisdiction library: the built-in entries overlaid with the tenant's CLM-PLAYBOOK.jurisdictions."""
+    return {**JURISDICTIONS, **{k: {**JURISDICTIONS.get(k, {}), **v} for k, v in (playbook_body.get("jurisdictions") or {}).items()}}
+
+
+def jurisdiction_clauses(playbook_body: dict, code: str) -> list[dict]:
+    library = jurisdiction_variants(playbook_body)
+    entry = library.get(code) or library.get(code.split("-")[0])
+    if entry is None:
+        raise Problem(422, "UNKNOWN_JURISDICTION", f"No clause-library variant for {code}; available: {', '.join(sorted(library))}",
+                      rule_ref="CLM-JURISDICTION")
+    templates = playbook_body.get("jurisdictionClauses") or JURISDICTION_CLAUSES
+    return [{"code": t["code"], "title": t["title"], "text": t["text"].format(**entry)} for t in templates]
+
+
+def _templates_for(playbook_body: dict, type: str) -> list[dict]:
+    return playbook_body["templates"].get(type) or FRAMEWORK_TEMPLATES.get(type) or []
+
+
+def _obligations_for(playbook_body: dict, type: str) -> list[dict]:
+    return playbook_body["obligations"].get(type) or FRAMEWORK_OBLIGATIONS.get(type) or []
+
+
+def active_framework(session: Session, supplier_id: uuid.UUID, company_code: str, valid_from: date, valid_to: date) -> Optional[Contract]:
+    """The live master agreement of the supplier for the company code that covers the whole validity, if any."""
+    return session.execute(select(Contract).where(
+        Contract.type == "MASTER_AGREEMENT", Contract.supplier_id == supplier_id, Contract.company_code == company_code,
+        Contract.status.in_(FRAMEWORK_LIVE), Contract.valid_from <= valid_from, Contract.valid_to >= valid_to)
+        .order_by(Contract.valid_to.desc(), Contract.number)).scalars().first()
+
+
+def _check_framework(framework: Optional[Contract], *, supplier_id: uuid.UUID, company_code: str, valid_from: date, valid_to: date) -> None:
+    if framework is None:
+        return
+    if framework.type != "MASTER_AGREEMENT":
+        raise rule_violation(f"{framework.number} is a {framework.type.lower().replace('_', ' ')}, not a master agreement", "CLM-FRAMEWORK")
+    if framework.status not in FRAMEWORK_LIVE:
+        raise rule_violation(f"Master agreement {framework.number} is {framework.status}; a call-off refers to a live one", "CLM-FRAMEWORK")
+    if framework.supplier_id != supplier_id or framework.company_code != company_code:
+        raise rule_violation(f"Master agreement {framework.number} is with another supplier or company code", "CLM-FRAMEWORK")
+    if valid_from < framework.valid_from or valid_to > framework.valid_to:
+        raise rule_violation(f"The contract period must lie within the master agreement's ({framework.valid_from} to {framework.valid_to})",
+                             "CLM-FRAMEWORK")
+
+
 def _instance(session: Session, contract: Contract):
     return workflow.find(session, "CONTRACT", contract.id, PROCESS)
 
@@ -54,16 +173,26 @@ def _lines(session: Session, contract: Contract) -> list[ContractLine]:
 def create_draft(session: Session, *, type: str, title: str, supplier_id: uuid.UUID, company_code: str, valid_from: date,
                  valid_to: date, payment_terms: str, incoterms: Optional[str], lines: list[dict], owner_id: uuid.UUID,
                  tolerances: dict, index_ref: Optional[dict] = None, source_event_id: Optional[uuid.UUID] = None,
-                 trigger: str = "manual") -> Contract:
+                 trigger: str = "manual", framework_contract_id: Optional[uuid.UUID] = None, jurisdiction: Optional[str] = None) -> Contract:
     p = principal(session)
     playbook = rules.resolve(session, "CLM-PLAYBOOK")
+    if type in FRAMEWORK_TYPES:
+        if lines or framework_contract_id or index_ref:
+            raise rule_violation(f"A {type.replace('_', ' ').lower()} carries no lines, prices, index or framework reference: it sets terms, "
+                                 "not quantities", "CLM-FRAMEWORK")
+    elif not lines:
+        raise Problem(422, "LINES_REQUIRED", "A contract needs at least one line; only a master agreement or an NDA has none")
+    framework = session.get(Contract, framework_contract_id) if framework_contract_id else None
+    _check_framework(framework, supplier_id=supplier_id, company_code=company_code, valid_from=valid_from, valid_to=valid_to)
+    jurisdiction = jurisdiction.upper() if jurisdiction else None
+    jurisdiction_clause_list = jurisdiction_clauses(playbook.body, jurisdiction) if jurisdiction else []
     contract = Contract(
         tenant_id=current_tenant(session), number=next_number(session, "CONTRACT"), type=type, title=title,
         supplier_id=supplier_id, company_code=company_code, status="DRAFT", valid_from=valid_from, valid_to=valid_to,
         payment_terms=payment_terms, incoterms=incoterms, over_tolerance_pct=D(tolerances.get("over_pct", 0)),
         under_tolerance_pct=D(tolerances.get("under_pct", 0)), price_tolerance_pct=D(tolerances.get("price_pct", 0)),
         index_ref=index_ref, source_event_id=source_event_id, owner_id=owner_id, rule_set_version=playbook.ref,
-        created_by=p.user_id,
+        framework_contract_id=framework.id if framework else None, jurisdiction=jurisdiction, created_by=p.user_id,
     )
     session.add(contract)
     session.flush()
@@ -81,20 +210,28 @@ def create_draft(session: Session, *, type: str, title: str, supplier_id: uuid.U
         target_value += line_amount(line.target_qty, int(data["unit_price_minor"]))
     contract.target_value_minor = target_value
     supplier = session.get(Supplier, supplier_id)
-    for template in playbook.body["templates"].get(type, []):
+    clauses = {}
+    for template in _templates_for(playbook.body, type):
         text = template["text"].format(terms=payment_terms, incoterms=incoterms or "", supplier=supplier.legal_name,
                                        band=(index_ref or {}).get("band_pct", ""), over=tolerances.get("over_pct", 0),
                                        under=tolerances.get("under_pct", 0))
-        session.add(Clause(tenant_id=contract.tenant_id, contract_id=contract.id, code=template["code"], title=template["title"],
-                           text=text, position="STANDARD", risk_score=0, created_by=p.user_id))
-    for ob in playbook.body["obligations"].get(type, []):
+        clauses[template["code"]] = Clause(tenant_id=contract.tenant_id, contract_id=contract.id, code=template["code"], title=template["title"],
+                                           text=text, position="STANDARD", risk_score=0, created_by=p.user_id)
+    for variant in jurisdiction_clause_list:  # the governing-law variant replaces a base clause of the same code
+        clauses[variant["code"]] = Clause(tenant_id=contract.tenant_id, contract_id=contract.id, code=variant["code"], title=variant["title"],
+                                          text=variant["text"], position="STANDARD", risk_score=0, created_by=p.user_id)
+    session.add_all(clauses.values())
+    for ob in _obligations_for(playbook.body, type):
         session.add(Obligation(tenant_id=contract.tenant_id, contract_id=contract.id, party=ob["party"], description=ob["description"],
                                due_date=valid_from + timedelta(days=int(ob["dueAfterDays"])), status="OPEN", created_by=p.user_id))
     session.flush()
     instance = workflow.start(session, PROCESS, "CONTRACT", contract.id, contract.number, {"trigger": trigger})
-    workflow.step(session, instance, "F4-02", outcome=f"drafted from {type.lower()} template with {len(playbook.body['templates'].get(type, []))} clauses")
+    workflow.step(session, instance, "F4-02", outcome=f"drafted from {type.lower()} template with {len(clauses)} clauses"
+                  + (f" ({jurisdiction} variant)" if jurisdiction else ""))
     audit.record(session, "CONTRACT", contract.id, "DRAFTED", object_ref=contract.number,
-                 after={"supplier": supplier.code, "targetValueMinor": target_value, "trigger": trigger}, rule_set_version=playbook.ref)
+                 after={"supplier": supplier.code, "targetValueMinor": target_value, "trigger": trigger,
+                        **({"framework": framework.number} if framework else {}), **({"jurisdiction": jurisdiction} if jurisdiction else {})},
+                 rule_set_version=playbook.ref)
     return contract
 
 
@@ -110,6 +247,8 @@ def _from_award(session: Session, event) -> None:
     start = clock.today().replace(day=1) + timedelta(days=32)
     valid_from = start.replace(day=1)
     valid_to = valid_from.replace(year=valid_from.year + 1) - timedelta(days=1)
+    if data.get("multiLine"):
+        return _from_award_lines(session, sourcing_event, data, defaults, valid_from, valid_to)
     for allocation in data["allocations"]:
         supplier = session.get(Supplier, uuid.UUID(allocation["supplierId"]))
         contract = create_draft(
@@ -120,7 +259,33 @@ def _from_award(session: Session, event) -> None:
                     "target_qty": allocation["annualQty"], "unit_price_minor": allocation["priceMinor"]}],
             owner_id=uuid.UUID(data["ownerId"]), tolerances=defaults["tolerances"], index_ref=defaults["index"] if material else None,
             source_event_id=sourcing_event.id, trigger=f"award {sourcing_event.number}",
+            framework_contract_id=getattr(active_framework(session, supplier.id, _award_company_code(session, data), valid_from, valid_to), "id", None),
         )
+        link(session, "SOURCING_EVENT", sourcing_event.id, sourcing_event.number, "CONTRACT", contract.id, contract.number, "awarded_to")
+
+
+def _from_award_lines(session: Session, sourcing_event: SourcingEvent, data: dict, defaults: dict, valid_from: date, valid_to: date) -> None:
+    """An award of several lines (and lots): one contract per awarded supplier covering all the lines it won, each line with its own
+    quantity and price. A live master agreement of the supplier that covers the period is referenced."""
+    by_line = {l["line"]: l for l in data["lines"]}
+    company_code = _award_company_code(session, data)
+    for allocation in data["allocations"]:
+        supplier = session.get(Supplier, uuid.UUID(allocation["supplierId"]))
+        lines, all_material = [], True
+        for won in sorted(allocation["lines"], key=lambda l: l["line"]):
+            if D(won["annualQty"]) <= 0:
+                continue
+            item = by_line[won["line"]]
+            all_material = all_material and bool(item.get("materialId"))
+            lines.append({"material_id": uuid.UUID(item["materialId"]) if item.get("materialId") else None, "description": item["description"],
+                          "plant": item["plant"], "uom": item["uom"], "target_qty": won["annualQty"], "unit_price_minor": won["priceMinor"]})
+        framework = active_framework(session, supplier.id, company_code, valid_from, valid_to)
+        contract = create_draft(
+            session, type="SCHEDULING_AGREEMENT" if all_material else "VALUE_CONTRACT", title=f"{sourcing_event.title} – {supplier.legal_name}",
+            supplier_id=supplier.id, company_code=company_code, valid_from=valid_from, valid_to=valid_to,
+            payment_terms=supplier.payment_terms, incoterms=supplier.incoterms, lines=lines, owner_id=uuid.UUID(data["ownerId"]),
+            tolerances=defaults["tolerances"], index_ref=defaults["index"] if all_material else None, source_event_id=sourcing_event.id,
+            trigger=f"award {sourcing_event.number}", framework_contract_id=framework.id if framework else None)
         link(session, "SOURCING_EVENT", sourcing_event.id, sourcing_event.number, "CONTRACT", contract.id, contract.number, "awarded_to")
 
 
@@ -145,9 +310,10 @@ def ai_review(session: Session, contract: Contract) -> dict:
             findings.append({"clause": clause.code, "position": clause.position, "risk": clause.risk_score,
                              "fallback": playbook.body["fallbacks"].get(clause.code)})
     risk = max([c.risk_score for c in clauses], default=0)
-    ai_ref = agents.log_run(session, "CONTRACT_REVIEW", object_type="CONTRACT", object_id=contract.id, object_ref=contract.number,
+    ai_ref = (agents.log_run(session, "CONTRACT_REVIEW", object_type="CONTRACT", object_id=contract.id, object_ref=contract.number,
                             inputs={"clauses": len(clauses)}, evidence=[c.code for c in clauses],
                             output={"risk": risk, "findings": findings}, confidence=0.82, action_taken="DRAFTED")
+             if agents.permit(session, "CONTRACT_REVIEW", object_type="CONTRACT", object_id=contract.id, object_ref=contract.number, required_level="L2") else None)
     if contract.status == "DRAFT":
         SM.apply(session, contract, "review", ai_ref=ai_ref, rule_set_version=playbook.ref)
     instance = _instance(session, contract)
@@ -298,6 +464,7 @@ def _document_hash(session: Session, contract: Contract) -> str:
 
 def sign(session: Session, contract: Contract, party: str, signer_name: str, envelope_ref: Optional[str] = None) -> dict:
     p = principal(session)
+    abac.guard(session, "CONTRACT_SIGN", contract)
     party = party.upper()
     if contract.status != "OUT_FOR_SIGNATURE":
         raise illegal_transition("Contract", contract.number, contract.status, "sign")
@@ -321,6 +488,9 @@ def sign(session: Session, contract: Contract, party: str, signer_name: str, env
 
 
 def activate(session: Session, contract: Contract) -> Contract:
+    if contract.framework_contract_id:
+        _check_framework(session.get(Contract, contract.framework_contract_id), supplier_id=contract.supplier_id,
+                         company_code=contract.company_code, valid_from=contract.valid_from, valid_to=contract.valid_to)
     signatures = session.execute(select(Signature).where(Signature.contract_id == contract.id)).scalars().all()
     if {s.party for s in signatures} < {"BUYER", "SUPPLIER"}:
         raise rule_violation("All signatures are required before activation", "CLM-ACTIVATE")
@@ -564,10 +734,17 @@ def renewals(session: Session) -> list[dict]:
     return out
 
 
-def templates(session: Session) -> dict:
+def templates(session: Session, jurisdiction: Optional[str] = None) -> dict:
     playbook = rules.resolve(session, "CLM-PLAYBOOK")
-    return {"ruleSet": playbook.ref, "types": sorted(playbook.body["templates"]),
-            "templates": playbook.body["templates"], "obligations": playbook.body["obligations"], "fallbacks": playbook.body["fallbacks"]}
+    library = jurisdiction_variants(playbook.body)
+    all_templates = {**FRAMEWORK_TEMPLATES, **playbook.body["templates"]}
+    out = {"ruleSet": playbook.ref, "types": sorted(all_templates), "frameworkTypes": list(FRAMEWORK_TYPES),
+           "templates": all_templates, "obligations": {**FRAMEWORK_OBLIGATIONS, **playbook.body["obligations"]},
+           "fallbacks": playbook.body["fallbacks"],
+           "jurisdictions": [{"code": k, "name": v["name"], "seat": v["seat"], "law": v["law"]} for k, v in sorted(library.items())]}
+    if jurisdiction:
+        out["jurisdictionClauses"] = jurisdiction_clauses(playbook.body, jurisdiction.upper())
+    return out
 
 
 # ---------------------------------------------------------------- F4-07 e-signature provider adapter

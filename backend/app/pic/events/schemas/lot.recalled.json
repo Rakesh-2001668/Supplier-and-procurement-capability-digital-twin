@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:lot.recalled",
+  "title": "lot.recalled",
+  "description": "Payload (outbox_event.payload) of lot.recalled on MATERIAL. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "batch": {},
+    "notice": {},
+    "quarantined": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "material",
+    "batch",
+    "notice",
+    "quarantined"
+  ],
+  "additionalProperties": true
+}

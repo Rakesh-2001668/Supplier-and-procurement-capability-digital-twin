@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { Button, Card, DataTable, Empty, Kpi, Loading } from '@/components/pic/ui';
 import { crore, inr } from '@/lib/pic/format';
+import { SegmentChip } from '../../suppliers/[code]/_segment';
+import { useMe } from '../../mrp/_components';
 import { useApi } from '@/lib/pic/hooks';
 import { LevelChip, periodRange, ShareBar, SpendProblem } from './shared';
 
@@ -12,7 +14,27 @@ type Concentration = { category: string; spendMinor: number; suppliers: number; 
 type Cluster = { suppliers: { code: string; name: string; spendMinor: number }[]; reason: string };
 type SuppliersView = { periods: [string, string]; totalMinor: number; ranking: Ranked[]; concentration: Concentration[]; duplicateClusters: Cluster[] };
 
+type SegmentSummary = { windowMonths: number; totalSpendMinor: number; segments: { segment: string; suppliers: number; spendMinor: number; sharePct: string }[] };
+
 const supplierLink = (code: string) => `/pic/suppliers/${encodeURIComponent(code)}`;
+
+/** Spend and supplier count per segment (pending workflow 28); needs the spend:read scope. */
+function SegmentCardSummary() {
+  const { scopes } = useMe();
+  const { data, error } = useApi<SegmentSummary>(scopes.includes('spend:read') ? '/supplier-segments' : null);
+  if (error) return <SpendProblem error={error} />;
+  if (!data) return null;
+  return (
+    <Card title="Spend by supplier segment" actions={<span className="text-xs text-slate-500">last {data.windowMonths} months · segments from spend share and risk</span>}>
+      <DataTable<{ id: string; segment: string; suppliers: number; spendMinor: number; sharePct: string }> rows={data.segments.map((x) => ({ ...x, id: x.segment }))} columns={[
+        { key: 'segment', header: 'Segment', render: (r) => (r.segment === 'UNSEGMENTED' ? <span className="text-xs text-slate-500">Not segmented</span> : <SegmentChip segment={r.segment} />) },
+        { key: 'suppliers', header: 'Suppliers', align: 'right' },
+        { key: 'spendMinor', header: 'Spend', align: 'right', render: (r) => crore(r.spendMinor) },
+        { key: 'sharePct', header: 'Share', render: (r) => <ShareBar value={Number(r.sharePct)} max={100} label={`${r.sharePct}%`} /> },
+      ]} />
+    </Card>
+  );
+}
 
 /** SPD-03 supplier view: ranking, HHI concentration per category and duplicate-supplier clusters. */
 export function SuppliersTab() {
@@ -37,6 +59,8 @@ export function SuppliersTab() {
         <Kpi label="Highly concentrated" value={`${high} / ${data.concentration.length}`} hint="categories with HHI above 2,500" tone={high ? 'warn' : 'good'} />
         <Kpi label="Duplicate clusters" value={data.duplicateClusters.length} hint="same PAN or similar legal name" tone={data.duplicateClusters.length ? 'warn' : 'good'} />
       </div>
+
+      <SegmentCardSummary />
 
       <Card title="Supplier ranking" actions={data.ranking.length > 15 && (
         <Button variant="ghost" onClick={() => setAll((v) => !v)} aria-expanded={all}>{all ? 'Show top 15' : `Show all ${data.ranking.length}`}</Button>

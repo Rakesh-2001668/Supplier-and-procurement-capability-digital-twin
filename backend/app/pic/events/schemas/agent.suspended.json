@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:agent.suspended",
+  "title": "agent.suspended",
+  "description": "Payload (outbox_event.payload) of agent.suspended on AGENT. Produced by platform/agents.py.",
+  "type": "object",
+  "properties": {
+    "agent": {},
+    "reason": {},
+    "acceptance": {
+      "type": "number"
+    },
+    "events": {},
+    "automatic": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "agent",
+    "reason",
+    "acceptance",
+    "events",
+    "automatic"
+  ],
+  "additionalProperties": true
+}

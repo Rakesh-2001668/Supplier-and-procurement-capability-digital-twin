@@ -17,6 +17,7 @@ from app.pic.platform.core import StateMachine, link, next_number, upstream_chai
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount
 from app.pic.platform.serialize import jsonable, row
+from app.pic.services import po_controls
 from app.pic.services import requisition as req_svc
 from app.pic.services import source
 from app.pic.services import supplier as supplier_svc
@@ -85,7 +86,8 @@ def lineage_refs(session: Session, po: PurchaseOrder) -> list[str]:
 def create_from_requisition(session: Session, *, requisition: str, lines: list[int], supplier_code: Optional[str] = None,
                             contract_ref: Optional[str] = None, release_qty: Optional[Decimal] = None,
                             need_date: Optional[date] = None, unit_price_minor: Optional[int] = None,
-                            deviation_reason: Optional[str] = None, retention_pct: Optional[Decimal] = None) -> list[PurchaseOrder]:
+                            deviation_reason: Optional[str] = None, retention_pct: Optional[Decimal] = None,
+                            one_time_vendor_reason: Optional[str] = None) -> list[PurchaseOrder]:
     pr = by_ref(session, Requisition, requisition)
     if pr.status not in ("APPROVED", "PARTIALLY_ORDERED"):
         raise rule_violation(f"{pr.number} is {pr.status}; only approved requisitions can be ordered", "P07")
@@ -135,7 +137,8 @@ def create_from_requisition(session: Session, *, requisition: str, lines: list[i
             groups.setdefault(allocation.supplier_id, []).append((pr_line, allocation))
     pos = []
     for supplier_id, items in groups.items():
-        pos.append(_create_po(session, pr, supplier_id, items, need_date, unit_price_minor, deviation_reason, determinations))
+        pos.append(_create_po(session, pr, supplier_id, items, need_date, unit_price_minor, deviation_reason, determinations,
+                              one_time_vendor_reason))
     _apply_retention(session, pos, retention_pct)
     return pos
 
@@ -184,12 +187,12 @@ def subcontracting_bom(session: Session, material: Optional[Material], qty: Deci
 
 
 def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items, need_date, price_override, deviation_reason,
-               determinations) -> PurchaseOrder:
+               determinations, one_time_vendor_reason: Optional[str] = None) -> PurchaseOrder:
     p = principal(session)
     supplier = session.get(Supplier, supplier_id)
     contract = session.get(Contract, items[0][1].contract_id) if items[0][1].contract_id else None
     matrix = rules.resolve(session, "PURCHASE-TYPE-MATRIX", company_code=pr.company_code)
-    receipt_rule = rules.resolve(session, "RCV-TOLERANCE", company_code=pr.company_code)
+    receipt_rule = rules.resolve(session, "RCV-TOLERANCE", company_code=pr.company_code, supplier_group=supplier.supplier_group)
     tolerance = ({"over_pct": jsonable(contract.over_tolerance_pct), "under_pct": jsonable(contract.under_tolerance_pct),
                   "price_pct": jsonable(contract.price_tolerance_pct)} if contract else receipt_rule.body)
     po = PurchaseOrder(
@@ -204,6 +207,7 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
     session.flush()
     sod.guard(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
     sod.record(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
+    po_controls.record_one_time_vendor(session, po, one_time_vendor_reason, p.actor)
     total = 0
     overrides = []
     components: dict[str, list[dict]] = {}  # P08: components provided to the subcontractor, per subcontracting PO line
@@ -222,6 +226,19 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
                 raise rule_violation("Price deviates from the contract beyond tolerance; a deviation reason is required", "P07")
             overrides.append({"field": "unit_price", "inherited": inherited_price, "value": price_override,
                               "reason": deviation_reason, "outsideTolerance": deviation})
+        if not allocation.contract_line_id and allocation.price_source != "CONTRACT":
+            # BP §24 / APR-8: a line not priced by a contract is checked against the contract price (+2%) and the last price paid (+5%);
+            # a deviation needs a reason and the buyer lead's approval (PO-APPROVAL deviationChain, added by route()).
+            findings = po_controls.price_findings(session, supplier_id=supplier.id, material_id=pr_line.material_id, unit_price_minor=price,
+                                                  plant=pr_line.plant, exclude_po=po.id, company_code=pr.company_code)
+            if findings:
+                if not (deviation_reason or "").strip():
+                    raise rule_violation("Price deviates from the contract / last price paid beyond the band; a deviation reason is required: "
+                                         + po_controls.findings_text(findings), "PO-PRICE-CHECK", findings=findings)
+                deviation = True
+                overrides.append({"field": "unit_price", "check": "PO-PRICE-CHECK", "findings": findings, "value": price,
+                                  "reason": deviation_reason, "outsideTolerance": True})
+        tol_override = po_controls.receipt_tolerance(session, pr_line.material_id, supplier.id)  # BP M09: per material / supplier
         receiptless = (pr_line.purchase_type == "EXPENSE" and line_amount(allocation.qty, price) < matrix.body["EXPENSE"].get("receiptlessBelowMinor", 0))
         net = line_amount(allocation.qty, price)
         po_line = PoLine(
@@ -237,6 +254,7 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
             price_source=allocation.price_source, contract_line_id=allocation.contract_line_id,
             price_validity_id=allocation.price_validity_id, price_deviation=deviation, deviation_reason=deviation_reason if deviation else None,
             requisition_id=pr.id, pr_line_no=pr_line.line_no, created_by=p.user_id,
+            over_tol_pct=tol_override.over_pct if tol_override else None, under_tol_pct=tol_override.under_pct if tol_override else None,
         )
         session.add(po_line)
         if pr_line.purchase_type == "SUBCONTRACTING":
@@ -290,14 +308,7 @@ def validate(session: Session, po: PurchaseOrder) -> dict:
     risk_rule = rules.resolve(session, "PO-RISK", company_code=po.company_code)
     dmn = rules.resolve(session, "DMN-02", company_code=po.company_code, plant=po.plant)
     lines = lines_of(session, po)
-    material = session.get(Material, lines[0].material_id) if lines[0].material_id else None
-    if material is not None:
-        category = material.category
-    else:
-        pr_line = session.execute(select(PrLine).where(PrLine.requisition_id == lines[0].requisition_id,
-                                                       PrLine.line_no == lines[0].pr_line_no)).scalar_one_or_none()
-        category = (pr_line.category if pr_line and pr_line.category else lines[0].material_group)
-    status = category_status(session, po.supplier_id, category)
+    category, status = po_controls.category_and_status(session, po, lines)
     twin = supplier_svc.twin(session, po.supplier_id, category)
     late = Decimal(twin.late_delivery_prob) if twin else Decimal(0)
     price_dev = any(l.price_deviation for l in lines)
@@ -307,10 +318,16 @@ def validate(session: Session, po: PurchaseOrder) -> dict:
             pr_line = session.execute(select(PrLine).where(PrLine.requisition_id == line.requisition_id,
                                                            PrLine.line_no == line.pr_line_no)).scalar_one()
             account_changed = account_changed or (pr_line.account_assignment_code != line.account_assignment_code)
-    split = _split_pattern(session, po, risk_rule)
+    split_material = po_controls.split_by_material(session, po, lines)  # BP M08-C3: same supplier + material, many small POs in N days
+    split = _split_pattern(session, po, risk_rule) or split_material is not None
+    split_evidence = (f"{len(split_material['orders'])} orders of {split_material['material']} to the same supplier within "
+                      f"{split_material['windowDays']} days, each below {split_material['perOrderBelowMinor'] / 100:,.0f} "
+                      f"({', '.join(split_material['orders'])})") if split_material else None
+    price_findings = [f for o in (po.overrides or []) for f in o.get("findings") or []]
     risk = rules.po_risk(risk_rule, late_prob=late, price_deviation=price_dev, supplier_not_qualified=status not in ("QUALIFIED", "PREFERRED"),
                          value_above_band=po.total_minor > risk_rule.body["valueBandMinor"], split_pattern=split,
-                         account_changed=account_changed, model_version=twin.model_version if twin else "n/a")
+                         account_changed=account_changed, model_version=twin.model_version if twin else "n/a",
+                         price_evidence=po_controls.findings_text(price_findings) if price_findings else None, split_evidence=split_evidence)
     decision = rules.touchless(dmn, price_sources={l.price_source for l in lines}, supplier_status=status, value_minor=po.total_minor,
                                split_pattern=split, late_prob=late, risk_score=risk["score"], account_changed=account_changed)
     po.risk_score = risk["score"]
@@ -319,11 +336,12 @@ def validate(session: Session, po: PurchaseOrder) -> dict:
     po.touchless_reasons = decision["reasons"]
     if "PO-RISK" not in po.rule_set_version:
         po.rule_set_version = f"{po.rule_set_version};{rules.refs(risk_rule, dmn)}"
-    ai_ref = agents.log_run(session, "PO_VALIDATION", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
+    ai_ref = (agents.log_run(session, "PO_VALIDATION", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
                             inputs={"supplierStatus": status, "lateProb": str(late), "valueMinor": po.total_minor, "split": split},
                             evidence=[f"model {twin.model_version if twin else 'n/a'}: {late}"],
                             output={"riskScore": risk["score"], "touchless": decision["touchless"], "reasons": decision["reasons"]},
                             confidence=0.9, action_taken="EXECUTED")
+             if agents.permit(session, "PO_VALIDATION", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number, required_level="L3", value_minor=po.total_minor) else None)
     instance = _instance(session, po)
     if instance and instance.current_step in ("F5-02", "F5-03"):
         workflow.step(session, instance, "F5-03", outcome=f"risk {risk['score']}/100 (" + ", ".join(f"{f['code']} +{f['points']}" for f in risk["factors"]) + ")" if risk["factors"] else f"risk {risk['score']}/100")
@@ -338,9 +356,13 @@ def route(session: Session, po: PurchaseOrder) -> None:
     supplier = session.get(Supplier, po.supplier_id)
     if supplier.status == "BLOCKED":
         raise Problem(422, "PO_SUPPLIER_BLOCKED", f"{supplier.code} is blocked; the PO cannot be released", rule_ref="SLM-BLOCK")
+    po_lines = lines_of(session, po)
+    po_controls.check_mandatory(session, po, po_lines)                 # TD §6 / P14 rule MANDATORY-FIELDS (PO_RELEASE)
+    otv = po_controls.one_time_vendor_gate(session, po, po_lines)      # BP M06 hard block unless ONE-TIME-VENDOR allows it
     instance = _instance(session, po)
     if po.touchless:
-        allowed, reason = agents.guard(session, "TOUCHLESS_PO", required_level="L4", scope="po:release", value_minor=po.total_minor)
+        allowed, reason = agents.guard(session, "TOUCHLESS_PO", required_level="L4", scope="po:release", value_minor=po.total_minor,
+                                        sod_action="PO_RELEASE", sod_refs={"po_id": po.id, "supplier_id": po.supplier_id})
         if allowed:
             workflow.step(session, instance, "F5-04", outcome="yes: touchless criteria met (DMN-02)")
             agent = agents.get(session, "TOUCHLESS_PO")
@@ -360,8 +382,10 @@ def route(session: Session, po: PurchaseOrder) -> None:
         workflow.step(session, instance, "F5-04", outcome="no: " + "; ".join(po.touchless_reasons))
     rule = rules.resolve(session, "PO-APPROVAL", company_code=po.company_code)
     chain = rules.band_chain(rule, po.total_minor)
-    if any(l.price_deviation for l in lines_of(session, po)):
+    if any(l.price_deviation for l in po_lines):
         chain = list(dict.fromkeys(chain + rule.body["deviationChain"]))
+    if otv:  # the one-time-vendor approver(s) join the chain; the order is never released touchless
+        chain = list(dict.fromkeys(chain + list(otv["approverRoles"])))
     SM.apply(session, po, "route", rule_set_version=rule.ref)
     workflow.start_approval(session, instance, "PO_APPROVAL", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
                             chain=chain, step_id="F5-05", initiator_id=po.created_by, rule_set_version=rule.ref,
@@ -383,6 +407,11 @@ def _release(session: Session, po: PurchaseOrder, ai_ref: Optional[str] = None, 
     supplier = session.get(Supplier, po.supplier_id)
     if supplier.status == "BLOCKED":
         raise Problem(422, "PO_SUPPLIER_BLOCKED", f"{supplier.code} is blocked", rule_ref="SLM-BLOCK")
+    release_lines = lines_of(session, po)
+    po_controls.check_mandatory(session, po, release_lines)
+    otv = po_controls.one_time_vendor_gate(session, po, release_lines, releasing=True)
+    if otv:
+        po_controls.settle_one_time_vendor(session, po, otv)
     SM.apply(session, po, "release", ai_ref=ai_ref, extra_after={"releasedBy": p.actor})
     po.released_by = p.actor
     po.released_at = clock.now()
@@ -481,7 +510,7 @@ def confirm(session: Session, po: PurchaseOrder, status: str, lines: Optional[li
                 outside.append(f"line {line.line_no}/{sl.seq}: later date {when.isoformat()} (requested {sl.delivery_date.isoformat()})")
         if "qty" in change:
             qty = D(change["qty"])
-            over, under = D(po.tolerance.get("over_pct", 0)), D(po.tolerance.get("under_pct", 0))
+            over, under = po_controls.line_tolerance(po, line)
             if qty > line.qty * (1 + over / 100) or qty < line.qty * (1 - under / 100):
                 outside.append(f"line {line.line_no}: qty {qty} outside +{over}/-{under}%")
         if "need_date" in change and date.fromisoformat(str(change["need_date"])) > line.need_date:
@@ -542,7 +571,7 @@ def _change_reviewed(session: Session, task: Task, outcome: str) -> None:
 def _band(rule, value_minor: int) -> int:
     """Index of the PO-APPROVAL value band a value falls in (same bands as rules.band_chain)."""
     for index, band in enumerate(rule.body["bands"]):
-        if band["upTo"] is None or value_minor < band["upTo"]:
+        if band["upTo"] is None or value_minor <= band["upTo"]:  # upper bound inclusive (BP Table 24)
             return index
     return len(rule.body["bands"])
 
@@ -582,6 +611,14 @@ def _review_change(session: Session, po: PurchaseOrder, lines: dict, changes: li
         contract_price = _contract_price_minor(session, lines[no], state[no][2])
         if contract_price is not None and abs(Decimal(state[no][1] - contract_price)) > Decimal(contract_price) * tolerance / 100:
             deviations.append({"line": no, "unitPriceMinor": state[no][1], "contractPriceMinor": contract_price, "tolerancePct": jsonable(tolerance)})
+        elif not lines[no].contract_line_id and lines[no].material_id:
+            # BP §24 / APR-8 for a line not priced by a contract: contract price +2% and last price paid +5%.
+            findings = po_controls.price_findings(session, supplier_id=po.supplier_id, material_id=lines[no].material_id,
+                                                  unit_price_minor=state[no][1], plant=lines[no].plant, exclude_po=po.id,
+                                                  company_code=po.company_code)
+            if findings:
+                deviations.append({"line": no, "unitPriceMinor": state[no][1], "contractPriceMinor": findings[0]["referencePriceMinor"],
+                                   "tolerancePct": findings[0]["bandPct"], "findings": findings})
     if deviations and not (deviation_reason or "").strip():
         raise rule_violation("Price deviates from the contract beyond tolerance; a deviation reason is required", "P07", deviations=deviations)
     settings = rule.body.get("changeApproval") or {}
@@ -684,12 +721,13 @@ def _apply_change(session: Session, po: PurchaseOrder, changes: list[dict], reas
             line.unit_price_minor = int(D(change["unit_price"]) * 100)
             # P07: the deviation flag follows the new price (back within tolerance clears it).
             deviation = deviating.get(line.line_no)
-            line.price_deviation = deviation is not None if line.contract_line_id else line.price_deviation
-            line.deviation_reason = deviation_reason.strip() if deviation is not None else (None if line.contract_line_id else line.deviation_reason)
+            checked = bool(line.contract_line_id or line.material_id)  # P07 contract tolerance or the BP §24 price check applies
+            line.price_deviation = deviation is not None if checked else line.price_deviation
+            line.deviation_reason = deviation_reason.strip() if deviation is not None else (None if checked else line.deviation_reason)
             if deviation is not None:
                 po.overrides = [*(po.overrides or []), {"field": "unit_price", "line": line.line_no, "inherited": deviation["contractPriceMinor"],
                                                         "value": line.unit_price_minor, "reason": line.deviation_reason, "outsideTolerance": True,
-                                                        "version": po.version + 1}]
+                                                        "version": po.version + 1, **({"findings": deviation["findings"]} if deviation.get("findings") else {})}]
         line.net_minor = line_amount(line.qty, line.unit_price_minor)
         if change.get("schedule"):
             _replace_schedule(session, po, line, _parse_schedule(line, change["schedule"]))
@@ -870,9 +908,10 @@ def _confirmation_overdue(session: Session, timer) -> None:
     if session.execute(select(PoConfirmation.id).where(PoConfirmation.po_id == po.id, PoConfirmation.po_version == po.version,
                                                        PoConfirmation.status.in_(("REJECTED", "CHANGE_REQUESTED")))).first():
         return  # the supplier answered this version (rejection / change request): the buyer's review task is open instead
-    ai_ref = agents.log_run(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
+    ai_ref = (agents.log_run(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
                             inputs={"dueAt": po.confirmation_due_at.isoformat()}, evidence=[po.number],
                             output={"draft": f"Please confirm {po.number} v{po.version} today."}, confidence=0.7, action_taken="DRAFTED")
+             if agents.permit(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number, required_level="L2") else None)
     workflow.start_approval(session, _instance(session, po), "EXPEDITE", object_type="PURCHASE_ORDER", object_id=po.id,
                             object_ref=po.number, chain=["BUYER"], step_id=None, initiator_id=None, evidence={"aiRef": ai_ref})
 
@@ -887,7 +926,7 @@ def update_receipt_status(session: Session, po: PurchaseOrder) -> None:
     goods = [l for l in lines if l.gr_required]
     if not goods:
         return
-    if all(l.received_qty >= l.qty * (1 - D(po.tolerance.get("under_pct", 0)) / 100) for l in goods):
+    if all(l.received_qty >= l.qty * (1 - po_controls.line_tolerance(po, l)[1] / 100) for l in goods):
         command = "receive"
     elif any(l.received_qty > 0 for l in goods):
         command = "receive_partially"
@@ -904,8 +943,7 @@ def receipt_reversed(session: Session, po: PurchaseOrder, gr_number: str, reason
     if po.status not in ("RECEIVED", "PARTIALLY_RECEIVED"):
         return
     goods = [l for l in lines_of(session, po) if l.gr_required]
-    under = D(po.tolerance.get("under_pct", 0))
-    if goods and all(l.received_qty >= l.qty * (1 - under / 100) for l in goods):
+    if goods and all(l.received_qty >= l.qty * (1 - po_controls.line_tolerance(po, l)[1] / 100) for l in goods):
         return
     if any(l.received_qty > 0 for l in goods):
         command = "unreceive_partially"
@@ -1273,7 +1311,8 @@ def expedite(session: Session, po: PurchaseOrder, line_no: int, message: Optiona
     due = line.need_date.isoformat() if line.need_date else "as scheduled"
     draft = message or (f"Please confirm delivery of {po.number}/{line_no} ({line.qty - line.received_qty} {line.uom} {line.description}) "
                         f"due {due}, and send the ASN.")
-    ai_ref = agents.log_run(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
+    ai_ref = (agents.log_run(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number,
                             inputs={"line": line_no}, evidence=[po.number], output={"draft": draft}, confidence=0.7, action_taken="DRAFTED")
+             if agents.permit(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number, required_level="L2") else None)
     audit.record(session, "PURCHASE_ORDER", po.id, "EXPEDITED", object_ref=po.number, after={"line": line_no, "message": draft}, ai_ref=ai_ref)
     return {"po": po.number, "line": line_no, "message": draft, "aiRef": ai_ref}

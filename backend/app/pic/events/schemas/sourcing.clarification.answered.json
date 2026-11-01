@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.clarification.answered",
+  "title": "sourcing.clarification.answered",
+  "description": "Payload (outbox_event.payload) of sourcing.clarification.answered on SOURCING_EVENT. Produced by services/auction.py.",
+  "type": "object",
+  "properties": {
+    "seq": {},
+    "kind": {
+      "type": "string"
+    },
+    "question": {},
+    "answer": {},
+    "ownerId": {
+      "type": "string"
+    },
+    "inviteeSupplierIds": {},
+    "askedBySupplierId": {
+      "type": [
+        "null",
+        "string"
+      ]
+    }
+  },
+  "required": [
+    "seq",
+    "kind",
+    "question",
+    "answer",
+    "ownerId",
+    "inviteeSupplierIds",
+    "askedBySupplierId"
+  ],
+  "additionalProperties": true
+}

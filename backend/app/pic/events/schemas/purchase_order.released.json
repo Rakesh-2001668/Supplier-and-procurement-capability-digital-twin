@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:purchase_order.released",
+  "title": "purchase_order.released",
+  "description": "Payload (outbox_event.payload) of purchase_order.released on PURCHASE_ORDER. Produced by services/order.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "totalMinor": {},
+    "version": {},
+    "touchless": {}
+  },
+  "required": [
+    "supplier",
+    "totalMinor",
+    "version",
+    "touchless"
+  ],
+  "additionalProperties": true
+}

@@ -29,7 +29,13 @@ type DraftLine = {
   key: string; item_type: ItemType; source: string; material?: string; catalogue_item_id?: string; contract_line_id?: string;
   description: string; material_group: string; category: string; purchase_type: string; qty: string; uom: string;
   price: string; priceFixed: boolean; aat: string; aac: string; need_date: string; quotes: QuoteRef[]; reusable: boolean; mpn: string;
+  template?: string;
 };
+
+/** BP M04 request template (GET /request-templates): defaults, required fields, quote policy and approver hints for services, IT, marketing, facilities. */
+type RequestTemplate = { code: string; name: string; group: string | null; guidance: string | null; line: Record<string, string>;
+  defaultAccountType: string | null; defaultAccountCode: string | null; requiredFields: string[];
+  quotePolicy: { minQuotes?: number; minQuotesFromMinor?: number; sourcingEventAboveMinor?: number }; approverHints: string[] };
 
 const ORIGINS = ['MANUAL', 'PROJECT', 'CATALOGUE'];
 const CHANNEL_TITLE: Record<string, string> = {
@@ -84,6 +90,7 @@ function NewRequisition() {
       need_date: l.need_date,
       quotes: l.item_type === 'FREE_TEXT' ? l.quotes.map((q) => ({ supplier: q.supplier.trim(), reference: q.reference.trim(), date: q.date })) : [],
       reusable: l.item_type === 'FREE_TEXT' ? l.reusable : false,
+      template: l.template || undefined,
       mpn: l.item_type === 'FREE_TEXT' && l.reusable && l.mpn.trim() ? l.mpn.trim() : undefined,
     })),
   }), { success: (r) => `${r.number} created as draft`, onSuccess: (r) => setCreated(r) });
@@ -190,6 +197,10 @@ function NewRequisition() {
       <PunchOut plant={effectivePlant} purposeCode={purposeCode.trim()} purposeText={purposeText.trim()} draftLines={lines.length}
         cookie={params.get('punchout')} error={params.get('punchoutError')} onConverted={(r) => setCreated(r)} />
 
+      <TemplatePicker onPick={(t) => addLine({ item_type: 'FREE_TEXT', source: `Template · ${t.name}`, template: t.code, description: '',
+        purchase_type: t.line.purchase_type ?? 'SERVICE', material_group: t.line.material_group ?? '', category: t.line.category ?? '', uom: t.line.uom ?? 'AU',
+        aat: t.defaultAccountType ?? '', aac: t.defaultAccountCode ?? '' })} />
+
       <GuidedSearch plant={effectivePlant} reference={reference}
         onMaterial={(n, source) => addMaterial(n, source)} onContract={addContract} onCatalogue={addCatalogue}
         onFreeText={(description) => addLine({ item_type: 'FREE_TEXT', source: 'Free text', description })} />
@@ -220,6 +231,35 @@ function NewRequisition() {
         <Button type="submit" variant="primary" busy={create.isPending}>Create requisition</Button>
       </div>
     </form>
+  );
+}
+
+// ---------------------------------------------------------------- BP M04 request templates (services, IT, marketing, facilities)
+function TemplatePicker({ onPick }: { onPick: (t: RequestTemplate) => void }) {
+  const templates = useApi<RequestTemplate[]>('/request-templates');
+  if (templates.isLoading) return null;
+  if (templates.error) return <ProblemBox error={templates.error} />;
+  if (!templates.data?.length) return null;
+  return (
+    <Card title="Request templates">
+      <p className="mb-3 text-sm text-slate-600">For services, IT, marketing and facilities: the template pre-fills the line, lists what must be filled in, and applies its quote policy and approver hints.</p>
+      <div className="grid gap-3 md:grid-cols-2">
+        {templates.data.map((t) => (
+          <div key={t.code} className="rounded-lg border border-slate-200 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium">{t.name}</p>
+              <Button type="button" onClick={() => onPick(t)}>Use template</Button>
+            </div>
+            {t.guidance && <p className="mt-1 text-xs text-slate-600">{t.guidance}</p>}
+            <p className="mt-1 text-xs text-slate-500">
+              Required: {t.requiredFields.map((f) => label(f)).join(', ') || '–'}
+              {t.quotePolicy.minQuotes ? ` · ${t.quotePolicy.minQuotes} quote(s) from ${inr(t.quotePolicy.minQuotesFromMinor ?? 0)}` : ''}
+            </p>
+            {t.approverHints.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-slate-500">{t.approverHints.map((h) => <li key={h}>{h}</li>)}</ul>}
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

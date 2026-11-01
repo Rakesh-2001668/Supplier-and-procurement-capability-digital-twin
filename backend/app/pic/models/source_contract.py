@@ -37,6 +37,7 @@ class SourcingEvent(TenantScoped, Base):
     savings_target_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     auction: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")  # minDecrementPct, extensionMinutes, triggerMinutes
     auction_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    bundle: Mapped[Optional[dict]] = mapped_column(JSONB)  # requirement bundling: sources (PR / MRP / category plan) and line counts
 
 
 class EventLine(TenantScoped, Base):
@@ -51,6 +52,8 @@ class EventLine(TenantScoped, Base):
     uom: Mapped[str] = mapped_column(String(5), nullable=False)
     requisition_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     pr_line_no: Mapped[Optional[int]] = mapped_column(Integer)
+    lot_code: Mapped[Optional[str]] = mapped_column(String(20))  # lines of one lot can be bid and awarded as a bundle
+    baseline_price_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
 
 
 class Invitee(TenantScoped, Base):
@@ -68,6 +71,7 @@ class Criterion(TenantScoped, Base):
     code: Mapped[str] = mapped_column(String(20), nullable=False)  # PRICE_TCO | QUALITY | DELIVERY | TECHNICAL | ESG | RISK
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     weight: Mapped[int] = mapped_column(Integer, nullable=False)
+    data_source: Mapped[str] = mapped_column(String(12), nullable=False, default="MANUAL", server_default="MANUAL")  # MANUAL | SCORECARD | ESG | RISK
 
 
 class Bid(TenantScoped, Base):
@@ -82,6 +86,7 @@ class Bid(TenantScoped, Base):
     status: Mapped[str] = mapped_column(String(15), nullable=False, default="SEALED")  # SEALED | UNSEALED | SUPERSEDED
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     submitted_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    auto_scores: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")  # data-driven criteria frozen at close
 
 
 class BidLine(TenantScoped, Base):
@@ -135,7 +140,7 @@ class AwardDecision(TenantScoped, Base):
 
 class Contract(TenantScoped, Base):
     __tablename__ = "contract"
-    __table_args__ = (UniqueConstraint("tenant_id", "number"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "number"), Index("ix_contract_framework", "tenant_id", "framework_contract_id"))
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     type: Mapped[str] = mapped_column(String(30), nullable=False)  # SCHEDULING_AGREEMENT | QUANTITY | VALUE | MASTER | RATE_CARD | SOW
     title: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -160,6 +165,8 @@ class Contract(TenantScoped, Base):
     version: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     termination_reason: Mapped[Optional[str]] = mapped_column(Text)
+    framework_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract.id"))  # call-off of a master agreement
+    jurisdiction: Mapped[Optional[str]] = mapped_column(String(10))  # governing-law code of the clause library variant (IN-MH, IN-DL, ...)
 
 
 class ContractLine(TenantScoped, Base):

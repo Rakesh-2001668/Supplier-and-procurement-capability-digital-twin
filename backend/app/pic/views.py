@@ -37,7 +37,22 @@ def _column_rows(session: Session, model, *where) -> list[tuple]:
             for r in session.execute(select(*(getattr(model, k) for k in keys)).where(*where))]
 
 
-def mrp_run(session: Session, run: MrpRun) -> dict:
+MRP_DETAIL_LIMIT = 1000  # a run with more planned orders + exceptions than this answers with a summary and links to paged reads
+
+
+def mrp_run(session: Session, run: MrpRun, detail: str = "auto") -> dict:
+    """The run with its planned orders and exceptions. ``detail`` full | summary | auto (full up to MRP_DETAIL_LIMIT rows): a
+    50,000-material run has ~120,000 planned orders, so it returns the header, counts and the paged read URLs instead; the
+    per-material netting trace (``results``) is then read through /mrp/runs/{ref}/results."""
+    if detail == "auto":
+        detail = "full" if (run.planned_orders_created or 0) + (run.exceptions_raised or 0) <= MRP_DETAIL_LIMIT else "summary"
+    if detail == "summary":
+        out = row(run, only=[k for k in column_keys(sa_inspect(MrpRun)) if k != "results"], extra={"process": _process(session, "MRP_RUN", run)})
+        out["resultsCount"] = len(run.results or [])
+        base = f"/v1/mrp/runs/{run.number}"
+        out.update({"detail": "summary", "plannedOrdersUrl": f"{base}/planned-orders", "exceptionsUrl": f"{base}/exceptions",
+                    "resultsUrl": f"{base}/results"})
+        return out
     orders = _column_rows(session, PlannedOrder, PlannedOrder.mrp_run_id == run.id)
     exceptions = _column_rows(session, MrpException, MrpException.mrp_run_id == run.id)
     materials = dict(session.execute(select(Material.id, Material.number)).all())  # numbers only: no full rows for a 50k-material run
@@ -49,7 +64,7 @@ def mrp_run(session: Session, run: MrpRun) -> dict:
         d["material"] = materials.get(e.material_id)
     out = row(run, extra={"process": _process(session, "MRP_RUN", run)})
     process = out.pop("process")  # key order as before: columns, plannedOrders, exceptions, process
-    out.update({"plannedOrders": [d for _, d in orders], "exceptions": [d for _, d in exceptions], "process": process})
+    out.update({"plannedOrders": [d for _, d in orders], "exceptions": [d for _, d in exceptions], "process": process, "detail": "full"})
     return out
 
 
@@ -166,7 +181,13 @@ def invoice(session: Session, inv: Invoice) -> dict:
                            "lines": [row(x, extra={"po": po_refs.get(x.po_line_id, (None, None))[1],
                                                    "poLine": po_refs.get(x.po_line_id, (None, None))[0]}) for x in lines], "exceptions": rows(exceptions),
                            "creditNotes": rows(notes), "payments": rows(payments), "process": _process(session, "INVOICE", inv),
+                           "debitNotes": _debit_notes(session, inv),
                            "lineage": lineage(session, "INVOICE", inv.id)})
+
+
+def _debit_notes(session: Session, inv: Invoice) -> list[dict]:
+    from app.pic.services import debit_notes
+    return [debit_notes.view(session, n) for n in debit_notes.notes_of(session, inv)]
 
 
 def material(session: Session, m: Material) -> dict:

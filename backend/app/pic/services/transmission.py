@@ -628,7 +628,7 @@ def _supplier_principal(session: Session, supplier: Supplier, edi_id: str) -> Pr
     base = principal(session)
     return Principal(user_id=uuid.uuid5(uuid.NAMESPACE_URL, f"pic-edi:{base.tenant_id}:{supplier.code}"), tenant_id=base.tenant_id,
                      tenant_code=base.tenant_code, email=f"edi.{supplier.code.lower()}@{edi_id.lower()}.edi", name=f"EDI {supplier.code}",
-                     roles=["SUPPLIER_USER"], scopes={"supplier:portal", "po:confirm", "asn:create"}, attributes={}, supplier_id=supplier.id)
+                     roles=["SUPPLIER_USER"], scopes={"supplier:portal", "po:confirm", "asn:create", "invoice:submit"}, attributes={}, supplier_id=supplier.id)
 
 
 def _order_for(session: Session, message: Message, supplier: Supplier) -> PurchaseOrder:
@@ -740,9 +740,54 @@ def _desadv(session: Session, message: Message, po: PurchaseOrder) -> dict:
     return {"type": "DESADV", "po": po.number, "asn": asn.number, "result": views.asn(session, asn)}
 
 
+def _inbound_with_invoic(session: Session, raw: str, interchange: Interchange, supplier: Supplier) -> dict:
+    """An interchange carrying INVOIC (BP M10 EDI invoices): every message is processed in its own savepoint and acknowledged in EDIFACT
+    (CONTRL for the syntax, APERAK for each INVOIC), errors included; the interchange is stored once per sender and control reference."""
+    from app.pic.services import edi_invoice
+    previous = edi_invoice.stored(session, interchange.sender, interchange.reference)
+    if previous is not None:
+        if previous.sha256 != _sha(raw):
+            raise Problem(409, "EDI_REFERENCE_REUSED", f"Interchange reference {interchange.reference} of {interchange.sender} was already used "
+                          "for a different interchange", rule_ref="EDI-IDEMPOTENCY")
+        return edi_invoice.view(previous, replayed=True)
+    human = session.info["principal"]
+    session.info["principal"] = _supplier_principal(session, supplier, interchange.sender)
+    results = []
+    try:
+        for message in interchange.messages:
+            if message.type == "INVOIC":
+                results.append(edi_invoice.handle(session, message, supplier, interchange))
+                continue
+            try:
+                with session.begin_nested():
+                    po = _order_for(session, message, supplier)
+                    if message.type == "ORDRSP":
+                        outcome = _ordrsp(session, message, po)
+                    elif message.type == "DESADV":
+                        outcome = _desadv(session, message, po)
+                    else:
+                        raise Problem(422, "EDI_UNSUPPORTED", f"Message type {message.type} is not accepted inbound (ORDRSP, DESADV, INVOIC)")
+                results.append({**outcome, "messageRef": message.reference, "outcome": "ACCEPTED"})
+            except Problem as exc:
+                results.append({"type": message.type, "messageRef": message.reference, "document": message.reference, "outcome": "REJECTED",
+                                "problemCode": exc.code, "errors": [{"code": "Z99", "text": exc.detail}],
+                                "reference": f"{interchange.reference}-{message.reference}"})
+    finally:
+        session.info["principal"] = human
+    tenant = _tenant_code(session)
+    contrl_doc = edi_invoice.contrl(interchange.sender, tenant, interchange.reference,
+                                    [(m.reference, m.type, True, None) for m in interchange.messages])
+    apps = [r for r in results if r.get("type") == "INVOIC" or r.get("outcome") == "REJECTED"]
+    aperak_doc = edi_invoice.aperak(interchange.sender, tenant, interchange.reference, apps) if apps else None
+    row = edi_invoice.record(session, interchange, supplier, raw, results, contrl_doc, aperak_doc)
+    return {**edi_invoice.view(row), "supplier": supplier.code}
+
+
 def inbound(session: Session, raw: str) -> dict:
     interchange = parse(raw)
     supplier = _partner(session, interchange)
+    if any(m.type == "INVOIC" for m in interchange.messages):
+        return _inbound_with_invoic(session, raw, interchange, supplier)
     human = session.info["principal"]
     session.info["principal"] = _supplier_principal(session, supplier, interchange.sender)
     results = []

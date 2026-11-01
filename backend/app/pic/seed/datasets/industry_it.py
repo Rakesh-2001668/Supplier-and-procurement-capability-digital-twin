@@ -16,6 +16,10 @@ Mar 2027, every document through the domain services:
   F4        renewal alert 90 days before expiry (IT template renewalNoticeDays) → renewal decision → extension amendment
             to 31 Mar 2028, approved by the second contract manager
   F7        payment runs
+  wave 1    licence entitlements for the observability subscription (150 named users, co-terminus with LIC-2601) and an endpoint
+            security suite (200 devices): usage reports imported in November and December; the endpoint suite is 60% used, so it is
+            flagged unused with the yearly saving and a rightsizing task for the category manager, ahead of its renewal alert; the
+            scheduled review for the observability licence runs before the F4-10 renewal alert on 31 Dec
 """
 import uuid
 from datetime import date, timedelta
@@ -268,6 +272,8 @@ def apply(tenant_code: str, password: str) -> dict:
     notes.append(f"F6/F7 {ses_no}: {sum(h for _, h in TIMESHEET)} h timesheet approved → {sow_invoice['invoice']} "
                  f"{sow_invoice['matchType']}-matched {kit.fmt(sow_invoice['netMinor'])} and posted")
 
+    licences = _licences(sc, lic_no, notes)
+
     # ------------------------------------------------------------ F4 renewal alert → decision → extension amendment
     fired = kit.fire(sc, "contract.manager", "CONTRACT_RENEWAL", lic_id, at(date(2026, 12, 31), 10))
     kit.relay(sc, at(date(2026, 12, 31), 10, 5))
@@ -295,8 +301,35 @@ def apply(tenant_code: str, password: str) -> dict:
         refreshed = spend.refresh(s, sc.tenant_id)
     kit.relay(sc, at(date(2027, 3, 31), 16))
     counts.update({"suppliers": len(SUPPLIERS), "masters": len(masters), "contracts": 2, "purchaseOrders": 2, "serviceEntries": 1,
-                   "invoices": 2, "amendments": 1, "spendRefresh": refreshed})
+                   "invoices": 2, "amendments": 1, "spendRefresh": refreshed, "licences": 2, "licenceFlags": licences["flagged"]})
     return {"notes": notes, "counts": counts, "sow": sow_no, "licence": lic_no, "sowInvoice": sow_invoice, "renewal": renewal}
+
+
+def _licences(sc, lic_no, notes) -> dict:
+    """Licence entitlements and two usage reports (SSO export of active named users, endpoint-management export of enrolled devices)."""
+    from app.pic.models import LicenceEntitlement
+    from app.pic.services import ind_it
+
+    when = at(date(2026, 12, 14), 9)
+    with sc.act("category.manager", when) as s:
+        observability = ind_it.create_entitlement(s, supplier="MSD002", product="Observability platform – named users", entitled_qty=LICENCE["qty"],
+                                                  unit_price_minor=LICENCE["rate"], term_start=date(2026, 10, 15), term_end=date(2027, 3, 31), contract=lic_no)
+        endpoint = ind_it.create_entitlement(s, supplier="MSD002", product="Endpoint security suite – enrolled devices", entitled_qty=200, unit_price_minor=1_800_00,
+                                             metric="DEVICE", term_start=date(2026, 10, 15), term_end=date(2027, 9, 30))
+        obs_no, end_no = observability.number, endpoint.number
+        out = ind_it.import_usage(s, [
+            {"licence": obs_no, "as_of": date(2026, 11, 30), "used_qty": 138}, {"licence": obs_no, "as_of": date(2026, 12, 12), "used_qty": 142},
+            {"licence": end_no, "as_of": date(2026, 11, 30), "used_qty": 118}, {"licence": end_no, "as_of": date(2026, 12, 12), "used_qty": 121}],
+            source="IMPORT")
+        flagged = [item for item in out["licences"] if item["flag"] == "UNUSED"]
+        saving = sum(item["potential_saving_minor"] for item in flagged)
+        obs_id = observability.id
+    kit.fire(sc, "category.manager", "LICENCE_REVIEW", obs_id, at(date(2026, 12, 14), 11))
+    with tenant_tx(sc.tenant_id) as s:
+        utilisation = {e.number: (str(e.utilisation_pct), e.flag) for e in s.execute(select(LicenceEntitlement)).scalars()}
+    notes.append(f"Licences {obs_no} (150 named users, {utilisation[obs_no][0]}% used, review before the F4-10 renewal alert) and {end_no} (200 devices, "
+                 f"{utilisation[end_no][0]}% used) → {len(flagged)} flagged unused: yearly saving {kit.fmt(saving)}, rightsizing task for the category manager")
+    return {"flagged": len(flagged), "savingMinor": saving, "utilisation": utilisation}
 
 
 def _contract(sc, contract_svc, spec, when, *, title, valid, lines, redline=None):

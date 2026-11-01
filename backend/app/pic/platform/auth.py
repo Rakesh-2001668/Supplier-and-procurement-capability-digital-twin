@@ -41,7 +41,8 @@ ROLE_SCOPES: dict[str, set[str]] = {
     "PROCUREMENT_HEAD": {READ, TASKS, "spend:read"},
     "CPO": {READ, TASKS, "spend:read", "agents:manage"},
     "CAPEX_COMMITTEE": {READ, TASKS},
-    "TENANT_ADMIN": {READ, TASKS, "admin:rules", "admin:audit", "admin:integration", "agents:manage", "admin:ops"},
+    "CLINICAL_LEAD": {READ, TASKS},  # healthcare template: clinical sign-off on awards (AWARD-APPROVAL.clinicalSignOff)
+    "TENANT_ADMIN": {READ, TASKS, "admin:rules", "admin:audit", "admin:integration", "agents:manage", "admin:ops", "admin:workflow"},
     # External supplier users: only supplier-side commands on their own documents.
     "SUPPLIER_USER": {"supplier:portal", "bid:submit", "po:confirm", "asn:create", "invoice:submit", "ses:create"},
 }

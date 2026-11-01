@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:supplier.status.changed",
+  "title": "supplier.status.changed",
+  "description": "Payload (outbox_event.payload) of supplier.status.changed on SUPPLIER. Produced by services/supplier.py.",
+  "type": "object",
+  "properties": {
+    "supplierCode": {},
+    "from": {},
+    "to": {},
+    "reason": {},
+    "category": {}
+  },
+  "required": [
+    "supplierCode",
+    "from",
+    "to",
+    "reason"
+  ],
+  "additionalProperties": true
+}

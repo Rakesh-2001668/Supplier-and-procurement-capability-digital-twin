@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:index.updated",
+  "title": "index.updated",
+  "description": "Payload (outbox_event.payload) of index.updated on INDEX. Produced by services/ind_logistics.py.",
+  "type": "object",
+  "properties": {
+    "index": {},
+    "inserted": {},
+    "revised": {}
+  },
+  "required": [
+    "index",
+    "inserted",
+    "revised"
+  ],
+  "additionalProperties": true
+}

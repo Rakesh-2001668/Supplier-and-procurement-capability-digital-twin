@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:contract.amended",
+  "title": "contract.amended",
+  "description": "Payload (outbox_event.payload) of contract.amended on CONTRACT. Produced by services/amendments.py.",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": true
+}

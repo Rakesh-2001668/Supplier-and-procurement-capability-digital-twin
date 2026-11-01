@@ -22,7 +22,7 @@ export default function Requisitions() {
 
   return (
     <div>
-      <PageHeader eyebrow="REQ · Purchase requisitions" title="Requisitions"
+      <PageHeader kpis="M04" eyebrow="REQ · Purchase requisitions" title="Requisitions"
         subtitle="MRP, manual, project and catalogue demand in one list. Every requisition carries its purpose, budget check and approval route."
         actions={<LinkButton href="/pic/requisitions/new" variant="primary">New requisition</LinkButton>} />
       <Card title="Worklist" actions={

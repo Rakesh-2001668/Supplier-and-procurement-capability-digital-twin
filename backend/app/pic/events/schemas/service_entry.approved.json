@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:service_entry.approved",
+  "title": "service_entry.approved",
+  "description": "Payload (outbox_event.payload) of service_entry.approved on SERVICE_ENTRY. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "totalMinor": {}
+  },
+  "required": [
+    "po",
+    "totalMinor"
+  ],
+  "additionalProperties": true
+}

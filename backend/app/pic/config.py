@@ -94,8 +94,23 @@ class Settings(BaseSettings):
     inline_worker: bool = Field(default=False, alias="PIC_INLINE_WORKER")
     worker_tick_budget_seconds: float = Field(default=50.0, alias="PIC_WORKER_TICK_BUDGET_SECONDS")
 
+    # ---------------------------------------------------------------- field-encryption key ring (platform/crypto.py)
+    # "id:key,id:key" (each key a urlsafe-base64 32-byte value). The first entry (or PIC_FIELD_ACTIVE_KEY) encrypts new data;
+    # every listed key still decrypts. PIC_FIELD_KEY stays in the ring as key id "v1" (data written before key versioning,
+    # and the blind-index key), so a rotation only ADDS a key; run `python -m app.pic.tools.reencrypt` before retiring one.
+    field_keys: Optional[str] = Field(default=None, alias="PIC_FIELD_KEYS")
+    field_active_key: Optional[str] = Field(default=None, alias="PIC_FIELD_ACTIVE_KEY")
+
+    # ---------------------------------------------------------------- API conventions (platform/idempotency.py, preconditions.py)
+    # Generic Idempotency-Key handling for every write under /v1 (24 h window; a request still running after the in-flight
+    # timeout is treated as abandoned).
+    idempotency_ttl_hours: int = Field(default=24, alias="PIC_IDEMPOTENCY_TTL_HOURS")
+    idempotency_inflight_seconds: int = Field(default=600, alias="PIC_IDEMPOTENCY_INFLIGHT_SECONDS")
+    # If-Match on document edits (PUT/PATCH of a document and the PO change commands): 428 without it. Unset: on in production.
+    require_if_match: Optional[bool] = Field(default=None, alias="PIC_REQUIRE_IF_MATCH")
+
     @field_validator("enable_legacy_demo", "api_docs", "rate_limit_per_ip", "rate_limit_per_user", "metrics_token", "log_format",
-                     "cron_secret", mode="before")
+                     "cron_secret", "field_keys", "field_active_key", "require_if_match", mode="before")
     @classmethod
     def _blank_is_unset(cls, value):
         # docker compose / env files often pass VAR= ; treat an empty value as "not set" so the defaults apply.
@@ -135,6 +150,10 @@ class Settings(BaseSettings):
         return self.rate_limit_per_user if self.rate_limit_per_user is not None else (0 if self.is_development else 1200)
 
     @property
+    def if_match_required(self) -> bool:
+        return self.require_if_match if self.require_if_match is not None else self.is_production
+
+    @property
     def json_logs(self) -> bool:
         fmt = (self.log_format or ("text" if self.is_development else "json")).lower()
         return fmt == "json"
@@ -161,6 +180,11 @@ class Settings(BaseSettings):
                 problems.append("PIC_CORS_ORIGINS must not contain '*'")
             elif host in ("localhost", "127.0.0.1", "0.0.0.0", "::1") or host.endswith(".localhost"):
                 problems.append("PIC_CORS_ORIGINS must not contain localhost origins")
+        for entry in (self.field_keys or "").split(","):
+            if entry.strip():
+                key_id, _, key = entry.strip().partition(":")
+                if not key_id or not valid_field_key(key):
+                    problems.append("PIC_FIELD_KEYS entries must be id:key with a urlsafe-base64 32-byte random key")
         if self.metrics_token and len(self.metrics_token) < 24:
             problems.append("PIC_METRICS_TOKEN must be at least 24 characters when set")
         if self.cron_secret and len(self.cron_secret) < 24:

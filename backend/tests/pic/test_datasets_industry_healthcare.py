@@ -156,6 +156,35 @@ def test_lot_controls_at_receipt(sc):
         receiving._check_lot(s, line, Decimal(1), "VOD-KN77-TEST", date(2031, 1, 31), ["VOD-KN77-TEST-001"], today)  # complete lot passes
 
 
+def test_cold_chain_expiry_and_par_levels(pack):
+    """Wave 1 (items 43/44): logger traces, an excursion that blocks and writes off the lot, the expiry write-off sweep, the par-level
+    replenishment and the expiry-write-off KPI."""
+    from app.pic.models import ColdChainReading, ColdChainSpec, ParLevel, Stock, StockMovement, Task, Tenant
+    from app.pic.services import ind_kpis
+    with system_tx() as s:
+        tenant_id = s.execute(select(Tenant.id).where(Tenant.code == "HLT")).scalar_one()
+    with tenant_tx(tenant_id) as s:
+        vaccine = s.execute(select(Material).where(Material.mpn == "CPD-VAX-1")).scalar_one()
+        spec = s.execute(select(ColdChainSpec).where(ColdChainSpec.material_id == vaccine.id)).scalar_one()
+        assert (spec.min_c, spec.max_c, spec.max_excursion_minutes) == (Decimal("2.0"), Decimal("8.0"), 30)
+        readings = {r.batch: r for r in s.execute(select(ColdChainReading).where(ColdChainReading.material_id == vaccine.id)).scalars()}
+        assert (readings["CPD-VAX-A"].status, readings["CPD-VAX-A"].excursion_minutes) == ("OK", 0)
+        bad = readings["CPD-VAX-B"]
+        assert (bad.status, bad.excursion_minutes, bad.quarantined_qty) == ("REJECTED", 45, Decimal(60))
+        task = s.get(Task, bad.task_id)
+        assert task.status == "COMPLETED" and task.decision == "REJECT" and task.candidate_role == "QUALITY_INSPECTOR"
+        assert task.completed_by not in task.excluded_user_ids  # the person who received the goods did not decide
+        moves = [(m.movement_type, m.reference_type) for m in s.execute(select(StockMovement).where(
+            StockMovement.material_id == vaccine.id, StockMovement.movement_type.in_(("344", "551"))).order_by(StockMovement.created_at)).scalars()]
+        assert moves.count(("344", "COLD_CHAIN_READING")) == 2 and ("551", "COLD_CHAIN_REJECT") in moves and ("551", "EXPIRY_WRITE_OFF") in moves
+        assert sum(x.qty for x in s.execute(select(Stock).where(Stock.material_id == vaccine.id, Stock.stock_type.in_(("UNRESTRICTED", "BLOCKED")))).scalars()) == 0
+        par = s.execute(select(ParLevel).where(ParLevel.material_id == vaccine.id)).scalar_one()
+        assert (par.par_qty, par.trigger_qty, par.plant, par.storage_location) == (Decimal(100), Decimal(30), "H100", "0001") and par.open_requisition_id
+        pr = s.get(Requisition, par.open_requisition_id)
+        assert pr.purpose_code == "PAR_REPLENISHMENT" and pr.status in ("APPROVED", "ORDERED", "PARTIALLY_ORDERED")
+        by_code = {k["code"]: k for k in ind_kpis.industry_kpis(s, include_other_templates=True)["kpis"]}
+        assert by_code["TPL.EXPIRY_WRITE_OFFS"]["value"] == str(60 * 450_00) and by_code["TPL.EXPIRY_WRITE_OFFS"]["detail"]["coldChainWriteOffMinor"] == 60 * 450_00
+
 def test_second_apply_is_idempotent(pack):
     from app.pic.seed import datasets
     assert datasets.apply_pack("industry_healthcare", PASSWORD)[0]["status"] == "ALREADY_LOADED"

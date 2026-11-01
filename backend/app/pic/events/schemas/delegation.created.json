@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:delegation.created",
+  "title": "delegation.created",
+  "description": "Payload (outbox_event.payload) of delegation.created on DELEGATION. Produced by services/delegation.py.",
+  "type": "object",
+  "properties": {
+    "delegationId": {
+      "type": "string"
+    },
+    "delegatorId": {
+      "type": "string"
+    },
+    "delegateId": {
+      "type": "string"
+    },
+    "validFrom": {
+      "type": "string"
+    },
+    "validTo": {
+      "type": "string"
+    },
+    "roles": {},
+    "valueLimitMinor": {},
+    "createdByAdmin": {}
+  },
+  "required": [
+    "delegationId",
+    "delegatorId",
+    "delegateId",
+    "validFrom",
+    "validTo",
+    "roles",
+    "valueLimitMinor",
+    "createdByAdmin"
+  ],
+  "additionalProperties": true
+}

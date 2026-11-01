@@ -23,6 +23,12 @@ services on the tenant's own timeline Oct 2026 – Mar 2027:
               lot was received at both hospitals, which three cases received which serials, and that three units were still
               on the shelf; those are quarantined and returned (return deliveries), and replacements are ordered
 
+  wave 1    a 2-8 C cold-chain item (fictional ampoule vaccine CPD-VAX-1) from a second supplier: temperature range on the material,
+            two receipts at H100 with logger traces - lot A within range, lot B with a 45-minute excursion that blocks the stock and
+            opens a quality task (rejected by the biomedical engineer, who is not the person who received the goods, and written
+            off); the short-dated lot A expires, the expiry write-off sweep writes the remainder off; a par level for the item at
+            the ward store raises a replenishment requisition up to par; the value-analysis committee (VAC) report is run
+
 Prices, lots, serials, case numbers and licence numbers are fictional. Case references carry no patient data.
 """
 from datetime import date, datetime, timedelta
@@ -125,6 +131,94 @@ def _next_serial(sc: Scenario, lot: str) -> int:
     with tenant_tx(sc.tenant_id) as s:
         used = [x for g in s.execute(select(GrLine).where(GrLine.batch == lot)).scalars() for x in (g.serials or [])]
     return max((int(x.rsplit("-", 1)[1]) for x in used), default=0) + 1
+
+
+COLD_SUPPLIER = {
+    "code": "CPD001", "name": "Cauvery Pharma Distribution Pvt Ltd", "gstin": gstin("33", "AAGCC4417N"), "ifsc": "HDFC0001457",
+    "account": "50200041377120", "terms": "N30", "incoterms": "DAP hospital pharmacy", "categories": ["PHARMA-COLD"], "segment": "ROUTINE",
+    "user": "dispatch@cpd001.example", "user_role": "dispatch", "scores": (82, 80),
+    "note": "Wholesale drug licence and cold-chain SOP (2-8 C, data loggers on every consignment) verified",
+    "questionnaire": {"coldChain": "validated insulated shippers with USB loggers", "licence": "wholesale drug licence on file"},
+    "address": {"line1": "SIDCO Industrial Estate, Guindy", "city": "Chennai", "state_code": "33", "pin": "600032", "country": "IN"},
+    "certificates": [{"type": "ISO9001", "number": "QMS-CPD-9-3304", "issued_on": "2025-03-01", "expires_on": "2028-02-29"}],
+}
+
+
+def _cold_chain_and_par_levels(sc: Scenario, password: str) -> dict:
+    """Cold-chain tracking, expiry write-off, par-level replenishment and the VAC report (pending workflows 43/44)."""
+    from app.pic.models import ColdChainReading, GoodsReceipt, Task
+    from app.pic.platform import workflow
+    from app.pic.services import ind_healthcare, order, receiving
+    from app.pic.services import requisition as req_svc
+
+    onboard(sc, COLD_SUPPLIER, password, date(2026, 12, 7))
+    vax = material_via_f9(sc, "materials.manager", at(date(2026, 12, 9), 10),
+                          description="CPD-VAX-1 ampoule vaccine, 2-8 C cold chain, 10 x 0.5 ml (fictional product)", type="STOCK", material_group="PHARMA-COLD",
+                          category="PHARMA-COLD", base_uom="EA", hsn_code="30021290", mpn="CPD-VAX-1",
+                          attributes={"coldChain": True, "batchManaged": True, "expiryManaged": True, "minShelfLifeDays": 5})
+    with sc.act("quality.manager", at(date(2026, 12, 9), 15)) as s:
+        ind_healthcare.set_spec(s, material=vax, min_c=2, max_c=8, max_excursion_minutes=30, label="2-8 C")
+        material = s.execute(select(Material).where(Material.number == vax)).scalar_one()
+        material.standard_price_minor, material.planned_delivery_days = 450_00, 2
+    price = 450_00
+    with sc.act("ot.coordinator", at(date(2027, 3, 16), 14)) as s:
+        pr = req_svc.create(s, origin="MANUAL", purpose_code="PHARMACY_STOCK", purpose_text="Vaccine stock for the OPD immunisation clinic, Chennai",
+                            plant="H100", lines=[{"item_type": "MATERIAL", "purchase_type": "STOCK", "material": vax, "qty": "120", "price_est_minor": price,
+                                                  "need_date": "2027-03-18", "plant": "H100", "storage_location": "0001"}])
+        req_svc.submit(s, pr)
+        pr_no, pr_id = pr.number, pr.id
+    sc.approve_all(pr_id, at(date(2027, 3, 16), 16), "Immunisation schedule for the quarter")
+    with sc.act("buyer", at(date(2027, 3, 17), 10)) as s:
+        po = order.create_from_requisition(s, requisition=pr_no, lines=[10], supplier_code="CPD001", unit_price_minor=price)[0]
+        po_id, po_no = po.id, po.number
+    sc.approve_all(po_id, at(date(2027, 3, 17), 12), "Hospital pharmacy price list")
+    relay(sc, at(date(2027, 3, 17), 13), timers=True)
+    with sc.act(COLD_SUPPLIER["user"], at(date(2027, 3, 17), 15)) as s:
+        order.confirm(s, s.get(PurchaseOrder, po_id), "CONFIRMED", note="Two deliveries in insulated shippers with loggers")
+    receipts = {}
+    for lot, qty, expiry, day in (("CPD-VAX-A", 60, "2027-03-25", date(2027, 3, 18)), ("CPD-VAX-B", 60, "2027-09-30", date(2027, 3, 19))):
+        with sc.act("stores.chennai", at(day, 10)) as s:
+            gr = receiving.post_gr(s, s.get(PurchaseOrder, po_id), lines=[{"line": 10, "qty": str(qty), "batch": lot, "expiry": expiry, "storage_location": "0001"}],
+                                   delivery_note=f"CPD-DC-{lot}", posting_date=day)
+            receipts[lot] = gr.number
+    with sc.act("stores.chennai", at(date(2027, 3, 18), 11)) as s:
+        ok = ind_healthcare.record_readings(s, object_type="GOODS_RECEIPT", ref=receipts["CPD-VAX-A"], material=vax, logger_id="USB-LOG-4471", batch="CPD-VAX-A",
+                                            readings=[{"at": datetime(2027, 3, 18, 5, 0 + 15 * i, tzinfo=clock.IST), "temp_c": t} for i, t in enumerate((4.6, 5.0, 5.4, 5.1))])
+        assert ok.status == "OK"
+    with sc.act("stores.chennai", at(date(2027, 3, 19), 11)) as s:
+        bad = ind_healthcare.record_readings(s, object_type="GOODS_RECEIPT", ref=receipts["CPD-VAX-B"], material=vax, logger_id="USB-LOG-4502", batch="CPD-VAX-B",
+                                             readings=[{"at": datetime(2027, 3, 19, 5, 15 * i, tzinfo=clock.IST), "temp_c": t} for i, t in enumerate((5.2, 9.1, 9.6, 5.3))])
+        bad_id, excursion, status = bad.id, bad.excursion_minutes, bad.status
+    with tenant_tx(sc.tenant_id) as s:
+        task_id = s.execute(select(Task.id).where(Task.object_id == bad_id, Task.kind == "COLD_CHAIN_EXCURSION", Task.status == "OPEN")).scalar_one()
+    with sc.act("quality.manager", at(date(2027, 3, 19), 15)) as s:
+        workflow.complete(s, task_id, "REJECT", "Logger USB-LOG-4502 shows 45 minutes above 8 C; manufacturer stability data does not allow release")
+    sc.note(f"Cold chain {vax}: {receipts['CPD-VAX-A']} lot A trace within 2-8 C; {receipts['CPD-VAX-B']} lot B {excursion}-minute excursion ({status}) "
+            "→ blocked stock + quality task → rejected by the biomedical engineer and written off")
+    with sc.act("quality.manager", at(date(2027, 3, 29), 9)) as s:
+        written = ind_healthcare.write_off_expired(s, "Monthly expiry sweep, March 2027")
+        expiry_minor = written["valueMinor"]
+    with sc.act("materials.manager", at(date(2027, 3, 29), 11)) as s:
+        # Replenish up to 100 when 30 or fewer are left at the ward store.
+        ind_healthcare.set_par_level(s, plant="H100", storage_location="0001", material=vax, par_qty=100, trigger_qty=30)
+    with sc.act("ot.coordinator", at(date(2027, 3, 29), 12)) as s:  # not the approver of the requisition (four-eyes)
+        sweep = ind_healthcare.sweep(s, "H100")
+        vac = ind_healthcare.vac_report(s, "H100", 90)
+    for item in sweep["requisitions"]:
+        pr_id = None
+        with tenant_tx(sc.tenant_id) as s:
+            pr_id = s.execute(select(Requisition.id).where(Requisition.number == item["requisition"])).scalar_one()
+        sc.approve_all(pr_id, at(date(2027, 3, 29), 15), "Par-level replenishment up to par")
+    relay(sc, at(date(2027, 3, 29), 16), timers=True)
+    sc.note(f"Expiry sweep wrote off {kit_fmt(expiry_minor)} ({len(written['writtenOff'])} batch); par level H100/0001 {vax} 100 / 30 → "
+            f"{len(sweep['requisitions'])} replenishment requisition(s); VAC report: {len(vac['items'])} item(s), {vac['totals']['belowTrigger']} below trigger")
+    return {"material": vax, "receipts": receipts, "excursionMinutes": excursion, "expiryWriteOffMinor": expiry_minor,
+            "parRequisitions": [i["requisition"] for i in sweep["requisitions"]]}
+
+
+def kit_fmt(minor: int) -> str:
+    from app.pic.platform.money import fmt_inr
+    return fmt_inr(minor)
 
 
 def _setup(sc_tenant_code: str, password: str) -> Scenario:
@@ -321,6 +415,8 @@ def apply(tenant_code: str, password: str) -> dict:
     relay(sc, at(date(2027, 2, 22), 18), timers=True)
     ers.append(_settle(sc, date(2027, 2, 28), "VOD/26-27/TI-1622"))
 
+    cold = _cold_chain_and_par_levels(sc, password)
+
     # ------------------------------------------------------------ payment runs (this tenant only)
     paid = []
     for run_day in (date(2027, 2, 15), date(2027, 3, 17)):
@@ -338,6 +434,7 @@ def apply(tenant_code: str, password: str) -> dict:
     return {"notes": sc.log,
             "counts": {"suppliers": 1, "materials": 1, "contracts": 1, "requisitions": 1 + len(CASES) + len(recall["replenishments"]),
                        "purchaseOrders": len(pos), "touchlessPurchaseOrders": sum(1 for p in pos if p.touchless), "surgicalCases": len(CASES),
-                       "ersSettlements": len(ers), "payments": len(paid), "recalledUnits": sum(int(Decimal(q["qty"])) for q in recall["quarantined"])},
-            "keys": {"tenant": tenant_code, "supplier": supplier_code, "material": kn77, "contract": contract_no, "recalledLot": RECALLED_LOT,
+                       "ersSettlements": len(ers), "payments": len(paid), "recalledUnits": sum(int(Decimal(q["qty"])) for q in recall["quarantined"]),
+                       "coldChainReadings": 2, "coldChainQuarantines": 1, "expiryWriteOffMinor": cold["expiryWriteOffMinor"], "parLevels": 1},
+            "keys": {"tenant": tenant_code, "supplier": supplier_code, "material": kn77, "contract": contract_no, "recalledLot": RECALLED_LOT, "coldChain": cold,
                      "notice": NOTICE, "cases": [c[2] for c in CASES], "ers": ers}}

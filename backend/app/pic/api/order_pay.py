@@ -16,7 +16,7 @@ from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.core import check_if_match, etag
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
-from app.pic.services import order, payables, receiving
+from app.pic.services import debit_notes, early_payment, order, payables, po_controls, receiving
 from app.pic.services.common import by_ref
 
 router = APIRouter(prefix="/v1")
@@ -42,6 +42,8 @@ class PoIn(BaseModel):
     unitPriceMinor: Optional[int] = None
     deviationReason: Optional[str] = None
     retentionPct: Optional[Decimal] = Field(default=None, ge=0, le=20)
+    # BP M06: reason for ordering from a supplier that is not Qualified/Preferred for the category (rule ONE-TIME-VENDOR)
+    oneTimeVendorReason: Optional[str] = Field(default=None, max_length=500)
 
 
 @router.post("/purchase-orders", status_code=201, tags=["F5 Purchase Order"])
@@ -54,7 +56,8 @@ def create_po(body: PoIn, p: Principal = Depends(require("po:create")), key: Opt
         pos = order.create_from_requisition(
             s, requisition=body.source.id, lines=body.source.lines, supplier_code=body.supplierId, contract_ref=body.contractRef,
             release_qty=body.release.qty if body.release else None, need_date=body.release.needDate if body.release else None,
-            unit_price_minor=body.unitPriceMinor, deviation_reason=body.deviationReason, retention_pct=body.retentionPct)
+            unit_price_minor=body.unitPriceMinor, deviation_reason=body.deviationReason, retention_pct=body.retentionPct,
+            one_time_vendor_reason=body.oneTimeVendorReason)
         result = [{"id": po.number, "version": po.version, "status": po.status,
                    "inherited": {"price": po.inherited.get("price", 0) / 100 if po.inherited.get("price") else None,
                                  "paymentTerms": po.payment_terms, "incoterms": po.incoterms,
@@ -455,6 +458,246 @@ def release_retention(ref: str, body: RetentionReleaseIn, p: Principal = Depends
         doc = payables.release_retention(s, by_ref(s, PurchaseOrder, ref, lock=True), reference=body.reference, reason=body.reason,
                                          amount_minor=body.amountMinor, release_date=body.releaseDate)
         return views.invoice(s, doc)
+
+
+# ---------------------------------------------------------------- M10 debit notes
+def _own_invoice(s, p: Principal, ref: str, lock: bool = False) -> Invoice:
+    invoice = by_ref(s, Invoice, ref, lock=lock)
+    if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
+        raise not_found("Invoice", ref)
+    return invoice
+
+
+class DebitNoteLineIn(BaseModel):
+    kind: str = Field(pattern="^(PRICE|CHARGE)$")
+    invoice_line: Optional[int] = Field(default=None, gt=0)       # PRICE: the invoice line number
+    qty: Optional[Decimal] = Field(default=None, gt=0)            # PRICE
+    unit_debit_minor: Optional[int] = Field(default=None, gt=0)   # PRICE: paise added per unit
+    charge: Optional[str] = Field(default=None, max_length=20)    # CHARGE: FREIGHT | PACKING | INSURANCE | INSPECTION | HANDLING | OTHER
+    description: Optional[str] = Field(default=None, max_length=200)
+    amount_minor: Optional[int] = Field(default=None, gt=0)       # CHARGE: net paise
+    gst_rate: Optional[Decimal] = Field(default=None, ge=0, le=40)
+    hsn: Optional[str] = Field(default=None, max_length=10)
+
+
+class DebitNoteIn(BaseModel):
+    supplier_debit_note_no: str = Field(min_length=1, max_length=30)
+    note_date: date
+    reason: str = Field(min_length=3, max_length=500)
+    lines: list[DebitNoteLineIn] = Field(min_length=1, max_length=50)
+
+
+@router.post("/invoices/{ref}/debit-notes", status_code=201, tags=["F7 Invoice"])
+def raise_debit_note(ref: str, body: DebitNoteIn, p: Principal = Depends(require_any("invoice:submit", "invoice:capture")),
+                     key: Optional[str] = Depends(idempotency_key)):
+    """A supplier debit note (upward price correction or additional charge) against an invoice: matched against the order, approved by the
+    buyer chain when outside it, approved by accounts payable and posted to the ERP as a vendor debit memo."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/debit-notes", key, body)
+        if idem.replay:
+            return idem.replay
+        invoice = _own_invoice(s, p, ref, lock=True)
+        note = debit_notes.submit(s, invoice, supplier_debit_note_no=body.supplier_debit_note_no, note_date=body.note_date, reason=body.reason,
+                                  lines=[l.model_dump(exclude_none=True) for l in body.lines])
+        return idem.store(debit_notes.view(s, note), 201)
+
+
+@router.get("/invoices/{ref}/debit-notes", tags=["F7 Invoice"])
+def invoice_debit_notes(ref: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    with uow(p) as s:
+        invoice = _own_invoice(s, p, ref)
+        return [debit_notes.view(s, n) for n in debit_notes.notes_of(s, invoice)]
+
+
+@router.get("/debit-notes/{ref}", tags=["F7 Invoice"])
+def get_debit_note(ref: str, response: Response, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    with uow(p) as s:
+        note = debit_notes.by_ref(s, ref)
+        if "SUPPLIER_USER" in p.roles and note.supplier_id != p.supplier_id:
+            raise not_found("Debit note", ref)
+        response.headers["ETag"] = etag(note)
+        return debit_notes.view(s, note)
+
+
+@router.post("/debit-notes/{ref}/approve", tags=["F7 Invoice"])
+def approve_debit_note(ref: str, p: Principal = Depends(require("invoice:approve")), key: Optional[str] = Depends(idempotency_key),
+                       if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/debit-notes/{ref}/approve", key, {})
+        if idem.replay:
+            return idem.replay
+        note = debit_notes.by_ref(s, ref, lock=True)
+        check_if_match(note, if_match)
+        debit_notes.approve(s, note)
+        return idem.store(debit_notes.view(s, note))
+
+
+class DebitNoteRejectIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@router.post("/debit-notes/{ref}/reject", tags=["F7 Invoice"])
+def reject_debit_note(ref: str, body: DebitNoteRejectIn, p: Principal = Depends(require_any("invoice:resolve", "invoice:approve")),
+                      key: Optional[str] = Depends(idempotency_key), if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/debit-notes/{ref}/reject", key, body)
+        if idem.replay:
+            return idem.replay
+        note = debit_notes.by_ref(s, ref, lock=True)
+        check_if_match(note, if_match)
+        debit_notes.reject(s, note, body.reason)
+        return idem.store(debit_notes.view(s, note))
+
+
+@router.post("/debit-notes/{ref}/post", tags=["F7 Invoice"])
+def post_debit_note(ref: str, p: Principal = Depends(require("invoice:post")), key: Optional[str] = Depends(idempotency_key)):
+    """Post an approved debit note to the ERP as a vendor debit memo (exactly once)."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/debit-notes/{ref}/post", key, {})
+        if idem.replay:
+            return idem.replay
+        note = debit_notes.by_ref(s, ref, lock=True)
+        result = debit_notes.post(s, note)
+        return idem.store({**result, **debit_notes.view(s, note)})
+
+
+# ---------------------------------------------------------------- M10 early-payment discount and supply-chain finance hooks
+EARLY_SCOPES = ("invoice:submit", "invoice:post", "payment:run")
+
+
+@router.get("/invoices/{ref}/early-payment", tags=["F7 Invoice"])
+def early_payment_state(ref: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    """Terms discount, eligibility, the payable amount and every offer / election on the invoice."""
+    with uow(p) as s:
+        invoice = _own_invoice(s, p, ref)
+        return {**early_payment.options(s, invoice), "offers": [early_payment.view(o) for o in early_payment.offers_of(s, invoice)]}
+
+
+class EarlyPaymentOfferIn(BaseModel):
+    discountPct: Optional[Decimal] = Field(default=None, gt=0, lt=100)
+    payOn: Optional[date] = None
+    source: Optional[str] = Field(default=None, pattern="^(TERMS|NEGOTIATED)$")  # TERMS: take the discount of the payment terms
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/invoices/{ref}/early-payment/offers", status_code=201, tags=["F7 Invoice"])
+def early_payment_offer(ref: str, body: EarlyPaymentOfferIn, p: Principal = Depends(require_any(*EARLY_SCOPES)),
+                        key: Optional[str] = Depends(idempotency_key)):
+    """An early-payment discount offer (accounts payable) or request (supplier); the terms discount is taken at once."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/early-payment/offers", key, body)
+        if idem.replay:
+            return idem.replay
+        invoice = _own_invoice(s, p, ref, lock=True)
+        offer = early_payment.make_offer(s, invoice, discount_pct=body.discountPct, pay_on=body.payOn, note=body.note, source=body.source)
+        return idem.store(early_payment.view(offer), 201)
+
+
+class EarlyPaymentDecisionIn(BaseModel):
+    accept: bool
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/invoices/{ref}/early-payment/offers/{offer_id}/decision", tags=["F7 Invoice"])
+def early_payment_decision(ref: str, offer_id: uuid.UUID, body: EarlyPaymentDecisionIn, p: Principal = Depends(require_any(*EARLY_SCOPES)),
+                           key: Optional[str] = Depends(idempotency_key)):
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/early-payment/offers/{offer_id}/decision", key, body)
+        if idem.replay:
+            return idem.replay
+        invoice = _own_invoice(s, p, ref, lock=True)
+        return idem.store(early_payment.view(early_payment.decide(s, invoice, offer_id, body.accept, body.note)))
+
+
+@router.post("/invoices/{ref}/early-payment/offers/{offer_id}/cancel", tags=["F7 Invoice"])
+def early_payment_cancel(ref: str, offer_id: uuid.UUID, p: Principal = Depends(require_any(*EARLY_SCOPES)), key: Optional[str] = Depends(idempotency_key)):
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/early-payment/offers/{offer_id}/cancel", key, {})
+        if idem.replay:
+            return idem.replay
+        invoice = _own_invoice(s, p, ref, lock=True)
+        return idem.store(early_payment.view(early_payment.cancel(s, invoice, offer_id)))
+
+
+class ScfIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/invoices/{ref}/scf", status_code=201, tags=["F7 Invoice"])
+def elect_scf(ref: str, body: ScfIn = ScfIn(), p: Principal = Depends(require_any(*EARLY_SCOPES)), key: Optional[str] = Depends(idempotency_key)):
+    """Supply-chain-finance payment option on a posted invoice: flag, event and the SCF_FINANCING connector message (no external provider)."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/scf", key, body)
+        if idem.replay:
+            return idem.replay
+        invoice = _own_invoice(s, p, ref, lock=True)
+        return idem.store(early_payment.view(early_payment.elect_scf(s, invoice, body.note)), 201)
+
+
+# ---------------------------------------------------------------- M09 receipt tolerances per material and supplier
+class ReceiptToleranceIn(BaseModel):
+    material: Optional[str] = None
+    supplier: Optional[str] = None
+    overPct: Decimal = Field(ge=0, le=100)
+    underPct: Decimal = Field(ge=0, le=100)
+    reason: str = Field(min_length=3, max_length=300)
+
+
+def _tolerance_rows(s) -> list[dict]:
+    from app.pic.models import Material, ReceiptTolerance, Supplier
+    materials = {m.id: m.number for m in s.execute(select(Material)).scalars()}
+    suppliers = {x.id: x.code for x in s.execute(select(Supplier)).scalars()}
+    return [po_controls.tolerance_view(r, materials.get(r.material_id), suppliers.get(r.supplier_id))
+            for r in s.execute(select(ReceiptTolerance).order_by(ReceiptTolerance.created_at)).scalars()]
+
+
+@router.get("/receipt-tolerances", tags=["F6 Receiving"])
+def receipt_tolerances(p: Principal = Depends(require(READ))):
+    with uow(p) as s:
+        return _tolerance_rows(s)
+
+
+@router.put("/receipt-tolerances", tags=["F6 Receiving"])
+def set_receipt_tolerance(body: ReceiptToleranceIn, p: Principal = Depends(require_any("admin:rules", "po:change"))):
+    """Over / under delivery tolerance for a material, a supplier, or both (the most specific wins at PO creation; BP M09). Audited."""
+    from app.pic.models import ReceiptTolerance
+    from app.pic.platform import audit
+    from app.pic.services.common import material_by_number, supplier_ref
+    if not body.material and not body.supplier:
+        raise Problem(422, "VALIDATION_FAILED", "Give a material, a supplier or both", rule_ref="RCV-TOLERANCE")
+    with uow(p) as s:
+        material = material_by_number(s, body.material) if body.material else None
+        supplier = supplier_ref(s, body.supplier) if body.supplier else None
+        existing = s.execute(select(ReceiptTolerance).where(
+            (ReceiptTolerance.material_id == material.id) if material else ReceiptTolerance.material_id.is_(None),
+            (ReceiptTolerance.supplier_id == supplier.id) if supplier else ReceiptTolerance.supplier_id.is_(None)).with_for_update()).scalar_one_or_none()
+        before = None
+        if existing is None:
+            existing = ReceiptTolerance(tenant_id=p.tenant_id, material_id=material.id if material else None,
+                                        supplier_id=supplier.id if supplier else None, over_pct=body.overPct, under_pct=body.underPct,
+                                        reason=body.reason, set_by=p.user_id, created_by=p.user_id)
+            s.add(existing)
+        else:
+            before = {"overPct": str(existing.over_pct), "underPct": str(existing.under_pct)}
+            existing.over_pct, existing.under_pct, existing.reason, existing.set_by = body.overPct, body.underPct, body.reason, p.user_id
+        s.flush()
+        audit.record(s, "RECEIPT_TOLERANCE", existing.id, "SET", object_ref=f"{body.material or '*'}/{body.supplier or '*'}", before=before,
+                     after={"overPct": str(body.overPct), "underPct": str(body.underPct)}, reason=body.reason)
+        return po_controls.tolerance_view(existing, material.number if material else None, supplier.code if supplier else None)
+
+
+@router.delete("/receipt-tolerances/{tolerance_id}", tags=["F6 Receiving"])
+def delete_receipt_tolerance(tolerance_id: uuid.UUID, p: Principal = Depends(require_any("admin:rules", "po:change"))):
+    from app.pic.models import ReceiptTolerance
+    from app.pic.platform import audit
+    with uow(p) as s:
+        row_ = s.get(ReceiptTolerance, tolerance_id)
+        if row_ is None:
+            raise not_found("Receipt tolerance", tolerance_id)
+        audit.record(s, "RECEIPT_TOLERANCE", row_.id, "REMOVED", object_ref=str(row_.id),
+                     before={"overPct": str(row_.over_pct), "underPct": str(row_.under_pct)})
+        s.delete(row_)
+        return {"removed": str(tolerance_id)}
 
 
 @router.get("/grir", tags=["F7 Invoice"])

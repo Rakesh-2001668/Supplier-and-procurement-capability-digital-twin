@@ -197,6 +197,12 @@ def plan(session: Session, contract: Contract, kind: str, changes: dict, effecti
             raise Problem(422, "NO_CHANGES", "Change at least one of payment terms, incoterms, tolerances or clause text")
 
     else:  # TERMINATION
+        if contract.type == "MASTER_AGREEMENT":
+            call_offs = [c.number for c in session.execute(select(Contract).where(
+                Contract.framework_contract_id == contract.id, Contract.status.in_(("ACTIVE", "EXPIRING"))).order_by(Contract.number)).scalars()]
+            if call_offs:
+                raise rule_violation(f"{contract.number} is the framework of live call-off contract(s) {', '.join(call_offs[:5])}"
+                                     f"{' …' if len(call_offs) > 5 else ''}; terminate or let those end first", "CLM-FRAMEWORK")
         for_cause = bool(changes.get("forCause"))
         notice = int(rule.body["noticeDays"])
         earliest = today + timedelta(days=notice)

@@ -15,7 +15,9 @@ type Signal = {
 };
 type Monitor = { highRiskSupplierPct: string; suppliersWithSignals: number; heat: Heat[]; signals: Signal[] };
 
-const RISK_CATEGORIES = ['COMPLIANCE', 'FRAUD', 'FINANCIAL', 'DELIVERY', 'QUALITY', 'CERTIFICATE'];
+const RISK_CATEGORIES = ['COMPLIANCE', 'FRAUD', 'FINANCIAL', 'DELIVERY', 'QUALITY', 'CERTIFICATE', 'CONCENTRATION', 'GEOGRAPHIC', 'SINGLE_SOURCE', 'CYBER'];
+// Categories raised by the concentration, single-source and cyber rules open a mitigation task for the supplier manager (workflow 31).
+const TASKED = ['CONCENTRATION', 'GEOGRAPHIC', 'SINGLE_SOURCE', 'CYBER'];
 const SEVERITY_RANK: Record<string, number> = { Critical: 0, High: 1, Medium: 2, Low: 3 };
 const SEVERITY_TONE: Record<string, string> = {
   Critical: 'bg-red-600 text-white',
@@ -31,6 +33,10 @@ const SUGGESTED: Record<string, string> = {
   QUALITY: 'Open a CAPA with 8D root-cause analysis; tighten incoming inspection',
   FINANCIAL: 'Review exposure (open POs and contracts) and qualify an alternate source',
   FRAUD: 'Hold payments until the bank change is re-verified by call-back',
+  CONCENTRATION: 'Rebalance volume to qualified alternates (sourcing event) or set a share cap for the next awards',
+  GEOGRAPHIC: 'Qualify a supplier in another region for the category and review buffer stock for the concentrated region',
+  SINGLE_SOURCE: 'Start qualification of a second source for the material (RFI / sourcing event) and agree safety stock meanwhile',
+  CYBER: 'Request the cyber-security questionnaire and certificate evidence; restrict data and system access until accepted',
 };
 
 function Severity({ value }: { value: string }) {
@@ -59,7 +65,7 @@ export default function SupplierRiskMonitor() {
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="SLM-04 · Supplier risk monitor" title="Supplier risk"
-        subtitle="Signals come from screening, certificates, scorecards, the supplier twin, financial-health tiers and the bank-change fraud rule. Each open signal has an owner and needs a mitigation."
+        subtitle="Signals come from screening, certificates, scorecards, the supplier twin, financial-health tiers, the bank-change fraud rule, spend and region concentration, single-source materials and cyber questionnaires. Each open signal has an owner and needs a mitigation."
         actions={<>
           <LinkButton href="/pic/suppliers">Suppliers</LinkButton>
           <LinkButton href="/pic/suppliers/performance">Performance</LinkButton>
@@ -136,7 +142,12 @@ export default function SupplierRiskMonitor() {
               { key: 'detectedAt', header: 'Detected', render: (s) => dateTime(s.detectedAt) },
               { key: 'status', header: 'Status', render: (s) => <StatusChip status={s.status} /> },
               { key: 'mitigation', header: 'Mitigation', className: 'min-w-[200px]', render: (s) => (s.mitigation ? <span className="text-xs text-slate-700">{s.mitigation}</span> : <span className="text-xs text-slate-400">none yet</span>) },
-              { key: 'actions', header: '', render: (s) => (s.status !== 'CLOSED' && canMitigate ? <Button onClick={() => setMitigating(s)}>Mitigate</Button> : null) },
+              { key: 'actions', header: '', render: (s) => (s.status !== 'CLOSED' && canMitigate ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button onClick={() => setMitigating(s)}>Mitigate</Button>
+                  {TASKED.includes(s.category) && s.status === 'OPEN' && <Link href="/pic/tasks" className="text-xs font-medium text-[#1A56DB] hover:underline">Mitigation task</Link>}
+                </div>
+              ) : null) },
             ]} />
             {!canMitigate && <p className="mt-2 text-xs text-slate-500">Signals are mitigated by supplier management, category management or the procurement head.</p>}
           </Card>

@@ -7,6 +7,8 @@ import { api, SessionUser } from '@/lib/pic/api';
 import { date, dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { BlockChip, CaptureInvoiceDialog, InvoiceRow, PoDetail, PoRow, useSessionUser } from '../invoices/_components';
+import { RaiseDebitNoteDialog } from '../invoices/_p2p';
+import { EarlyPaymentDialog } from './_p2p';
 import { AsnDialog, BidDialog, CapaPanel, CreditNoteDialog, ProfilePanel, ProposeChangeDialog, RedlineDialog, RequestChangeDialog, ServiceSheetDialog, SignDialog } from './_components';
 import { AuctionDialog, EventQaDialog } from './_sourcing';
 import { ScheduleConfirmDialog } from '../purchase-orders/[ref]/_ops';
@@ -154,6 +156,8 @@ function Invoices() {
   const list = useList<InvoiceRow>('/invoices');
   const [submit, setSubmit] = useState(false);
   const [credit, setCredit] = useState<string | null>(null);
+  const [debit, setDebit] = useState<string | null>(null);
+  const [early, setEarly] = useState<string | null>(null);
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -172,11 +176,19 @@ function Invoices() {
           { key: 'payment_block', header: 'Payment block', render: (i) => <BlockChip blocked={i.payment_block} /> },
           { key: 'due_date', header: 'Due', render: (i) => date(i.due_date) },
           { key: 'payment_status', header: 'Payment', render: (i) => i.payment_status ? <StatusChip status={i.payment_status} /> : '–' },
-          { key: 'action', header: '', render: (i) => i.open_exceptions > 0 && i.status === 'EXCEPTION' ? <CreditNoteAction id={i.id} onOpen={() => setCredit(i.id)} /> : null },
+          { key: 'action', header: '', render: (i) => (
+            <div className="flex flex-wrap gap-2">
+              {i.open_exceptions > 0 && i.status === 'EXCEPTION' ? <CreditNoteAction id={i.id} onOpen={() => setCredit(i.id)} /> : null}
+              {['MATCHED', 'EXCEPTION', 'APPROVED', 'POSTED', 'PAID'].includes(i.status) && <Button onClick={() => setDebit(i.id)}>Debit note</Button>}
+              {i.status === 'POSTED' && i.payment_status === 'UNPAID' && <Button onClick={() => setEarly(i.id)}>Early payment</Button>}
+            </div>
+          ) },
         ]}
       />
       {submit && <CaptureInvoiceDialog supplierMode onClose={() => setSubmit(false)} />}
       {credit && <CreditNoteDialog invoiceId={credit} onClose={() => setCredit(null)} />}
+      {debit && <RaiseDebitNoteDialog invoiceId={debit} onClose={() => setDebit(null)} />}
+      {early && <EarlyPaymentDialog invoiceId={early} onClose={() => setEarly(null)} />}
     </div>
   );
 }

@@ -31,7 +31,7 @@ def database():
     engine.dispose()
     config = Config(str(BACKEND_DIR / "alembic_pic.ini"))
     config.set_main_option("script_location", str(BACKEND_DIR / "pic_migrations"))
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")  # wave 1: parallel migration branches until the integrator re-chains them
     import app.pic.services  # noqa: F401
     from app.pic.seed import axion
     axion.run(PASSWORD)

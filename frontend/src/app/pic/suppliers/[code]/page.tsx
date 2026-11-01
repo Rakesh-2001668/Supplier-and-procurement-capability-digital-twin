@@ -8,6 +8,9 @@ import { api } from '@/lib/pic/api';
 import { date, dateTime, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { useCertificateVerifier, useSupplierManager } from '../roles';
+import { AssessmentsCard } from './_assessments';
+import { PlansCard } from './_plans';
+import { SegmentCard, SegmentChip } from './_segment';
 import { Address, MasterDataCard, PunchoutCard, PunchoutConfig } from './master-data';
 
 type CategoryStatus = { id: string; category: string; status: string; waiver_reason: string | null; qualified_on: string | null; updated_at: string | null };
@@ -110,13 +113,15 @@ export default function Supplier360Page() {
           ['Contact', s.contact_email],
           ['Payment terms', s.payment_terms],
           ['Incoterms', s.incoterms ?? '–'],
-          ['Segment', s.segment ? label(s.segment) : '–'],
+          ['Segment', <SegmentChip key="seg" segment={s.segment} />],
           ['Risk tier', s.risk_tier ?? '–'],
           ['Screening', s.screening?.outcome ? <span key="sc">{label(s.screening.outcome)} <span className="text-xs font-normal text-slate-500">
             {s.screening.duplicates?.length ?? 0} duplicates · {s.screening.sanctionsHits?.length ?? 0} sanctions hits · {dateTime(s.screening.screenedAt)}
             {disposition ? ` · ${label(disposition.decision)} by ${disposition.byName ?? 'supplier manager'}${disposition.mergedInto ? ` into ${disposition.mergedInto}` : ''}` : ''}</span></span> : 'not screened yet'],
         ]} />
       </Card>
+
+      <SegmentCard code={s.code} manager={manager} />
 
       <Card title="Status by category">
         {!s.categories.length ? <Empty title="No categories" /> : (
@@ -155,6 +160,10 @@ export default function Supplier360Page() {
           </div>
         )}
       </Card>
+
+      <PlansCard code={s.code} manager={manager} />
+
+      <AssessmentsCard code={s.code} manager={manager} />
 
       <Card>
         <Tabs tabs={[

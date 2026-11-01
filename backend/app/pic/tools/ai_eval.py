@@ -235,6 +235,19 @@ def _shift(period: str, months: int) -> str:
 
 
 def evaluate_forecast(sc) -> dict:
+    """The registry's model and, side by side, the exponential-smoothing baseline (demand-es-v1) on the same holdout."""
+    from app.pic.services import forecasting
+
+    current = _evaluate_forecast_once(sc)
+    forecasting.FORCE_VERSION = "demand-es-v1"
+    try:
+        base = _evaluate_forecast_once(sc, with_spend=False)
+    finally:
+        forecasting.FORCE_VERSION = None
+    return {**current, "baselineMapeH1": base["mapeH1"], "baselineMapeByHorizon": base["mapeByHorizon"], "baselineMapeH1ByMaterial": base["mapeH1ByMaterial"]}
+
+
+def _evaluate_forecast_once(sc, with_spend: bool = True) -> dict:
     from sqlalchemy import select
 
     from app.pic.models import Forecast, Material
@@ -273,10 +286,11 @@ def evaluate_forecast(sc) -> dict:
 
     by_material = {m: mape([p for p in points if p["material"] == m and p["horizon"] == 1]) for m in sorted({p["material"] for p in points})}
     h1 = [p for p in points if p["horizon"] == 1]
-    return {"model": f"forecasting.generate ({forecasting.MODEL_VERSION}, rule DEMAND-SENSING)", "origins": origins, "points": len(points),
+    return {"model": f"forecasting.generate ({forecasting.FORCE_VERSION or 'registry: demand-sgb-v1 with demand-es-v1 fallback'}, rule DEMAND-SENSING)",
+            "origins": origins, "points": len(points),
             "mapeH1": mape(h1), "mapeByHorizon": {h: mape([p for p in points if p["horizon"] == h]) for h in (1, 2, 3)},
             "mapeAll": mape(points), "erpPlanMapeH1": mape(h1, "erpPlan"), "mapeH1ByMaterial": by_material,
-            "integrityErrors": integrity, "spendForecast": evaluate_spend_forecast(sc)}
+            "integrityErrors": integrity, "spendForecast": evaluate_spend_forecast(sc) if with_spend else None}
 
 
 def evaluate_spend_forecast(sc) -> dict:
@@ -353,6 +367,16 @@ def evaluate_dedup(sc) -> dict:
                 continue
             result = supplier_svc.screen(s, masters[pair["b_code"]], record_step=False)
             predicted["F8_SCREENING"][pair["pair_id"]] = pair["a_code"] in {d["code"] for d in result["duplicates"]}
+        # Embedding stand-in (ml_models.duplicate_score): character n-gram hashing cosine + name ratio, with the PAN / GSTIN rules and the PAN veto
+        from app.pic.services import ml_models
+        predicted["EMBEDDING"], predicted["EMBEDDING_REVIEW"] = {}, {}
+        for pair in pairs:
+            if pair["pair_id"] not in predicted["F8_SCREENING"]:
+                continue
+            a, b = masters[pair["a_code"]], masters[pair["b_code"]]
+            scored = ml_models.duplicate_score(a.legal_name, b.legal_name, pan_a=a.pan_hash, pan_b=b.pan_hash, gstin_a=a.gstin_hash, gstin_b=b.gstin_hash)
+            predicted["EMBEDDING"][pair["pair_id"]] = scored["decision"] == "DUPLICATE"
+            predicted["EMBEDDING_REVIEW"][pair["pair_id"]] = scored["decision"] in ("DUPLICATE", "REVIEW")
         clusters = spend.suppliers_view(s)["duplicateClusters"]
         together = set()
         for cluster in clusters:
@@ -490,13 +514,14 @@ def summary_lines(report: dict) -> list[str]:
     if f:
         sf = f["spendForecast"]
         lines.append(f"Demand forecast ({f['points']} points, origins {f['origins'][0]}–{f['origins'][-1]}): MAPE h1 {f['mapeH1']}, "
-                     f"by horizon {f['mapeByHorizon']}, ERP plan h1 {f['erpPlanMapeH1']}; spend forecast {sf['holdout'][0]}–{sf['holdout'][-1]}: "
+                     f"by horizon {f['mapeByHorizon']}, ERP plan h1 {f['erpPlanMapeH1']}, baseline (demand-es-v1) h1 {f.get('baselineMapeH1')}; spend forecast {sf['holdout'][0]}–{sf['holdout'][-1]}: "
                      f"MAPE {sf['mape']}, 80% band coverage {sf['bandCoverage']}")
     d = report.get("dedup")
     if d:
         lines.append(f"Supplier dedup ({d['pairs']} pairs, {d['duplicates']} duplicates): F8 screening P {d['F8_SCREENING']['precision']} "
                      f"R {d['F8_SCREENING']['recall']}; SPD clusters P {d['SPD_CLUSTERS']['precision']} R {d['SPD_CLUSTERS']['recall']}; "
-                     f"either P {d['EITHER']['precision']} R {d['EITHER']['recall']}")
+                     f"either P {d['EITHER']['precision']} R {d['EITHER']['recall']}; embedding+rules P {d['EMBEDDING']['precision']} "
+                     f"R {d['EMBEDDING']['recall']} (with review band P {d['EMBEDDING_REVIEW']['precision']} R {d['EMBEDDING_REVIEW']['recall']})")
     q = report.get("copilot")
     if q:
         lines.append(f"Copilot ({q['questions']} questions): contract completeness {q['completeness']} (gate {q['gate']}), routing "

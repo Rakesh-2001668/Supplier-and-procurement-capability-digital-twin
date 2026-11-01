@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:advance.approved",
+  "title": "advance.approved",
+  "description": "Payload (outbox_event.payload) of advance.approved on ADVANCE_PAYMENT. Produced by services/ind_construction.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "grossMinor": {},
+    "document": {}
+  },
+  "required": [
+    "po",
+    "grossMinor",
+    "document"
+  ],
+  "additionalProperties": true
+}

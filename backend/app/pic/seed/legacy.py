@@ -767,6 +767,10 @@ def _continue(sc: Scenario, ctx: Ctx, pending: list[dict], start: datetime) -> N
             instance = workflow.start(s, order.PROCESS, "PURCHASE_ORDER", row.id, row.number)
             workflow.step(s, instance, "F5-02", outcome=f"migrated from {SOURCE}; pending approval in the legacy system")
             result = order.validate(s, row)
+            # BP M06 hard block: a supplier still under requalification only gets this order through a documented one-time-vendor exception.
+            from app.pic.services import po_controls
+            po_controls.record_one_time_vendor(s, row, f"Migrated from {SOURCE}: the supplier is under requalification; the order was already in approval there",
+                                               s.info["principal"].actor)
             order.route(s, row)
             routed.append(f"{row.number}: risk {result['riskScore']} ({', '.join(f['code'] for f in result['factors']) or 'no factors'}) → {row.status}")
     live["poApproval"] = routed
@@ -892,6 +896,15 @@ def _reconcile(ctx: Ctx, tenant_id: uuid.UUID) -> dict:
     }
 
 
+def _national_holidays() -> list:
+    """Factory calendar of the migrated legacy plants. The legacy extract carries no state for a plant (state code 00), so the
+    calendar is the Government of India (DoPT) public-holiday list for 2026 and 2027 from data/reference/holidays_2026_2027.csv;
+    the plant's state list replaces it once the state is known."""
+    from app.pic.seed.datasets.reference_data import holiday_lists
+    national = holiday_lists().get("IN", {})
+    return sorted({d for year in (2026, 2027) for d, _, _ in national.get(year, [])})
+
+
 # ---------------------------------------------------------------- entry point
 def migrate(snapshot: dict, password: str, fx: Decimal = Decimal(1)) -> list[dict]:
     legacy = Legacy(snapshot)
@@ -910,7 +923,8 @@ def migrate(snapshot: dict, password: str, fx: Decimal = Decimal(1)) -> list[dic
         clock.set_pinned(cutover)
         tenant_id = reference.create_tenant(ctx.code, buyer["name"])
         reference.bootstrap(tenant_id, company=(COMPANY, buyer["name"], None), plants=[(PLANT, f"{buyer['name']} – main plant", "00")],
-                            cost_objects=[("COST_CENTER", COST_CENTER, "Operations"), ("COST_CENTER", "2000", "Engineering")])
+                            cost_objects=[("COST_CENTER", COST_CENTER, "Operations"), ("COST_CENTER", "2000", "Engineering")],
+                            holidays=_national_holidays())
         sc = Scenario(tenant_id, ctx.code, ctx.domain, ROLE_USER)
         _users(sc, ctx, password)
         _suppliers(sc, ctx, password)

@@ -23,7 +23,7 @@ export default function MrpConsole() {
   const { scopes } = useMe();
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="MRP-01 / MRP-02 / MRP-03 · Material requirements planning" title="MRP console"
+      <PageHeader kpis="M02" eyebrow="MRP-01 / MRP-02 / MRP-03 · Material requirements planning" title="MRP console"
         subtitle="Run net-change, regenerative or simulation planning per plant, review exceptions and firm or convert planned orders into purchase requisitions."
         actions={<LinkButton href="/pic/mrp/forecast">Demand forecast review (MRP-04)</LinkButton>} />
       <RunConsole canRun={scopes.includes('mrp:run')} />

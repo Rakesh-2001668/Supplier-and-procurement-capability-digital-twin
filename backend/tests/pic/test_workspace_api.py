@@ -38,8 +38,9 @@ def test_dashboard_kpis(client, login):
     # SV-0412 (0.99 Cr, signature case) plus the fastener initiative SV-0413 (0.036 Cr).
     assert k["savings"]["negotiatedCr"] == "1.03"
     assert k["purchasing"]["touchlessPct"] is not None
-    # First pass: HTS/1107, HTS/1188, INV-TF-9031 yes; INV-TF-8812 (credit note) and KD/2702-118 (price) no; the rejected duplicate never matched.
-    assert k["payables"]["firstPassMatchPct"] == "60.0"
+    # First pass: HTS/1107, HTS/1188, INV-TF-9031 yes; INV-TF-8812 (credit note) and KD/2702-118 (price) no; the rejected duplicate never matched;
+    # plus the nine clean SA-5520 call-off invoices of seed/operations.py Case 9: 12 of 14 = 85.7% (Blueprint section 20: first-pass match 86%).
+    assert k["payables"]["firstPassMatchPct"] == "85.7"
     assert k["activity"]
 
 

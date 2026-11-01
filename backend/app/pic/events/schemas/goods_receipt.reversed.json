@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:goods_receipt.reversed",
+  "title": "goods_receipt.reversed",
+  "description": "Payload (outbox_event.payload) of goods_receipt.reversed on GOODS_RECEIPT. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "grId": {
+      "type": "string"
+    },
+    "po": {},
+    "from": {},
+    "reason": {}
+  },
+  "required": [
+    "grId",
+    "po",
+    "from",
+    "reason"
+  ],
+  "additionalProperties": true
+}

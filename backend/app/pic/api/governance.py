@@ -31,7 +31,7 @@ class ContractLineIn(BaseModel):
 
 
 class ContractIn(BaseModel):
-    type: str = Field(pattern="^(SCHEDULING_AGREEMENT|QUANTITY_CONTRACT|VALUE_CONTRACT)$")
+    type: str = Field(pattern="^(SCHEDULING_AGREEMENT|QUANTITY_CONTRACT|VALUE_CONTRACT|MASTER_AGREEMENT|NDA)$")
     title: str
     supplier: str
     company_code: str = "1000"
@@ -39,9 +39,11 @@ class ContractIn(BaseModel):
     valid_to: date
     payment_terms: str
     incoterms: Optional[str] = None
-    lines: list[ContractLineIn] = Field(min_length=1)
+    lines: list[ContractLineIn] = []  # at least one for a call-off contract; a master agreement and an NDA have none
     tolerances: dict = {"over_pct": "0", "under_pct": "0", "price_pct": "0"}
     index_ref: Optional[dict] = None  # e.g. {"index": "LME_AL", "base": "100.00", "band_pct": "3", "reset": "QUARTERLY"}
+    framework: Optional[str] = None  # number of the master agreement a call-off contract refers to
+    jurisdiction: Optional[str] = Field(default=None, pattern="^[A-Z]{2}(-[A-Z0-9]{1,3})?$")  # governing-law variant of the clause library
 
 
 @router.post("/contracts", status_code=201, tags=["F4 Contract"])
@@ -55,8 +57,15 @@ def create_contract(body: ContractIn, p: Principal = Depends(require("contract:m
         supplier = supplier_ref(s, body.supplier)
         if supplier.status == "BLOCKED":
             raise Problem(409, "SUPPLIER_BLOCKED", f"{supplier.code} is blocked", rule_ref="SLM")
+        if body.type not in contract_svc.FRAMEWORK_TYPES and not body.lines:
+            raise Problem(422, "LINES_REQUIRED", "A contract needs at least one line; only a master agreement or an NDA has none")
         if body.type == "SCHEDULING_AGREEMENT" and not body.index_ref:
             raise Problem(422, "INDEX_REQUIRED", "A scheduling agreement carries the price-index clause; give index_ref (index, base, band_pct)")
+        framework = None
+        if body.framework:
+            framework = s.execute(select(contract_svc.Contract).where(contract_svc.Contract.number == body.framework)).scalar_one_or_none()
+            if framework is None:
+                raise not_found("Contract", body.framework)
         lines = []
         for line in body.lines:
             material = None
@@ -69,14 +78,15 @@ def create_contract(body: ContractIn, p: Principal = Depends(require("contract:m
         contract = contract_svc.create_draft(s, type=body.type, title=body.title, supplier_id=supplier.id, company_code=body.company_code,
                                              valid_from=body.valid_from, valid_to=body.valid_to, payment_terms=body.payment_terms,
                                              incoterms=body.incoterms, lines=lines, owner_id=p.user_id, tolerances=body.tolerances,
-                                             index_ref=body.index_ref)
+                                             index_ref=body.index_ref, framework_contract_id=framework.id if framework else None,
+                                             jurisdiction=body.jurisdiction)
         return guard.store(row(contract), 201)
 
 
 @router.get("/contract-templates", tags=["F4 Contract"])
-def contract_templates(p: Principal = Depends(require(READ))):
+def contract_templates(jurisdiction: Optional[str] = None, p: Principal = Depends(require(READ))):
     with uow(p) as s:
-        return contract_svc.templates(s)
+        return contract_svc.templates(s, jurisdiction)
 
 
 @router.get("/obligations", tags=["F4 Contract"])

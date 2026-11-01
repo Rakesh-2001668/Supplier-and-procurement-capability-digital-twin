@@ -167,19 +167,26 @@ def test_event_commands_need_the_owner_or_a_category_manager_and_the_close_timer
         assert p.status == 422 and p.rule_ref == "P06/SRC-INVITE"
 
 
-def test_an_event_is_evaluated_per_item_so_it_has_exactly_one_line():
+def test_an_event_may_have_several_lines_but_never_the_same_requirement_line_twice_or_none_at_all():
+    """Pending workflow 19 replaced the one-item rule (SRC-ONE-LINE): events are evaluated and awarded per line and lot
+    (see test_wave1_sourcing_contracts.py). What stays refused: no line, the same requirement line twice, a lot of one line."""
     with rolled_back(at(2029, 3, 1)) as s:
         act(s, "category.head")
         line = {"requisition": "REQ-2312", "line": 10, "annual_qty": "20000", "monthly_qty": "2000"}
-        p = problem(sourcing.create_event, s, type="RFP", title="F#6 two lines", category="ALU-DIECAST", lines=[line, line],
-                    criteria=PRICE_ONLY, invitees=[{"supplier": "TF001"}], close_at=at(2029, 3, 8, 17))
-        assert p.status == 422 and p.rule_ref == "SRC-ONE-LINE"
+        common = dict(type="RFP", title="F#6 two lines", category="ALU-DIECAST", criteria=PRICE_ONLY, invitees=[{"supplier": "TF001"}],
+                      close_at=at(2029, 3, 8, 17))
+        assert problem(sourcing.create_event, s, lines=[], **common).code == "INVALID_LINES"
+        p = problem(sourcing.create_event, s, lines=[line, line], **common)
+        assert p.status == 422 and p.rule_ref == "SRC-BUNDLE"
         event = _draft(s, "F#6 publish check", at(2029, 3, 8, 17))
         first = s.execute(select(EventLine).where(EventLine.event_id == event.id)).scalar_one()
         s.add(EventLine(tenant_id=event.tenant_id, event_id=event.id, line_no=20, material_id=first.material_id, description=first.description,
-                        plant=first.plant, annual_qty=first.annual_qty, monthly_qty=first.monthly_qty, uom=first.uom))
+                        plant=first.plant, annual_qty=first.annual_qty, monthly_qty=first.monthly_qty, uom=first.uom, lot_code="A"))
         s.flush()
-        assert problem(sourcing.publish, s, event).rule_ref == "SRC-ONE-LINE"
+        assert problem(sourcing.publish, s, event).code == "INVALID_LOT"  # a lot groups at least two lines
+        s.execute(select(EventLine).where(EventLine.event_id == event.id, EventLine.line_no == 20)).scalar_one().lot_code = None
+        s.flush()
+        assert sourcing.publish(s, event).status == "OPEN"  # two lines are fine
 
 
 # ---------------------------------------------------------------- F#7 max share binds a single supplier, F#13 rank, F#14 scores

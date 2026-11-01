@@ -22,17 +22,32 @@ router = APIRouter(prefix="/v1")
 
 
 # ---------------------------------------------------------------- F3 sourcing
-class EventLineIn(BaseModel):
+class SourceIn(BaseModel):
     requisition: str
     line: int
-    annual_qty: Decimal
-    monthly_qty: Decimal
+    qty: Optional[Decimal] = Field(default=None, gt=0)
+
+
+class EventLineIn(BaseModel):
+    requisition: Optional[str] = None  # one requirement line ...
+    line: Optional[int] = None
+    sources: Optional[list[SourceIn]] = None  # ... or several merged into one event line (requirement bundling)
+    annual_qty: Decimal = Field(gt=0)
+    monthly_qty: Decimal = Field(gt=0)
+    lot: Optional[str] = Field(default=None, max_length=20)  # lines with the same lot code can be bid and awarded as a bundle
+    baseline_price_minor: Optional[int] = Field(default=None, ge=0)
 
 
 class CriterionIn(BaseModel):
     code: str
     name: str
-    weight: int
+    weight: int = Field(ge=0, le=100)
+    data_source: Optional[str] = Field(default=None, pattern="^(MANUAL|SCORECARD|ESG|RISK)$")  # score taken from platform data at close
+
+
+class BundleIn(BaseModel):
+    kind: str = Field(default="PR_LINES", pattern="^(PR_LINES|MRP_DEMAND|CATEGORY_PLAN)$")
+    ref: Optional[str] = None
 
 
 class InviteeIn(BaseModel):
@@ -44,7 +59,7 @@ class EventIn(BaseModel):
     type: str = Field(pattern="^(RFI|RFQ|RFP|REVERSE_AUCTION)$")
     title: str
     category: str
-    lines: list[EventLineIn]
+    lines: list[EventLineIn] = Field(min_length=1, max_length=50)
     criteria: list[CriterionIn]
     invitees: list[InviteeIn]
     close_at: datetime
@@ -54,6 +69,7 @@ class EventIn(BaseModel):
     constraints: Optional[dict] = None
     tco_params: Optional[dict] = None
     savings_target_pct: Optional[Decimal] = None
+    bundle: Optional[BundleIn] = None
 
 
 @router.post("/sourcing/events", status_code=201, tags=["F3 Sourcing"])
@@ -85,15 +101,23 @@ class BidLineIn(BaseModel):
     capacity_per_month: Optional[Decimal] = None
 
 
+class BidLotIn(BaseModel):
+    lot: str
+    discount_pct: Decimal = Field(default=Decimal(0), ge=0, lt=100)  # applies when the supplier is awarded the whole lot
+    all_or_nothing: bool = False  # the supplier accepts the lot only as a whole
+
+
 class BidIn(BaseModel):
-    lines: list[BidLineIn] = Field(min_length=1)  # exactly one line per event line (checked in sourcing.submit_bid)
+    lines: list[BidLineIn] = Field(min_length=1)  # a price for every event line of a single-line event; partial bids allowed on several lines
+    lots: list[BidLotIn] = []
 
 
 @router.post("/sourcing/events/{ref}/bids", status_code=201, tags=["F3 Sourcing"])
 def submit_bid(ref: str, body: BidIn, p: Principal = Depends(require("bid:submit"))):
     with uow(p) as s:
         event = by_ref(s, SourcingEvent, ref, lock=True)
-        bid = sourcing.submit_bid(s, event, s.get(Supplier, p.supplier_id), [l.model_dump(mode="json") for l in body.lines])
+        bid = sourcing.submit_bid(s, event, s.get(Supplier, p.supplier_id), [l.model_dump(mode="json") for l in body.lines],
+                                  [l.model_dump(mode="json") for l in body.lots])
         return {"event": event.number, "round": bid.round, "status": bid.status, "hash": bid.payload_hash,
                 "submittedAt": bid.submitted_at.isoformat()}
 
@@ -102,6 +126,15 @@ def submit_bid(ref: str, body: BidIn, p: Principal = Depends(require("bid:submit
 def view_bids(ref: str, p: Principal = Depends(require("sourcing:manage"))):
     with uow(p) as s:
         return sourcing.bids_view(s, by_ref(s, SourcingEvent, ref))
+
+
+@router.get("/sourcing/events/{ref}/line-matrix", tags=["F3 Sourcing"])
+def line_matrix(ref: str, p: Principal = Depends(require("sourcing:manage"))):
+    """Per event line: every bid on the line ranked by TCO (after close)."""
+    with uow(p) as s:
+        event = by_ref(s, SourcingEvent, ref)
+        sourcing.bids_view(s, event)  # sealed until close, the attempt is logged
+        return sourcing.line_matrix(s, event)
 
 
 @router.post("/sourcing/events/{ref}/close", tags=["F3 Sourcing"])

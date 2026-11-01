@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:debit_note.posted",
+  "title": "debit_note.posted",
+  "description": "Payload (outbox_event.payload) of debit_note.posted on DEBIT_NOTE. Produced by services/debit_notes.py.",
+  "type": "object",
+  "properties": {
+    "invoice": {},
+    "erpDocument": {},
+    "grossMinor": {}
+  },
+  "required": [
+    "invoice",
+    "erpDocument",
+    "grossMinor"
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:supplier.master.changed",
+  "title": "supplier.master.changed",
+  "description": "Payload (outbox_event.payload) of supplier.master.changed on SUPPLIER. Produced by services/master_changes.py.",
+  "type": "object",
+  "properties": {
+    "supplierCode": {},
+    "change": {},
+    "fieldGroup": {},
+    "after": {},
+    "screening": {},
+    "erpMessage": {
+      "type": [
+        "null",
+        "string"
+      ]
+    }
+  },
+  "required": [
+    "supplierCode",
+    "change",
+    "fieldGroup",
+    "after",
+    "screening",
+    "erpMessage"
+  ],
+  "additionalProperties": true
+}

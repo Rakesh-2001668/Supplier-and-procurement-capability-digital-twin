@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sod.mitigation.decided",
+  "title": "sod.mitigation.decided",
+  "description": "Payload (outbox_event.payload) of sod.mitigation.decided on SOD_MITIGATION. Produced by platform/sod.py.",
+  "type": "object",
+  "properties": {
+    "mitigationId": {
+      "type": "string"
+    },
+    "rule": {},
+    "action": {},
+    "status": {},
+    "requester": {
+      "type": "string"
+    },
+    "validUntil": {
+      "type": [
+        "null",
+        "string"
+      ]
+    }
+  },
+  "required": [
+    "mitigationId",
+    "rule",
+    "action",
+    "status",
+    "requester",
+    "validUntil"
+  ],
+  "additionalProperties": true
+}

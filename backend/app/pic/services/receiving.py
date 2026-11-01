@@ -14,11 +14,14 @@ from app.pic.models import (
     Asn, AsnLine, AuditEvent, GoodsReceipt, GrLine, InspectionLot, Invoice, InvoiceLine, Material, PoLine, PurchaseOrder, ReturnDelivery,
     ServiceEntry, SesLine, Stock, StockMovement, Supplier, Task,
 )
+from app.pic.platform import abac
 from app.pic.platform import audit, clock, integration, outbox, rules, sod, workflow
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount, tax_amount
 from app.pic.platform.serialize import jsonable
+from app.pic.services import ind_healthcare
+from app.pic.services import mandatory, p2p_rules, po_controls
 from app.pic.services import order as order_svc
 from app.pic.services.common import principal, require_supplier_user
 
@@ -146,7 +149,7 @@ def create_asn(session: Session, po: PurchaseOrder, *, lines: list[dict], ship_d
     for data in lines:
         line = po_lines[int(data["line"])]
         qty = D(data["qty"])
-        limit = line.qty * (1 + D(po.tolerance.get("over_pct", 0)) / 100)
+        limit = line.qty * (1 + po_controls.line_tolerance(po, line)[0] / 100)  # BP M09: per material / supplier override
         if line.shipped_qty + qty > limit:
             raise rule_violation(f"Line {line.line_no}: shipping {qty} exceeds ordered quantity with tolerance", "RCV-TOLERANCE")
         line.shipped_qty += qty
@@ -178,6 +181,53 @@ def eway_warnings(session: Session, gr: GoodsReceipt) -> list[dict]:
 
 
 # ---------------------------------------------------------------- goods receipt (F6-02/03/05)
+def _mandatory_fields(session: Session, po: PurchaseOrder, lines: list[dict], asn: Optional[Asn], delivery_note: Optional[str],
+                      posting_date: Optional[date]) -> None:
+    """Rule MANDATORY-FIELDS (document GR_POST), scoped by company code, plant and the received lines' category / purchase type."""
+    po_lines = {l.line_no: l for l in order_svc.lines_of(session, po)}
+    received = [po_lines[int(d["line"])] for d in lines if int(d["line"]) in po_lines]
+    category, purchase_type = mandatory.dominant((l.material_group, l.purchase_type, l.net_minor) for l in received)
+    header = {"delivery_note": delivery_note, "asn": asn.number if asn else None, "posting_date": posting_date or clock.today()}
+    body = [{**{k: d.get(k) for k in mandatory.CATALOGUE["GR_POST"]["lines"]}, "_line_no": d.get("line")} for d in lines]
+    supplier = session.get(Supplier, po.supplier_id)
+    mandatory.check(session, "GR_POST", header, body, company_code=po.company_code, plant=po.plant, category=category,
+                    purchase_type=purchase_type, supplier_group=supplier.supplier_group if supplier else None)
+
+
+def capitalisation(session: Session, po: PurchaseOrder, gr: GoodsReceipt) -> list[dict]:
+    """Capitalisation data of the asset lines of a receipt for the ERP posting: asset class (rule ASSET-CAPITALISATION by valuation
+    class, then material group, then the default), the asset number or WBS element the line is assigned to, the cost centre and
+    the capitalise flag. ``needsAssetClass`` is true when the tenant has not configured an asset class for the line."""
+    from app.pic.models import AppUser, Requisition
+    rows = session.execute(select(GrLine, PoLine).join(PoLine, PoLine.id == GrLine.po_line_id).where(
+        GrLine.gr_id == gr.id, PoLine.purchase_type == "ASSET").order_by(GrLine.line_no)).all()
+    if not rows:
+        return []
+    rule = p2p_rules.rule(session, "ASSET-CAPITALISATION", company_code=po.company_code)
+    body = rule.body
+    out = []
+    for gr_line, line in rows:
+        material = session.get(Material, line.material_id) if line.material_id else None
+        asset_class = ((body.get("assetClassByValuationClass") or {}).get(material.valuation_class) if material and material.valuation_class else None
+                       ) or (body.get("assetClassByMaterialGroup") or {}).get(line.material_group) or body.get("defaultAssetClass")
+        cost_centre = (body.get("costCentreByPlant") or {}).get(line.plant)
+        if not cost_centre and line.requisition_id:
+            requisition = session.get(Requisition, line.requisition_id)
+            owner = session.get(AppUser, requisition.requester_id) if requisition else None
+            cost_centre = next((c.split(":", 1)[1] for c in (owner.attributes or {}).get("cost_objects", []) if str(c).startswith("COST_CENTER:")), None) \
+                if owner else None
+        if not cost_centre and line.account_assignment_type == "COST_CENTER":
+            cost_centre = line.account_assignment_code
+        out.append({"poLine": line.line_no, "grLine": gr_line.line_no, "material": material.number if material else None,
+                    "description": line.description, "acceptedQty": str(gr_line.accepted_qty),
+                    "valueMinor": line_amount(gr_line.accepted_qty, line.unit_price_minor), "capitalise": bool(body.get("capitalise", True)),
+                    "assetClass": asset_class, "needsAssetClass": asset_class is None,
+                    "assetNumber": line.account_assignment_code if line.account_assignment_type == "ASSET" else None,
+                    "wbsElement": line.account_assignment_code if line.account_assignment_type == "WBS" else None,
+                    "costCentre": cost_centre, "capitalisationDate": gr.posting_date.isoformat(), "rule": rule.ref})
+    return out
+
+
 def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Optional[Asn] = None, delivery_note: Optional[str] = None,
             posting_date: Optional[date] = None) -> GoodsReceipt:
     p = principal(session)
@@ -190,6 +240,7 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
                       f"not {po.number}; post the receipt against that order or without the ASN", rule_ref="F6-03",
                       asn=asn.number, asnPo=other.number if other else None, po=po.number)
     sod.guard(session, "GR_POST", {"po_id": po.id})
+    abac.guard(session, "GR_POST", po)
     po_lines = {l.line_no: l for l in order_svc.lines_of(session, po)}
     if not lines:
         raise Problem(422, "LINES_REQUIRED", "A goods receipt lists at least one received line", rule_ref="RCV")
@@ -197,6 +248,7 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
         if int(data["line"]) not in po_lines:
             raise Problem(422, "UNKNOWN_LINE", f"{po.number} has no line {data['line']}")
         _positive(data["qty"], f"Line {data['line']}")
+    _mandatory_fields(session, po, lines, asn, delivery_note, posting_date)
     gr = GoodsReceipt(tenant_id=po.tenant_id, number=next_number(session, "GOODS_RECEIPT"), po_id=po.id, asn_id=asn.id if asn else None,
                       status="POSTED", posting_date=posting_date or clock.today(), delivery_note=delivery_note, posted_by=p.user_id,
                       created_by=p.user_id)
@@ -214,7 +266,7 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
             raise rule_violation(f"Line {line.line_no} ({line.purchase_type.lower()}) is receipt-less below the threshold: "
                                  "the invoice is matched 2-way against the order, no goods receipt is posted", "P08")
         qty = D(data["qty"])
-        over = D(po.tolerance.get("over_pct", 0))
+        over = po_controls.line_tolerance(po, line)[0]
         if line.received_qty + qty > line.qty * (1 + over / 100):
             raise rule_violation(f"Line {line.line_no}: over-delivery beyond +{over}% is blocked at receipt "
                                  f"({line.received_qty + qty} > {line.qty})", "RCV-TOLERANCE")
@@ -262,6 +314,7 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
     link(session, "PURCHASE_ORDER", po.id, po.number, "GOODS_RECEIPT", gr.id, gr.number, "received_against")
     if asn is not None:
         link(session, "ASN", asn.id, asn.number, "GOODS_RECEIPT", gr.id, gr.number, "received_against")
+    ind_healthcare.on_goods_receipt(session, gr)  # cold chain: an excursion reported on the ASN quarantines these goods (healthcare rule)
     outbox.emit(session, "goods_receipt.posted", "GOODS_RECEIPT", gr.id, gr.number,
                 {"grId": str(gr.id), "po": po.number, "qualityHold": quality_hold,
                  "lines": [{"line": l["line"], "qty": str(l["qty"])} for l in lines]})
@@ -364,12 +417,14 @@ def usage_decision(session: Session, lot: InspectionLot, *, accepted: Decimal, r
 
 def _complete_receipt(session: Session, gr: GoodsReceipt, instance, outcome: str) -> None:
     po = session.get(PurchaseOrder, gr.po_id)
+    capitalised = capitalisation(session, po, gr)  # BP §22: asset lines carry asset class, cost centre and the capitalise flag
     message = integration.enqueue(session, target_system=integration.target_system(session, po.company_code), message_type="GOODS_RECEIPT",
                                   idempotency_key=f"GR|{gr.number}",
                                   object_type="GOODS_RECEIPT", object_id=gr.id, object_ref=gr.number,
                                   payload={"gr": gr.number, "po": po.number, "companyCode": po.company_code,
                                            "lines": [{"poLine": str(l.po_line_id), "accepted": str(l.accepted_qty)}
-                                                     for l in session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars()]})
+                                                     for l in session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars()],
+                                           **({"capitalisation": capitalised} if capitalised else {})})
     integration.process(session, message)
     workflow.step(session, instance, "F6-08", outcome=f"{outcome}; ERP material document {message.erp_doc_no}")
     workflow.end(session, instance, "F6-09", outcome=gr.status.lower().replace("_", " "))

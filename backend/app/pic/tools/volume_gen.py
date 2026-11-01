@@ -195,9 +195,13 @@ def generate_transactions(engine, tenant_id: uuid.UUID, plants: list[str], vol: 
     n_inv = 0
 
     def flush(final=False):
-        for table, rows in ((PurchaseOrder.__table__, pos), (PoLine.__table__, po_lines), (Invoice.__table__, invoices),
-                            (InvoiceLine.__table__, inv_lines), (SpendLine.__table__, spend)):
-            if rows and (final or len(rows) >= CHUNK):
+        batches = ((PurchaseOrder.__table__, pos), (PoLine.__table__, po_lines), (Invoice.__table__, invoices),
+                   (InvoiceLine.__table__, inv_lines), (SpendLine.__table__, spend))
+        # All tables flush together once one is full: invoice lines reference their invoices and PO lines their POs, so a parent
+        # table must never trail the child that reaches the chunk size first.
+        due = final or any(len(rows) >= CHUNK for _, rows in batches)
+        for table, rows in batches:
+            if rows and due:
                 copier.copy(table, rows)
                 rows.clear()
 
@@ -316,12 +320,20 @@ def cube_principal(tenant_id: uuid.UUID):
 
 
 def measure_cube(tenant_id: uuid.UUID) -> list[dict]:
+    """Build the cube summaries (the scheduled refresh job; its time is reported, the 3 s target applies to queries), then time the
+    cube queries and the SPD-01 overview against the summaries."""
     from app.pic.db import tenant_tx
-    from app.pic.services import savings
+    from app.pic.services import savings, spend
 
     principal = cube_principal(tenant_id)
     out = []
-    for dims in (["category"], ["supplier"], ["category", "period"]):
+    t0 = time.perf_counter()
+    refreshed = spend.refresh_spend_views(tenant_id, full=True)
+    seconds = time.perf_counter() - t0
+    out.append({"dimensions": ["(refresh)"], "seconds": round(seconds, 3), "rows": refreshed["cube"]["summaryRows"], "lines": refreshed["cube"]["lines"],
+                "pass": True, "note": "full rebuild of spend_cube_summary + spend_commitment_summary"})
+    log(f"  cube refresh (full): {seconds:,.2f}s, {refreshed['cube']['summaryRows']:,} summary rows from {refreshed['cube']['lines']:,} lines")
+    for dims in (["category"], ["supplier"], ["category", "period"], ["category_l1", "plant"], ["parent_supplier", "currency"]):
         with tenant_tx(tenant_id, principal.user_id, principal) as s:
             t0 = time.perf_counter()
             cube = savings.spend_cube(s, dims)
@@ -329,6 +341,20 @@ def measure_cube(tenant_id: uuid.UUID) -> list[dict]:
         out.append({"dimensions": dims, "seconds": round(seconds, 3), "rows": len(cube["rows"]),
                     "lines": sum(r["lines"] for r in cube["rows"]), "pass": seconds <= CUBE_TARGET_SECONDS})
         log(f"  spend cube {dims}: {seconds:,.2f}s, {len(cube['rows']):,} rows")
+    with tenant_tx(tenant_id, principal.user_id, principal) as s:  # filtered: one category, one quarter-ish window, by supplier
+        t0 = time.perf_counter()
+        cube = spend.cube(s, ["supplier"], spend.CubeFilter(categories=["FORGINGS"], period_from="2025-01"), limit=50, include_commitments=True)
+        seconds = time.perf_counter() - t0
+    out.append({"dimensions": ["supplier", "(filtered: FORGINGS, from 2025-01, + commitments)"], "seconds": round(seconds, 3), "rows": len(cube["rows"]),
+                "lines": sum(r["lines"] for r in cube["rows"]), "pass": seconds <= CUBE_TARGET_SECONDS})
+    log(f"  filtered cube by supplier + commitments: {seconds:,.2f}s")
+    with tenant_tx(tenant_id, principal.user_id, principal) as s:
+        t0 = time.perf_counter()
+        overview = spend.overview(s)
+        seconds = time.perf_counter() - t0
+    out.append({"dimensions": ["(overview SPD-01)"], "seconds": round(seconds, 3), "rows": len(overview["opportunities"]), "lines": overview["lines"],
+                "pass": seconds <= CUBE_TARGET_SECONDS})
+    log(f"  overview: {seconds:,.2f}s")
     return out
 
 

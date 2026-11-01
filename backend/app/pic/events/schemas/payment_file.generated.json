@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:payment_file.generated",
+  "title": "payment_file.generated",
+  "description": "Payload (outbox_event.payload) of payment_file.generated on PAYMENT_FILE. Produced by services/bank_files.py.",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": true
+}

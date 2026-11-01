@@ -20,11 +20,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
 from starlette.background import BackgroundTask, BackgroundTasks
+from starlette.concurrency import run_in_threadpool
+from starlette.responses import Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.pic.config import get_settings
 from app.pic.db import engine
-from app.pic.platform import errors, observability as obs
+from app.pic.platform import errors, idempotency, observability as obs, preconditions
 
 log = logging.getLogger("pic.http")
 
@@ -334,6 +336,50 @@ def _drain_after(response, budget_seconds: float, tenant_id=None) -> None:
     response.background = task if response.background is None else BackgroundTasks([response.background, task])
 
 
+# ---------------------------------------------------------------- generic Idempotency-Key (platform/idempotency.py)
+async def _idempotency_begin(request: Request, path: str):
+    """(reservation, replay response). Reserves the Idempotency-Key of a write, or answers from the stored response."""
+    key = request.headers.get("idempotency-key")
+    if not idempotency.applies(request.method, path, key):
+        return None, None
+    principal = _bearer_principal(request)
+    if principal is None:
+        return None, None  # the route answers 401; an unauthenticated caller has no tenant to keep a key in
+    body = await request.body()
+    digest = idempotency.fingerprint(request.method, path, request.url.query, request.headers.get("content-type", ""), body)
+    try:
+        reservation, stored = await run_in_threadpool(idempotency.begin, principal, key, digest)
+    except errors.Problem as problem:
+        return None, errors._body(request, problem.status, problem.code, problem.detail, problem.rule_ref, problem.extra or None)
+    if stored is not None:
+        replay = Response(content=stored.body, status_code=stored.status, headers=dict(stored.headers))
+        replay.headers["Idempotent-Replayed"] = "true"
+        return None, replay
+    reservation.state_token = idempotency.STATE.set(reservation.state)
+    return reservation, None
+
+
+async def _idempotency_finish(reservation, response):
+    """Store a successful JSON answer for replay; release the key after a failure or when the route replays itself."""
+    token = getattr(reservation, "state_token", None)
+    if token is not None:
+        idempotency.STATE.reset(token)
+    ok = 200 <= response.status_code < 300 and "json" in (response.headers.get("content-type") or "").lower()
+    if reservation.state.get("handled") or not ok:
+        await run_in_threadpool(idempotency.release, reservation)
+        return response
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = b"".join(c if isinstance(c, bytes) else c.encode() for c in chunks)
+    rebuilt = Response(content=body, status_code=response.status_code, background=response.background)
+    rebuilt.raw_headers = list(response.raw_headers)
+    if len(body) > idempotency.MAX_STORED_BYTES:
+        await run_in_threadpool(idempotency.release, reservation)
+    else:
+        await run_in_threadpool(idempotency.complete, reservation, response.status_code, idempotency.kept_headers(response.headers),
+                                body.decode("utf-8", "replace"))
+    return rebuilt
+
+
 # ---------------------------------------------------------------- install
 def install(app: FastAPI) -> None:
     settings = get_settings()
@@ -366,16 +412,33 @@ def install(app: FastAPI) -> None:
                 limited = _rate_limit(request, settings)
                 if limited is not None:
                     return _finish(request, limited, ctx)
+            reservation, replayed = await _idempotency_begin(request, path)
+            if replayed is not None:
+                return _finish(request, replayed, ctx)
+            precondition = (preconditions.open_request(request.method, request.scope, request.headers.get("if-match"))
+                            if path.startswith("/v1/") else None)
+            state_token = preconditions.STATE.set(precondition)
             started = time.perf_counter()
             obs.HTTP_IN_FLIGHT.inc(amount=1)
             status = 500
             try:
                 with obs.span(f"{request.method} {path}", obs.current(), kind="SERVER", **{"http.method": request.method}) as active:
-                    response = await call_next(request)
+                    try:
+                        response = await call_next(request)
+                    except BaseException:
+                        if reservation is not None:
+                            await run_in_threadpool(idempotency.release, reservation)
+                        raise
+                    if reservation is not None:
+                        response = await _idempotency_finish(reservation, response)
+                    if (precondition is not None and precondition.is_detail_get() and response.status_code == 200
+                            and precondition.etag and "etag" not in response.headers):
+                        response.headers["ETag"] = precondition.etag
                     status = response.status_code
                     obs.set_span_attributes(**{"http.route": _route_template(request), "http.status_code": status})
                     ctx = active
             finally:
+                preconditions.STATE.reset(state_token)
                 obs.HTTP_IN_FLIGHT.inc(amount=-1)
                 elapsed = time.perf_counter() - started
                 route = _route_template(request)

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:mrp.run.completed",
+  "title": "mrp.run.completed",
+  "description": "Payload (outbox_event.payload) of mrp.run.completed on MRP_RUN. Produced by services/erp_import.py, services/planning.py.",
+  "type": "object",
+  "properties": {
+    "plant": {},
+    "mode": {},
+    "plannedOrders": {},
+    "exceptions": {},
+    "sourceSystem": null
+  },
+  "required": [
+    "plant",
+    "mode",
+    "plannedOrders",
+    "exceptions"
+  ],
+  "additionalProperties": true
+}

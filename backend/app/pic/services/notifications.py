@@ -23,7 +23,7 @@ from app.pic.db import current_tenant
 from app.pic.models import (
     AppUser, Contract, Invitee, Invoice, Notification, OutboxEvent, PurchaseOrder, Recommendation, SourcingEvent, Supplier, Task,
 )
-from app.pic.platform import clock, mailer, outbox, rules, workflow
+from app.pic.platform import clock, delegation, mailer, outbox, rules, workflow
 from app.pic.platform.auth import Principal, scopes_for
 from app.pic.platform.errors import not_found
 from app.pic.platform.serialize import jsonable
@@ -59,8 +59,18 @@ def users_with_role(session: Session, role: str) -> list[AppUser]:
 
 
 def task_workers(session: Session, task: Task) -> list[AppUser]:
-    """Everyone who could complete the task now (same rules as the task inbox and ``workflow.complete``)."""
-    return [u for u in users_with_role(session, task.candidate_role) if workflow.can_work(_principal(u), task) is None]
+    """Everyone who could complete the task now (same rules as the task inbox and ``workflow.complete``): the holders of the
+    candidate role and the delegates currently acting for them (delegation of authority)."""
+    workers = [u for u in users_with_role(session, task.candidate_role) if workflow.can_work(_principal(u), task) is None]
+    seen = {u.id for u in workers}
+    for grant in delegation.all_current(session):
+        if grant.delegate_id in seen:
+            continue
+        delegate = session.get(AppUser, grant.delegate_id)
+        if delegate is not None and delegate.active and workflow.can_work(_principal(delegate), task) is None:
+            workers.append(delegate)
+            seen.add(delegate.id)
+    return workers
 
 
 def supplier_users(session: Session, supplier_id: Optional[uuid.UUID]) -> list[AppUser]:
@@ -142,6 +152,9 @@ def _task_escalated(session: Session, event: OutboxEvent) -> None:
         return
     level = event.payload.get("level", task.escalation_level)
     link = link_for(task.object_type, task.object_ref, task.object_id)
+    if event.payload.get("mode") == "REASSIGN" and event.payload.get("escalatedTo"):
+        _task_reassigned(session, task, event, level, link)
+        return
     # Rule ESCALATION added a manager role as candidate (workflow._escalate): its eligible holders are told first (four-eyes
     # exclusions and scope apply through can_work); every notification below shares the dedup key, so nobody gets two.
     target = event.payload.get("escalatedTo")
@@ -155,6 +168,30 @@ def _task_escalated(session: Session, event: OutboxEvent) -> None:
     others = [u for role in escalated for u in users_with_role(session, role) if workflow.can_work(_principal(u), task) is None]
     notify(session, task_workers(session, task) + others, kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
            title=f"Overdue (escalation {level}): {task.object_ref}", body=f"{task.name} has passed its SLA and was escalated.",
+           link=link, object_type=task.object_type, object_ref=task.object_ref)
+
+
+def _task_reassigned(session: Session, task: Task, event: OutboxEvent, level: int, link: Optional[str]) -> None:
+    """Rule ESCALATION mode REASSIGN: the new candidates are told the task is theirs, the former candidates that it is not any more."""
+    new_workers = task_workers(session, task)
+    target = event.payload["escalatedTo"].replace("_", " ").lower()
+    notify(session, new_workers, kind="TASK_ESCALATED", dedup_key=f"TASK_ESCALATED:{task.id}:{level}",
+           title=f"Reassigned to you: {task.object_ref}",
+           body=f"{task.name} passed its SLA (escalation {level}) and was reassigned to the {target} role; you can now decide it.",
+           link=link, object_type=task.object_type, object_ref=task.object_ref)
+    history = (task.candidate_scope or {}).get(workflow.REASSIGNED_KEY) or []
+    last = history[-1] if history else {}
+    keep = {u.id for u in new_workers}
+    former = []
+    for index, role in enumerate(event.payload.get("reassignedFrom") or []):
+        for user in users_with_role(session, role):
+            if user.id in keep or user.supplier_id is not None:
+                continue
+            scope = last.get("scope") or {} if index == 0 else {}
+            if workflow._can_work_as(_principal(user), task, role, scope) is None:
+                former.append(user)
+    notify(session, former, kind="TASK_REASSIGNED", dedup_key=f"TASK_REASSIGNED:{task.id}:{level}", title=f"No longer yours: {task.object_ref}",
+           body=f"{task.name} was not decided within its SLA and was reassigned to the {target} role. You no longer need to act on it.",
            link=link, object_type=task.object_type, object_ref=task.object_ref)
 
 
@@ -295,7 +332,17 @@ def _sourcing_awarded(session: Session, event: OutboxEvent) -> None:
     for supplier_id in dict.fromkeys([*allocations, *invited]):
         users = supplier_users(session, uuid.UUID(supplier_id))
         allocation = allocations.get(supplier_id)
-        if allocation is not None:
+        if allocation is not None and allocation.get("lines"):
+            # several lines (and lots): one contract covers the supplier's lines
+            detail = "; ".join(f"line {l['line']}: {l['annualQty']} per year at ₹{int(l.get('priceMinor') or 0) / 100:,.2f}"
+                               for l in allocation["lines"][:8])
+            notify(session, users, kind="SOURCING_AWARDED", dedup_key=f"SOURCING_AWARDED:{sourcing.id}:{supplier_id}",
+                   title=f"Awarded: {sourcing.number}",
+                   body=f"{sourcing.number} ({sourcing.title}) was awarded to you for {len(allocation['lines'])} line(s) "
+                        f"worth ₹{int(allocation.get('valueMinor') or 0) / 100:,.2f} a year ({detail}). One contract covers them; it follows "
+                        "for review and signature.",
+                   link="/pic/portal", object_type="SOURCING_EVENT", object_ref=sourcing.number)
+        elif allocation is not None:
             share = f"{float(allocation.get('share') or 0) * 100:.0f}%"
             notify(session, users, kind="SOURCING_AWARDED", dedup_key=f"SOURCING_AWARDED:{sourcing.id}:{supplier_id}",
                    title=f"Awarded: {sourcing.number}",

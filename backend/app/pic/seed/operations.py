@@ -155,7 +155,8 @@ def run(sc: Scenario, password: str) -> None:
         fk_req, fk_req_id = pr.number, pr.id
     sc.approve_all(fk_req_id, at(date(2027, 2, 17), 14))
     with sc.act("stores.buyer", at(date(2027, 2, 18), 10)) as s:
-        fk_po = order.create_from_requisition(s, requisition=fk_req, lines=[10], supplier_code="KD002", unit_price_minor=1250)[0]
+        fk_po = order.create_from_requisition(s, requisition=fk_req, lines=[10], supplier_code="KD002", unit_price_minor=1250,
+                                                one_time_vendor_reason="One-time buy from Kovai until a fastener source is qualified")[0]
         fk_po_id, fk_po_no, fk_risk = fk_po.id, fk_po.number, fk_po.risk_score
     sc.approve_all(fk_po_id, at(date(2027, 2, 18), 15), "One-time buy from Kovai until a fastener source is qualified")
     with sc.act("kd.sales", at(date(2027, 2, 19), 10)) as s:
@@ -220,9 +221,94 @@ def run(sc: Scenario, password: str) -> None:
     sc.relay(at(date(2027, 3, 9), 18))
     sc.note(f"Case 8: {pcr_no} Trichy Forge asks to ship {cover_no} on 20 Mar → buyer accepts → v{version} → re-confirmed")
 
+    # ------------------------------------------------------------ 9. SA-5520 call-offs at the contracted run rate (Blueprint §20 portfolio figures)
+    call_offs = [_call_off(sc, **c) for c in CALL_OFFS]
+    sc.note("Case 9: SA-5520 call-offs " + "; ".join(call_offs) + " - all matched first pass and posted, realised savings follow the posted invoices")
+
     # ------------------------------------------------------------ month-end payment run
     with sc.act("finance.controller", at(date(2027, 3, 31), 10)) as s:
         paid = payables.payment_run(s, date(2027, 3, 31))
     sc.relay(at(date(2027, 3, 31), 11))
     sc.note(f"Payment run {paid['run']}: paid {', '.join(p['invoice'] for p in paid['paid']) or 'none'}; "
             f"not yet due: INV-TF-9031 (N60 → 14 Apr)")
+
+
+# Case 9: monthly DC-330 releases against SA-5520 (60/40 quota, Trichy Forge capacity 60,000/month). The signature chain shows the
+# first pilot call-offs; the Blueprint portfolio line (realised YTD 0.38 Cr, first-pass match 86%) needs the run rate: Nov, Dec, Jan,
+# Feb and Mar releases. March: Trichy invoiced, Kovai has delivered but not yet invoiced (invoice arrives in April).
+CALL_OFFS = [
+    dict(tag="2611B", req_day=date(2026, 11, 16), ship_day=date(2026, 11, 24), invoice_day=date(2026, 11, 27), total=75000),
+    dict(tag="2612", req_day=date(2026, 12, 7), ship_day=date(2026, 12, 15), invoice_day=date(2026, 12, 18), total=90000),
+    dict(tag="2701", req_day=date(2027, 1, 11), ship_day=date(2027, 1, 19), invoice_day=date(2027, 1, 22), total=90000),
+    dict(tag="2702B", req_day=date(2027, 2, 17), ship_day=date(2027, 2, 24), invoice_day=date(2027, 2, 26), total=80000),
+    dict(tag="2703", req_day=date(2027, 3, 15), ship_day=date(2027, 3, 24), invoice_day=date(2027, 3, 26), total=80000, kd_invoiced=False),
+]
+
+
+def _call_off(sc: Scenario, *, tag: str, req_day: date, ship_day: date, invoice_day: date, total: int, kd_invoiced: bool = True) -> str:
+    """One monthly release: stock requisition for `total` DC-330 → quota split 60/40 → POs → confirmation → ASN → goods receipt →
+    quality acceptance → supplier invoices (contract price) → AP approval and posting (which books the realised savings)."""
+    from datetime import timedelta
+
+    from app.pic.services import order, payables, receiving, requisition
+    from app.pic.services.payables import expected_irn
+
+    with sc.act("buyer", at(req_day, 10)) as s:
+        pr = requisition.create(s, origin="MANUAL", purpose_code="BUFFER_BUILD", purpose_text=f"Monthly SA-5520 call-off {tag} (OEM schedule)",
+                                plant="P100", lines=[{"item_type": "MATERIAL", "purchase_type": "STOCK", "material": "DC-330", "qty": str(total),
+                                                      "price_est_minor": 41000, "need_date": (ship_day + timedelta(days=7)).isoformat(),
+                                                      "storage_location": "0001"}])
+        requisition.submit(s, pr)
+        req_no, req_id = pr.number, pr.id
+    sc.approve_all(req_id, at(req_day + timedelta(days=1), 12), f"Call-off {tag} within the SA-5520 schedule")
+    with sc.act("buyer", at(req_day + timedelta(days=2), 10)) as s:
+        pos = {s.get(Supplier, p.supplier_id).code: (p.id, p.number) for p in order.create_from_requisition(s, requisition=req_no, lines=[10])}
+    for code, (po_id, _) in pos.items():
+        sc.approve_all(po_id, at(req_day + timedelta(days=2), 14), f"Call-off {tag} at the SA-5520 contract price")
+    sc.relay(at(req_day + timedelta(days=2), 15))
+    shipments = {"TF001": ("tf.sales", "TF"), "KD002": ("kd.sales", "KD")}
+    asns, grs, quantities = {}, {}, {}
+    for code, (who, short) in shipments.items():
+        with sc.act(who, at(req_day + timedelta(days=3), 11)) as s:
+            order.confirm(s, s.get(PurchaseOrder, pos[code][0]), "CONFIRMED")
+        with sc.act(who, at(ship_day, 9)) as s:
+            po = s.get(PurchaseOrder, pos[code][0])
+            from app.pic.models import PoLine
+            qty = s.execute(select(PoLine.qty).where(PoLine.po_id == po.id)).scalar_one()
+            quantities[code] = int(qty)
+            batch = f"{short}-{tag}"
+            a = receiving.create_asn(s, po, lines=[{"line": 10, "qty": str(qty), "batches": [{"batch": batch, "qty": str(qty)}]}],
+                                     ship_date=ship_day, expected_date=ship_day + timedelta(days=2),
+                                     eway_bill_no=f"33{ship_day:%y%m%d}{sum(map(ord, tag + code)) % 10000:04d}",
+                                     vehicle_no="TN45AB1234" if code == "TF001" else "TN38CK4521", distance_km=320 if code == "TF001" else 250,
+                                     documents=[f"CoC-{batch}"])
+            asns[code] = a.id
+    for code in shipments:
+        with sc.act("receiver", at(ship_day + timedelta(days=2), 11)) as s:
+            gr = receiving.post_gr(s, s.get(PurchaseOrder, pos[code][0]), asn=s.get(Asn, asns[code]),
+                                   lines=[{"line": 10, "qty": str(quantities[code]), "batch": f"{shipments[code][1]}-{tag}"}],
+                                   posting_date=ship_day + timedelta(days=2))
+            grs[code] = gr.id
+        with sc.act("quality.inspector", at(ship_day + timedelta(days=2), 16)) as s:
+            lot = s.execute(select(InspectionLot).where(InspectionLot.gr_id == grs[code])).scalar_one()
+            receiving.usage_decision(s, lot, accepted=Decimal(quantities[code]), rejected=Decimal(0))
+    sc.relay(at(ship_day + timedelta(days=2), 17))
+    invoices = {}
+    with sc.act("tf.sales", at(invoice_day, 10)) as s:
+        number = f"INV-TF-{tag}"
+        invoices["TF001"] = payables.capture(
+            s, supplier="TF001", supplier_invoice_no=number, invoice_date=invoice_day, channel="E_INVOICE",
+            irn=expected_irn("33AABCT1234K1ZM", "2026-27", "INV", number),
+            lines=[{"po": pos["TF001"][1], "po_line": 10, "qty": str(quantities["TF001"]), "unit_price": "398", "gst_rate": "18", "hsn": "87089900"}]).id
+    if kd_invoiced:
+        with sc.act("kd.sales", at(invoice_day, 11)) as s:
+            invoices["KD002"] = payables.capture(
+                s, supplier="KD002", supplier_invoice_no=f"KD/{tag}", invoice_date=invoice_day, channel="PORTAL",
+                lines=[{"po": pos["KD002"][1], "po_line": 10, "qty": str(quantities["KD002"]), "unit_price": "405", "gst_rate": "18",
+                        "hsn": "87089900"}]).id
+    with sc.act("ap.clerk", at(invoice_day + timedelta(days=2), 10)) as s:
+        for code, inv_id in invoices.items():
+            payables.approve(s, s.get(Invoice, inv_id))
+            payables.post(s, s.get(Invoice, inv_id), f"AXN|1000|{code}|{'INV-TF-' + tag if code == 'TF001' else 'KD/' + tag}")
+    sc.relay(at(invoice_day + timedelta(days=2), 11))
+    return f"{tag}: {total:,} units, {len(invoices)} invoice(s) posted"

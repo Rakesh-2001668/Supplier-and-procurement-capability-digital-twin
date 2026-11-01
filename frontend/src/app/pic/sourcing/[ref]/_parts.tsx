@@ -2,20 +2,24 @@
 
 import { Lock } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Button, DataTable, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, ApiError } from '@/lib/pic/api';
 import { dateTime, inr, label, qty } from '@/lib/pic/format';
-import { useCommand } from '@/lib/pic/hooks';
+import { useApi, useCommand } from '@/lib/pic/hooks';
 
 // ---------------------------------------------------------------- shapes (GET /sourcing/events/{ref}, GET …/bids, POST …/scenarios)
 export type EventLine = { id: string; line_no: number; description: string; plant: string; annual_qty: string; monthly_qty: string; uom: string;
-  requisition_id: string | null; pr_line_no: number | null };
-export type Criterion = { id: string; code: string; name: string; weight: number };
+  requisition_id: string | null; pr_line_no: number | null; lot_code?: string | null; baseline_price_minor?: number | null; requisition?: string | null };
+export type Criterion = { id: string; code: string; name: string; weight: number; data_source?: string };
 export type Invitee = { id: string; code: string; name: string; categoryStatus: string; waiver: string | null };
 export type BidMeta = { supplier: string; round: number; status: string; submittedAt: string; hash: string };
 export type ScenarioRaw = Record<string, unknown> & { id: string; kind: string; feasible: boolean; allocations: Allocation[]; explanation: Record<string, unknown> | null };
-export type Allocation = { supplier: string; supplierId: string; share: string; monthlyQty: string; annualQty: string; priceMinor: number; tcoMinor: number };
+export type AllocLine = { line: number; eventLineId: string; lot: string | null; bundle: boolean; share: string; monthlyQty: string; annualQty: string;
+  priceMinor: number; tcoMinor: number; valueMinor: number };
+/** One supplier of a scenario. A single-line event carries the price and quantity directly; several lines carry `lines` and the award value. */
+export type Allocation = { supplier: string; supplierId: string; share: string; monthlyQty?: string; annualQty?: string | null; priceMinor: number | null;
+  tcoMinor?: number; valueMinor?: number; lines?: AllocLine[] };
 export type Scenario = { id: string; kind: string; feasible: boolean; allocations: Allocation[]; weightedPriceMinor: number | null;
   weightedTcoMinor: number | null; annualSavingsMinor: number | null; explanation: Record<string, unknown> | null };
 export type AwardDecision = { id: string; scenario_id: string; status: string; rationale: string | null; conflict_declarations: { user: string; declaration: string }[];
@@ -25,14 +29,22 @@ export type ShouldCost = { model: string; material: string; conversion: string; 
 export type SourcingEvent = {
   id: string; number: string; type: string; title: string; category: string; status: string; round: number; weights_locked: boolean; owner_id?: string;
   published_at: string | null; close_at: string; closed_at: string | null; unsealed_at: string | null; baseline_price_minor: number | null;
-  baseline_method: string | null; should_cost: ShouldCost | null; constraints: { max_suppliers?: number; max_share?: string; min_share?: string } | null;
-  tco_params: Record<string, string | number> | null; savings_target_pct: string | null;
+  baseline_method: string | null; should_cost: ShouldCost | null; constraints: ({ max_suppliers?: number; max_share?: string; min_share?: string } & Record<string, unknown>) | null;
+  tco_params: Record<string, string | number> | null; savings_target_pct: string | null; bundle?: { kind: string; ref: string | null; requisitions: string[]; sourceLines: number } | null;
   auction?: Record<string, unknown> | null; auction_ends_at?: string | null;
   lines: EventLine[]; criteria: Criterion[]; invitees: Invitee[]; bids: BidMeta[]; scenarios: ScenarioRaw[]; awardDecisions: AwardDecision[];
 };
+export type MatrixLine = { line: number; lot: string | null; priceMinor: number; tcoMinor: number; leadTimeDays: number; paymentTermsDays: number;
+  verifiedCapacityPerMonth: string | null; weightedScore?: string };
 export type MatrixRow = { supplier: string; supplierId: string; round: number; bidId: string; priceMinor: number; tcoMinor: number;
-  tco: Record<string, number>; leadTimeDays: number; paymentTermsDays: number; verifiedCapacityPerMonth: string | null;
-  lateDeliveryProb: string | null; shouldCostDeltaMinor: number | null; scores?: Record<string, string>; weightedScore?: string };
+  tco?: Record<string, number>; leadTimeDays: number; paymentTermsDays: number; verifiedCapacityPerMonth: string | null;
+  lateDeliveryProb: string | null; shouldCostDeltaMinor: number | null; scores?: Record<string, string>; weightedScore?: string;
+  basis?: 'UNIT' | 'ANNUAL_VALUE'; coverage?: { bid: number; of: number }; complete?: boolean; lines?: MatrixLine[];
+  lots?: { lot: string; discountPct: string; allOrNothing: boolean }[];
+  autoScores?: Record<string, { score: string; source: string; noData: boolean; inputs: Record<string, unknown> }> };
+export type LineBid = { supplier: string; rank: number; priceMinor: number; tcoMinor: number; leadTimeDays: number; paymentTermsDays: number;
+  verifiedCapacityPerMonth: string | null; weightedScore?: string };
+export type LineMatrix = { line: number; description: string; lot: string | null; uom: string; annualQty: string; monthlyQty: string; baselineMinor: number | null; bids: LineBid[] };
 
 /** Persisted scenarios come back snake_case on the event, fresh ones camelCase from POST …/scenarios. */
 export function normaliseScenario(s: ScenarioRaw): Scenario {
@@ -56,6 +68,7 @@ export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading
 }) {
   const manual = event.criteria.filter((c) => c.code !== 'PRICE_TCO');
   const bestScore = matrix?.length ? Math.max(...matrix.map((m) => Number(m.weightedScore ?? 0))) : null;
+  const multi = event.lines.length > 1;
   return (
     <div className="space-y-5">
       <div>
@@ -86,8 +99,8 @@ export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading
               <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th scope="col" className="px-3 py-2 text-left">Supplier</th>
-                  <th scope="col" className="px-3 py-2 text-right">Price</th>
-                  <th scope="col" className="px-3 py-2 text-right">TCO / unit</th>
+                  <th scope="col" className="px-3 py-2 text-right">{multi ? 'Annual price' : 'Price'}</th>
+                  <th scope="col" className="px-3 py-2 text-right">{multi ? 'Annual TCO' : 'TCO / unit'}</th>
                   <th scope="col" className="px-3 py-2 text-right">Lead time</th>
                   <th scope="col" className="px-3 py-2 text-right">Terms</th>
                   <th scope="col" className="px-3 py-2 text-right">Verified capacity / month</th>
@@ -105,6 +118,9 @@ export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading
                       <span className="ml-1 text-xs text-slate-500">round {m.round}</span>
                       <div className="mt-0.5 flex flex-wrap gap-1">
                         {i === 0 && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-800">Lowest TCO</span>}
+                        {multi && m.coverage && <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${m.complete ? 'bg-slate-100 text-slate-700' : 'bg-amber-50 text-amber-800'}`}>{m.coverage.bid}/{m.coverage.of} lines</span>}
+                        {m.lots?.map((l) => <span key={l.lot} className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800" title="Bundle terms of the lot">
+                          lot {l.lot}{Number(l.discountPct) > 0 ? ` −${Number(l.discountPct)}%` : ''}{l.allOrNothing ? ' all-or-nothing' : ''}</span>)}
                         {bestScore !== null && Number(m.weightedScore ?? 0) === bestScore && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-800">Best score</span>}
                       </div>
                     </td>
@@ -114,7 +130,10 @@ export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading
                         <summary className="cursor-pointer font-semibold">{inr(m.tcoMinor)}</summary>
                         <dl className="mt-1 space-y-0.5 text-left text-xs text-slate-600">
                           {TCO_PARTS.filter(([k]) => m.tco?.[k] !== undefined).map(([k, name]) => (
-                            <div key={k} className="flex justify-between gap-3"><dt>{name}</dt><dd className="tabular-nums">{inr(m.tco[k])}</dd></div>
+                            <div key={k} className="flex justify-between gap-3"><dt>{name}</dt><dd className="tabular-nums">{inr(m.tco?.[k])}</dd></div>
+                          ))}
+                          {multi && m.lines?.map((l) => (
+                            <div key={l.line} className="flex justify-between gap-3"><dt>Line {l.line}{l.lot ? ` (lot ${l.lot})` : ''}</dt><dd className="tabular-nums">{inr(l.tcoMinor)} / unit</dd></div>
                           ))}
                         </dl>
                       </details>
@@ -126,7 +145,11 @@ export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading
                     <td className={`px-3 py-2 text-right tabular-nums ${m.shouldCostDeltaMinor && m.shouldCostDeltaMinor > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
                       {m.shouldCostDeltaMinor === null ? '–' : `${m.shouldCostDeltaMinor > 0 ? '+' : ''}${inr(m.shouldCostDeltaMinor)}`}
                     </td>
-                    {['PRICE_TCO', ...manual.map((c) => c.code)].map((c) => <td key={c} className="px-3 py-2 text-right tabular-nums">{m.scores?.[c] ?? '–'}</td>)}
+                    {['PRICE_TCO', ...manual.map((c) => c.code)].map((c) => (
+                      <td key={c} className="px-3 py-2 text-right tabular-nums" title={m.autoScores?.[c] ? `From ${label(m.autoScores[c].source)} data at close${m.autoScores[c].noData ? ' – no data, neutral score' : ''}` : undefined}>
+                        {m.scores?.[c] ?? '–'}{m.autoScores?.[c] && <span className="ml-1 text-[10px] uppercase text-slate-400">{m.autoScores[c].noData ? 'no data' : 'data'}</span>}
+                      </td>
+                    ))}
                     <td className="px-3 py-2 text-right font-semibold tabular-nums">{m.weightedScore ?? '–'}</td>
                   </tr>
                 ))}
@@ -134,10 +157,46 @@ export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading
             </table>
             <p className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
               TCO = price + freight + duty + packaging + carrying cost of lead time + quality cost (twin PPM) − value of payment terms. Capacity is the lower of the offer and the digital twin&apos;s verified free capacity.
-              Criterion scores are averages across evaluators; PRICE_TCO = best TCO ÷ this TCO × 100.
+              Criterion scores are averages across evaluators; PRICE_TCO = best TCO ÷ this TCO × 100{multi ? ' per line, weighted by line value (a line without a bid scores 0)' : ''}.
+              Criteria marked “data” are scored from the scorecard, ESG assessment or risk signals at close and frozen on the bid.
             </p>
           </div>
         )}
+      </div>
+      {requested && !sealed && multi && <LineMatrixPanel event={event} />}
+    </div>
+  );
+}
+
+/** The evaluation matrix by line: every bid on each line, ranked by TCO. */
+function LineMatrixPanel({ event }: { event: SourcingEvent }) {
+  const lines = useApi<LineMatrix[]>(`/sourcing/events/${encodeURIComponent(event.number)}/line-matrix`);
+  if (lines.isLoading) return <Loading />;
+  if (lines.error) return <ProblemBox error={lines.error} />;
+  return (
+    <div>
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">By line and lot</h3>
+      <div className="space-y-3">
+        {(lines.data ?? []).map((l) => (
+          <div key={l.line} className="rounded-lg border border-slate-200">
+            <p className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-sm">
+              <span className="font-mono text-xs text-slate-500">Line {l.line}</span> <span className="font-medium">{l.description}</span>
+              {l.lot && <span className="ml-2 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">lot {l.lot}</span>}
+              <span className="ml-2 text-slate-600">· {qty(l.annualQty, l.uom)} a year{l.baselineMinor ? ` · baseline ${inr(l.baselineMinor)}` : ''}</span>
+            </p>
+            {l.bids.length === 0 ? <p className="px-3 py-2 text-sm text-amber-800">Nobody bid this line – it cannot be awarded.</p> : (
+              <table className="min-w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-1">#</th><th className="px-3 py-1">Supplier</th><th className="px-3 py-1 text-right">Price</th>
+                  <th className="px-3 py-1 text-right">TCO / unit</th><th className="px-3 py-1 text-right">Lead time</th><th className="px-3 py-1 text-right">Capacity / month</th><th className="px-3 py-1 text-right">Score</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">{l.bids.map((b) => (
+                  <tr key={b.supplier}><td className="px-3 py-1 tabular-nums">{b.rank}</td><td className="px-3 py-1 font-medium">{b.supplier}</td><td className="px-3 py-1 text-right tabular-nums">{inr(b.priceMinor)}</td>
+                    <td className="px-3 py-1 text-right tabular-nums">{inr(b.tcoMinor)}</td><td className="px-3 py-1 text-right tabular-nums">{b.leadTimeDays} d</td>
+                    <td className="px-3 py-1 text-right tabular-nums">{qty(b.verifiedCapacityPerMonth)}</td><td className="px-3 py-1 text-right tabular-nums">{b.weightedScore ?? '–'}</td></tr>
+                ))}</tbody>
+              </table>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -162,6 +221,7 @@ function SealedLock({ error, closeAt }: { error: ApiError; closeAt: string }) {
 // ---------------------------------------------------------------- award scenarios side by side
 export function ScenariosPanel({ event, scenarios, canAward, onAward }: { event: SourcingEvent; scenarios: Scenario[]; canAward: boolean; onAward: (id: string) => void }) {
   const line = event.lines[0];
+  const multi = event.lines.length > 1;
   return (
     <div className="space-y-5">
       {!scenarios.length ? (
@@ -180,23 +240,33 @@ export function ScenariosPanel({ event, scenarios, canAward, onAward }: { event:
                 </div>
                 <table className="mt-3 w-full text-sm">
                   <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-                    <tr><th className="py-1">Supplier</th><th className="py-1 text-right">Share</th><th className="py-1 text-right">Qty / month</th><th className="py-1 text-right">Price</th></tr>
+                    <tr><th className="py-1">Supplier</th><th className="py-1 text-right">Share</th><th className="py-1 text-right">{multi ? 'Lines' : 'Qty / month'}</th><th className="py-1 text-right">{multi ? 'Annual value' : 'Price'}</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {s.allocations.length ? s.allocations.map((a) => (
-                      <tr key={a.supplier}>
-                        <td className="py-1 font-medium">{a.supplier}</td>
-                        <td className="py-1 text-right tabular-nums">{pct(a.share)}</td>
-                        <td className="py-1 text-right tabular-nums" title={`${qty(a.annualQty)} per year`}>{qty(a.monthlyQty)}</td>
-                        <td className="py-1 text-right tabular-nums">{inr(a.priceMinor)}</td>
-                      </tr>
+                      <Fragment key={a.supplier}>
+                        <tr>
+                          <td className="py-1 font-medium">{a.supplier}</td>
+                          <td className="py-1 text-right tabular-nums">{pct(a.share)}</td>
+                          <td className="py-1 text-right tabular-nums" title={a.annualQty ? `${qty(a.annualQty)} per year` : undefined}>{a.lines ? a.lines.length : qty(a.monthlyQty)}</td>
+                          <td className="py-1 text-right tabular-nums">{inr(a.lines ? a.valueMinor : a.priceMinor)}</td>
+                        </tr>
+                        {a.lines?.map((l) => (
+                          <tr key={`${a.supplier}-${l.line}`} className="text-xs text-slate-600">
+                            <td className="py-0.5 pl-3">line {l.line}{l.lot ? ` · lot ${l.lot}${l.bundle ? ' bundle' : ''}` : ''}</td>
+                            <td className="py-0.5 text-right tabular-nums">{pct(l.share)}</td>
+                            <td className="py-0.5 text-right tabular-nums" title={`${qty(l.annualQty)} per year`}>{qty(l.monthlyQty)} / month</td>
+                            <td className="py-0.5 text-right tabular-nums">{inr(l.priceMinor)} / unit</td>
+                          </tr>
+                        ))}
+                      </Fragment>
                     )) : <tr><td colSpan={4} className="py-2 text-slate-500">No allocation possible</td></tr>}
                   </tbody>
                 </table>
                 <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                  <div><dt className="text-xs text-slate-500">Weighted price</dt><dd className="font-semibold tabular-nums">{inr(s.weightedPriceMinor)}</dd></div>
-                  <div><dt className="text-xs text-slate-500">Weighted TCO</dt><dd className="font-semibold tabular-nums">{inr(s.weightedTcoMinor)}</dd></div>
-                  <div className="col-span-2"><dt className="text-xs text-slate-500">Annual savings vs baseline {event.baseline_price_minor ? inr(event.baseline_price_minor) : ''}{line ? ` × ${qty(line.annual_qty, line.uom)}` : ''}</dt>
+                  <div><dt className="text-xs text-slate-500">{multi ? 'Annual award value' : 'Weighted price'}</dt><dd className="font-semibold tabular-nums">{inr(s.weightedPriceMinor)}</dd></div>
+                  <div><dt className="text-xs text-slate-500">{multi ? 'Annual TCO' : 'Weighted TCO'}</dt><dd className="font-semibold tabular-nums">{inr(s.weightedTcoMinor)}</dd></div>
+                  <div className="col-span-2"><dt className="text-xs text-slate-500">Annual savings vs baseline {event.baseline_price_minor ? inr(event.baseline_price_minor) : ''}{!multi && line ? ` × ${qty(line.annual_qty, line.uom)}` : multi ? ' (annual value)' : ''}</dt>
                     <dd className={`font-semibold tabular-nums ${s.annualSavingsMinor && s.annualSavingsMinor > 0 ? 'text-emerald-700' : ''}`}>{inr(s.annualSavingsMinor)}</dd></div>
                 </dl>
                 {s.explanation && <Explanation e={s.explanation} />}
@@ -232,21 +302,32 @@ export function ScenariosPanel({ event, scenarios, canAward, onAward }: { event:
   );
 }
 
+type RiskCheck = { rule: string; limit: string | number; ok: boolean; top?: string; topSharePct?: string; conditionalSharePct?: string; suppliers?: number };
 function Explanation({ e }: { e: Record<string, unknown> }) {
   const bounds = e.bounds as Record<string, string> | undefined;
+  const lots = e.lots as { lot: string; decision: string }[] | undefined;
+  const risk = e.risk as { excluded: { supplierId: string; reason: string }[]; checks: RiskCheck[] } | undefined;
   return (
     <div className="mt-3 rounded-lg bg-slate-50 p-2 text-xs text-slate-600">
       {typeof e.rule === 'string' && <p><span className="font-semibold">Rule:</span> {e.rule}</p>}
       {typeof e.capacityCheck === 'string' && <p><span className="font-semibold">Capacity:</span> {e.capacityCheck}</p>}
       {typeof e.Q === 'string' && <p><span className="font-semibold">Demand Q:</span> {qty(e.Q)} / month</p>}
       {bounds && <ul className="mt-1 font-mono text-[11px]">{Object.entries(bounds).map(([k, v]) => <li key={k}>{k}: {v}</li>)}</ul>}
+      {lots && lots.length > 0 && <p className="mt-1"><span className="font-semibold">Lots:</span> {lots.map((l) => `${l.lot} ${l.decision === 'BUNDLE' ? 'awarded as a bundle' : 'split by line'}`).join('; ')}</p>}
+      {risk && risk.excluded.length > 0 && <p className="mt-1 text-amber-800"><span className="font-semibold">Left out:</span> {risk.excluded.map((x) => x.reason).join('; ')}</p>}
+      {risk && risk.checks.map((c) => (
+        <p key={c.rule} className={c.ok ? 'mt-1 text-emerald-800' : 'mt-1 font-semibold text-red-700'}>
+          {c.ok ? '✓' : '✗'} {label(c.rule)}: limit {String(c.limit)}{c.topSharePct ? `, largest ${String(c.top)} ${c.topSharePct}%` : ''}{c.conditionalSharePct ? `, conditional ${c.conditionalSharePct}%` : ''}{c.suppliers ? `, ${c.suppliers} supplier(s)` : ''}
+        </p>
+      ))}
+      {Array.isArray(e.uncovered) && e.uncovered.length > 0 && <p className="mt-1 text-red-700">No bid on line(s) {(e.uncovered as number[]).join(', ')}.</p>}
     </div>
   );
 }
 
 // ---------------------------------------------------------------- dialogs
 export function ScoreDialog({ event, matrix, onClose }: { event: SourcingEvent; matrix: MatrixRow[]; onClose: () => void }) {
-  const manual = event.criteria.filter((c) => c.code !== 'PRICE_TCO');
+  const manual = event.criteria.filter((c) => c.code !== 'PRICE_TCO' && (c.data_source ?? 'MANUAL') === 'MANUAL');
   const [scores, setScores] = useState<Record<string, string>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
   const entries = matrix.flatMap((m) => manual.filter((c) => (scores[`${m.supplier}|${c.code}`] ?? '') !== '').map((c) => ({
@@ -329,9 +410,14 @@ export function AwardDialog({ event, scenarios, matrix, initial, onClose }: { ev
   const [rationale, setRationale] = useState('');
   const [declaration, setDeclaration] = useState('');
   const scenario = feasible.find((s) => s.id === scenarioId);
+  const multi = event.lines.length > 1;
   const lowest = matrix?.length ? Math.min(...matrix.map((m) => m.priceMinor)) : null;
+  const lowestByLine: Record<number, number> = {};
+  (matrix ?? []).forEach((m) => m.lines?.forEach((l) => { lowestByLine[l.line] = Math.min(lowestByLine[l.line] ?? l.priceMinor, l.priceMinor); }));
   // Without the matrix we cannot prove the award goes to the lowest bid, so ask for a rationale.
-  const notLowest = !scenario || lowest === null || scenario.allocations.some((a) => a.priceMinor > lowest);
+  const notLowest = !scenario || lowest === null || (multi
+    ? scenario.allocations.some((a) => a.lines?.some((l) => l.priceMinor > (lowestByLine[l.line] ?? 0)))
+    : scenario.allocations.some((a) => (a.priceMinor ?? 0) > lowest));
   const ready = !!scenario && !!declaration.trim() && (!notLowest || !!rationale.trim());
   const award = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/award`,
     { scenario_id: scenarioId, rationale: rationale.trim() || undefined, conflict_declaration: declaration.trim() }),
@@ -342,7 +428,7 @@ export function AwardDialog({ event, scenarios, matrix, initial, onClose }: { ev
         <div className="space-y-3">
           <Field label="Scenario">{(id) => (
             <Select id={id} value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}
-              options={feasible.map((s) => ({ value: s.id, label: `${label(s.kind)} – ${s.allocations.map((a) => `${a.supplier} ${pct(a.share)}`).join(' / ')} @ ${inr(s.weightedPriceMinor)}` }))} />
+              options={feasible.map((s) => ({ value: s.id, label: `${label(s.kind)} – ${s.allocations.map((a) => (a.lines ? `${a.supplier} ${a.lines.length} line(s)` : `${a.supplier} ${pct(a.share)}`)).join(' / ')} @ ${inr(s.weightedPriceMinor)}${multi ? ' a year' : ''}` }))} />
           )}</Field>
           {scenario && notLowest && (
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">

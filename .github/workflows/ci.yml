@@ -49,8 +49,15 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - name: Migrations apply cleanly
         run: DATABASE_URL=$TEST_DATABASE_URL python -m alembic -c alembic_pic.ini upgrade head
-      - name: Tests (RLS, SoD, idempotency, signature case, production readiness)
-        run: python -m pytest tests/pic -q
+      - name: Migrations are backward compatible with the previous release (additive only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --depth=1 origin ${{ github.base_ref }}
+          python -m app.pic.tools.check_migrations --base origin/${{ github.base_ref }}
+      - name: Tests (RLS, SoD, idempotency, signature case, production readiness) with coverage
+        run: python -m pytest tests/pic -q --cov --cov-config=.coveragerc --cov-report=json:coverage.json --cov-report=term:skip-covered
+      - name: Coverage gate (per package, thresholds in backend/coverage-thresholds.json)
+        run: python ../.github/scripts/coverage_gate.py coverage.json coverage-thresholds.json
       - name: Production configuration is refused when unsafe
         run: |
           set +e

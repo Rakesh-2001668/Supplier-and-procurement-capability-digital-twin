@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:material.changed",
+  "title": "material.changed",
+  "description": "Payload (outbox_event.payload) of material.changed on MATERIAL. Produced by services/material_changes.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "version": {},
+    "fields": {},
+    "change": {},
+    "erpMessage": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "material",
+    "version",
+    "fields",
+    "change",
+    "erpMessage"
+  ],
+  "additionalProperties": true
+}

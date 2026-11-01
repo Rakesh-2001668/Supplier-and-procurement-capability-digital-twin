@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,7 @@ class Invoice(TenantScoped, Base):
         UniqueConstraint("tenant_id", "company_code", "supplier_id", "supplier_invoice_no", "fiscal_year"),
         # Internal document number (payables._internal_number) is the key every screen, payment run and lookup uses.
         UniqueConstraint("tenant_id", "number", name="uq_invoice_tenant_number"),
+        CheckConstraint("payment_option IN ('STANDARD','EARLY_DISCOUNT','SCF')", name="payment_option"),
     )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     supplier_invoice_no: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -42,12 +43,17 @@ class Invoice(TenantScoped, Base):
     due_date: Mapped[Optional[date]] = mapped_column(Date)
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     retention_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # withheld until release
+    # TDS / withholding tax deducted from the payment to the supplier (migrated open items; see services/withholding.py)
+    withholding_tax_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     erp_doc_no: Mapped[Optional[str]] = mapped_column(String(40))
     posting_key: Mapped[Optional[str]] = mapped_column(String(200))
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     payment_status: Mapped[str] = mapped_column(String(15), default="UNPAID")
     rule_set_version: Mapped[Optional[str]] = mapped_column(String(80))
     duplicate_of: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    # M10 early-payment / supply-chain finance: STANDARD | EARLY_DISCOUNT | SCF; the accepted discount reduces the payment.
+    payment_option: Mapped[str] = mapped_column(String(15), nullable=False, default="STANDARD", server_default="STANDARD")
+    discount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
 
 
 class InvoiceLine(TenantScoped, Base):
@@ -109,10 +115,14 @@ class Payment(TenantScoped, Base):
     status: Mapped[str] = mapped_column(String(15), nullable=False, default="COMPLETED")
     run_ref: Mapped[str] = mapped_column(String(30), nullable=False)
     approved_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # A debit note posted after its invoice was paid is paid on its own (payment_run); null for the invoice payment itself.
+    debit_note_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     __table_args__ = (
         # One live payment per invoice: blocks double payment at the database level.
         Index("uq_payment_invoice_live", "tenant_id", "invoice_id", unique=True,
-              postgresql_where=text("status <> 'CANCELLED'")),
+              postgresql_where=text("status <> 'CANCELLED' AND debit_note_id IS NULL")),
+        Index("uq_payment_debit_note_live", "tenant_id", "debit_note_id", unique=True,
+              postgresql_where=text("status <> 'CANCELLED' AND debit_note_id IS NOT NULL")),
     )
 
 
@@ -150,7 +160,16 @@ class SavingsLedgerEntry(TenantScoped, Base):
 
 class SpendLine(TenantScoped, Base):
     __tablename__ = "spend_line"
-    __table_args__ = (UniqueConstraint("tenant_id", "invoice_line_id"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "invoice_line_id"),
+        # Cube refresh and drill-down paths (a period is the unit of incremental refresh).
+        Index("ix_spend_line_tenant_period", "tenant_id", "period"),
+        Index("ix_spend_line_tenant_supplier_period", "tenant_id", "supplier_id", "period"),
+        Index("ix_spend_line_tenant_category_period", "tenant_id", "category", "period"),
+        # SPD-05 off-contract worklist: the largest off-contract lines without scanning the table.
+        Index("ix_spend_line_offcontract", "tenant_id", text("amount_minor DESC"),
+              postgresql_where=text("maverick_flags ?| array['OFF_CONTRACT','OFF_CONTRACT_PRICE']")),
+    )
     invoice_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     invoice_ref: Mapped[str] = mapped_column(String(60), nullable=False)
     po_ref: Mapped[Optional[str]] = mapped_column(String(60))
@@ -171,3 +190,11 @@ class SpendLine(TenantScoped, Base):
     po_line_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     price_variance_minor: Mapped[Optional[int]] = mapped_column(BigInteger)  # above contract / standard price (PPV)
     source: Mapped[str] = mapped_column(String(20), default="PLATFORM")  # PLATFORM | ERP_HISTORY | LEGACY
+    # Spend cube (M01, wave 1): ERP tagging for multi-ERP tenants, cost-object type (COST_CENTER | WBS | ...), the FX rate and its
+    # date used to convert the document-currency amount to the group currency, and the variance against the last price paid.
+    source_system: Mapped[str] = mapped_column(String(30), nullable=False, default="PIC", server_default="PIC")
+    cost_object_type: Mapped[Optional[str]] = mapped_column(String(20))
+    fx_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 8))  # NULL: foreign-currency line without a rate on its date
+    fx_date: Mapped[Optional[date]] = mapped_column(Date)
+    amount_group_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    price_variance_last_minor: Mapped[Optional[int]] = mapped_column(BigInteger)  # above the last price paid for the material

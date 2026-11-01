@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:planned_order.firmed",
+  "title": "planned_order.firmed",
+  "description": "Payload (outbox_event.payload) of planned_order.firmed on PLANNED_ORDER. Produced by services/planning.py.",
+  "type": "object",
+  "properties": {
+    "qty": {
+      "type": "string"
+    },
+    "needDate": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "qty",
+    "needDate"
+  ],
+  "additionalProperties": true
+}

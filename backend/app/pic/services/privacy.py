@@ -10,6 +10,7 @@ append-only and hash-chained: existing events (whose ``actor`` strings contain t
 they are retained under the legal-obligation basis (books of account and GST records) and the erasure itself is recorded
 as a new audit event that holds no personal data. See docs/runbooks/privacy-requests.md.
 """
+import hashlib
 import re
 import secrets
 import uuid
@@ -17,12 +18,13 @@ from datetime import timedelta
 from typing import Optional
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.pic.config import get_settings
 from app.pic.models import (
-    AppUser, AuditEvent, Invoice, MfaFactor, Notification, PurchaseOrder, Requisition, Task, Tenant,
+    AppUser, AuditArchiveBatch, AuditEvent, Invoice, MfaFactor, Notification, OutboxEvent, ProcessedEvent, PurchaseOrder, Requisition, Task,
+    Tenant, Timer,
 )
 from app.pic.platform import audit, clock, rules, workflow
 from app.pic.platform.auth import Principal, hash_password, scopes_for
@@ -149,6 +151,27 @@ def _as_principal(user: AppUser, tenant: Tenant) -> Principal:
                      supplier_id=user.supplier_id)
 
 
+def scrub_user(session: Session, user: AppUser, by_user_id: Optional[uuid.UUID]) -> dict:
+    """Pseudonymise one user (DPDP erasure): identity fields, personal attributes, sign-in and MFA factors, notifications. The id
+    stays so documents remain attributable to "a user". Shared by the administrator's erasure and the retention job."""
+    pseudonym = f"erased-{user.id.hex[:12]}"
+    personal_attrs = [k for k in (user.attributes or {}) if k not in ACCESS_ATTRIBUTES or PERSONAL_ATTRIBUTE.search(k)]
+    kept = {k: v for k, v in (user.attributes or {}).items() if k not in personal_attrs}
+    now = clock.now()
+    user.email = f"{pseudonym}@{ERASED_DOMAIN}"
+    user.full_name = f"Erased user {user.id.hex[:8]}"
+    user.password_hash = hash_password(secrets.token_urlsafe(32))  # nobody knows it: sign-in is impossible
+    user.attributes = {**kept, "erased": {"at": now.isoformat(), "by": str(by_user_id) if by_user_id else "retention-policy"}}
+    user.active = False
+    user.mfa_enrolled = False
+    factors = session.execute(delete(MfaFactor).where(MfaFactor.user_id == user.id)).rowcount
+    notifications = session.execute(delete(Notification).where(Notification.user_id == user.id)).rowcount
+    session.flush()
+    return {"pseudonym": pseudonym, "fieldsPseudonymised": ["email", "full_name", "password_hash"] + [f"attributes.{k}" for k in personal_attrs],
+            "deactivated": True, "mfaFactorsDeleted": factors, "notificationsDeleted": notifications,
+            "auditTrail": "retained unchanged (legal obligation); actor strings of earlier events still contain the former e-mail"}
+
+
 def erase(session: Session, user_id: uuid.UUID, reason: str) -> dict:
     admin = _require_admin(session)
     reason = (reason or "").strip()
@@ -171,22 +194,7 @@ def erase(session: Session, user_id: uuid.UUID, reason: str) -> dict:
         if admins == 0:
             raise Problem(409, "LAST_ADMIN", "This is the only active tenant administrator", rule_ref="DPDP")
 
-    pseudonym = f"erased-{user.id.hex[:12]}"
-    personal_attrs = [k for k in (user.attributes or {}) if k not in ACCESS_ATTRIBUTES or PERSONAL_ATTRIBUTE.search(k)]
-    kept = {k: v for k, v in (user.attributes or {}).items() if k not in personal_attrs}
-    now = clock.now()
-    user.email = f"{pseudonym}@{ERASED_DOMAIN}"
-    user.full_name = f"Erased user {user.id.hex[:8]}"
-    user.password_hash = hash_password(secrets.token_urlsafe(32))  # nobody knows it: sign-in is impossible
-    user.attributes = {**kept, "erased": {"at": now.isoformat(), "by": str(admin.user_id)}}
-    user.active = False
-    user.mfa_enrolled = False
-    factors = session.execute(delete(MfaFactor).where(MfaFactor.user_id == user.id)).rowcount
-    notifications = session.execute(delete(Notification).where(Notification.user_id == user.id)).rowcount
-    session.flush()
-    summary = {"pseudonym": pseudonym, "fieldsPseudonymised": ["email", "full_name", "password_hash"] + [f"attributes.{k}" for k in personal_attrs],
-               "deactivated": True, "mfaFactorsDeleted": factors, "notificationsDeleted": notifications,
-               "auditTrail": "retained unchanged (legal obligation); actor strings of earlier events still contain the former e-mail"}
+    summary = scrub_user(session, user, admin.user_id)
     # No personal data in the event itself: the subject is identified by id only.
     audit.record(session, "APP_USER", user.id, "PERSONAL_DATA_ERASED", object_ref=f"user:{user.id}", after=summary, reason=reason,
                  rule_set_version="DPDP-ERASURE")
@@ -232,3 +240,156 @@ def retention(session: Session) -> dict:
             "subjects": {"deactivatedUsers": deactivated, "erasedUsers": erased, "deactivatedNotErased": deactivated - erased},
             "dueForPurge": {"notifications": overdue_notifications},
             "howToConfigure": "POST /v1/admin/rules with key PRIVACY-RETENTION and body {\"categories\": {\"notification\": {\"days\": 180}}}"}
+
+
+# ---------------------------------------------------------------- retention purge and audit archive (jobs retention-purge, audit-archive)
+RETENTION_DEFAULT_DAYS = {"notification": 180, "outbox_event": 90, "processed_event": 90, "timer": 180, "job_run": 90}
+ARCHIVE_DEFAULTS = {"hotDays": 730, "batchSize": 5000, "maxEvents": 50_000}
+STATUTORY_AUDIT_DAYS = 8 * 365
+
+
+def _retention_body(session: Session) -> tuple[dict, Optional[str]]:
+    try:
+        rule = rules.resolve(session, "PRIVACY-RETENTION")
+        return rule.body or {}, rule.ref
+    except Problem:
+        return {}, None
+
+
+def _category_days(body: dict, key: str, default: Optional[int]) -> Optional[int]:
+    days = (body.get("categories") or {}).get(key, {}).get("days", default)
+    return int(days) if days is not None else None
+
+
+def apply_retention(session: Session, *, dry_run: bool, rule_ref: Optional[str] = None) -> dict:
+    """Apply PRIVACY-RETENTION to the non-statutory data PIC holds: in-app notifications, delivered outbox events and their
+    consumer markers, fired timers, scheduler run history and (opt-in, ``user_profile.days``) users deactivated that long ago, who
+    are pseudonymised. Business documents, payments and the audit trail are statutory records and are never touched here.
+    With ``dry_run`` only the counts are returned."""
+    from app.pic.services import jobs
+    body, ref = _retention_body(session)
+    rule_ref = rule_ref or ref
+    now = clock.now()
+    counts: dict = {}
+
+    def purge(key: str, label: str, model, condition) -> None:
+        days = _category_days(body, key, RETENTION_DEFAULT_DAYS.get(key))
+        if not days:
+            return
+        limit = now - timedelta(days=days)
+        where = condition(limit)
+        if dry_run:
+            counts[label] = {"wouldDelete": session.execute(select(func.count()).select_from(model).where(where)).scalar_one(),
+                             "olderThan": limit.isoformat()}
+        else:
+            counts[label] = {"deleted": session.execute(delete(model).where(where)).rowcount or 0, "olderThan": limit.isoformat()}
+
+    purge("notification", "notifications", Notification, lambda c: Notification.created_at < c)
+    purge("outbox_event", "outboxEvents", OutboxEvent,
+          lambda c: OutboxEvent.published_at.is_not(None) & (OutboxEvent.published_at < c)
+          & (OutboxEvent.last_error.is_(None) | ~OutboxEvent.last_error.like("DEAD_LETTER%")))
+    unpublished = select(OutboxEvent.id).where(OutboxEvent.published_at.is_(None))
+    purge("processed_event", "processedEvents", ProcessedEvent,
+          lambda c: (ProcessedEvent.processed_at < c) & ProcessedEvent.event_id.not_in(unpublished))
+    purge("timer", "timers", Timer, lambda c: Timer.fired_at.is_not(None) & (Timer.fired_at < c) & ~Timer.payload.has_key("deadLettered"))
+    days = _category_days(body, "job_run", RETENTION_DEFAULT_DAYS["job_run"])
+    if days:
+        removed = jobs.cleanup_history(session, keep=jobs.HISTORY_KEEP, older_than_days=days, dry_run=dry_run)
+        counts["jobRuns"] = {("wouldDelete" if dry_run else "deleted"): removed, "olderThan": (now - timedelta(days=days)).isoformat()}
+    user_days = _category_days(body, "user_profile", None)
+    if user_days:
+        limit = now - timedelta(days=user_days)
+        stale = session.execute(select(AppUser).where(
+            AppUser.active.is_(False), AppUser.updated_at.is_not(None), AppUser.updated_at < limit,
+            AppUser.email.not_like(f"%@{ERASED_DOMAIN}")).with_for_update(skip_locked=True)).scalars().all()
+        stale = [u for u in stale if not is_erased(u)]
+        if not dry_run:
+            for user in stale:
+                summary = scrub_user(session, user, None)
+                audit.record(session, "APP_USER", user.id, "PERSONAL_DATA_ERASED", object_ref=f"user:{user.id}", after=summary,
+                             reason=f"retention policy: deactivated for more than {user_days} days",
+                             rule_set_version=rule_ref or "PRIVACY-RETENTION")
+        counts["usersPseudonymised"] = {("wouldPseudonymise" if dry_run else "pseudonymised"): len(stale), "deactivatedBefore": limit.isoformat()}
+    total = sum(v.get("deleted", 0) + v.get("pseudonymised", 0) for v in counts.values())
+    if total and not dry_run:
+        audit.record(session, "RETENTION", uuid.uuid5(uuid.NAMESPACE_URL, f"retention:{session.info['tenant_id']}"), "RETENTION_PURGE_APPLIED",
+                     object_ref="PRIVACY-RETENTION", after=counts, rule_set_version=rule_ref)
+    return {"categories": counts, "total": total}
+
+
+def _archive_range(session: Session, cutoff) -> tuple[Optional[int], Optional[int]]:
+    """(lowest live seq, highest seq of the contiguous prefix older than ``cutoff`` that leaves the newest event live)."""
+    first, newest = session.execute(select(func.min(AuditEvent.seq), func.max(AuditEvent.seq))).one()
+    if first is None:
+        return None, None
+    young = session.execute(select(func.min(AuditEvent.seq)).where(AuditEvent.ts >= cutoff)).scalar()
+    last = (young - 1) if young is not None else newest - 1
+    return first, min(last, newest - 1)
+
+
+def archive_audit(session: Session, *, dry_run: bool, rule_ref: Optional[str] = None) -> dict:
+    """Move audit events older than the hot window to the audit archive without breaking the hash chain, and drop archived rows
+    older than the statutory retention. Each batch is verified first (every hash recomputed, continuity with the previous batch
+    or the start of the chain); pic.audit_archive_range() then moves it atomically and records the checkpoint that
+    ``audit.verify_chain`` continues from. The newest event is never archived, so new events always link to a live predecessor."""
+    body, ref = _retention_body(session)
+    rule_ref = rule_ref or ref
+    cfg = {**ARCHIVE_DEFAULTS, **(body.get("audit_archive") or {})}
+    now = clock.now()
+    cutoff = now - timedelta(days=int(cfg["hotDays"]))
+    tenant_id = session.info["tenant_id"]
+    result: dict = {"cutoff": cutoff.isoformat(), "batches": [], "expired": []}
+    first, last = _archive_range(session, cutoff)
+    remaining = int(cfg["maxEvents"])
+    head = session.execute(select(AuditArchiveBatch.head_hash).where(AuditArchiveBatch.tenant_id == tenant_id)
+                           .order_by(AuditArchiveBatch.seq_to.desc()).limit(1)).scalar()
+    while first is not None and last is not None and first <= last and remaining > 0:
+        events = session.execute(select(AuditEvent).where(AuditEvent.seq >= first, AuditEvent.seq <= last)
+                                 .order_by(AuditEvent.seq).limit(min(int(cfg["batchSize"]), remaining))).scalars().all()
+        if not events:
+            break
+        digest, prev = hashlib.sha256(), events[0].prev_hash
+        if prev != head:
+            raise Problem(409, "AUDIT_CHAIN_BROKEN", f"The audit trail does not continue the archive at seq {events[0].seq}; nothing was archived",
+                          rule_ref="AUDIT-ARCHIVE")
+        for event in events:
+            if event.prev_hash != prev or event.hash != audit.event_hash(prev, event):
+                raise Problem(409, "AUDIT_CHAIN_BROKEN", f"Audit event seq {event.seq} fails hash verification; nothing was archived",
+                              rule_ref="AUDIT-ARCHIVE", seq=event.seq)
+            digest.update(event.hash.encode())
+            prev = event.hash
+        batch = {"seqFrom": events[0].seq, "seqTo": events[-1].seq, "events": len(events), "from": events[0].ts.isoformat(),
+                 "to": events[-1].ts.isoformat()}
+        if dry_run:
+            result["batches"].append(batch)
+            result["wouldArchive"] = result.get("wouldArchive", 0) + len(events)
+            remaining -= len(events)
+            first = events[-1].seq + 1
+            head = events[-1].hash  # the next batch of a dry run continues from this one
+            continue
+        batch_id = uuid.uuid7()
+        moved = session.execute(text("SELECT pic.audit_archive_range(:t, :seq, :b, :n, :c, :by, :why)"), {
+            "t": tenant_id, "seq": events[-1].seq, "b": batch_id, "n": len(events), "c": digest.hexdigest(),
+            "by": session.info["principal"].actor, "why": f"hot window {cfg['hotDays']} days"}).scalar_one()
+        session.expire_all()
+        audit.record(session, "AUDIT_ARCHIVE", batch_id, "AUDIT_ARCHIVED", object_ref=f"seq {batch['seqFrom']}-{batch['seqTo']}",
+                     after={**batch, "headHash": prev, "contentSha256": digest.hexdigest()}, rule_set_version=rule_ref)
+        result["batches"].append({**batch, "id": str(batch_id), "headHash": prev})
+        result["archived"] = result.get("archived", 0) + moved
+        remaining -= moved
+        head = prev
+        first, last = _archive_range(session, cutoff)
+    statutory = _category_days(body, "audit_actor", STATUTORY_AUDIT_DAYS)
+    if statutory:
+        limit = now - timedelta(days=statutory)
+        for batch in session.execute(select(AuditArchiveBatch).where(
+                AuditArchiveBatch.tenant_id == tenant_id, AuditArchiveBatch.status == "ARCHIVED", AuditArchiveBatch.last_ts < limit)
+                .order_by(AuditArchiveBatch.seq_from)).scalars().all():
+            entry = {"id": str(batch.id), "seqFrom": batch.seq_from, "seqTo": batch.seq_to, "events": batch.event_count}
+            if not dry_run:
+                session.execute(text("SELECT pic.audit_archive_expire(:t, :b, :before)"), {"t": tenant_id, "b": batch.id, "before": limit})
+                session.expire_all()
+                audit.record(session, "AUDIT_ARCHIVE", batch.id, "AUDIT_ARCHIVE_EXPIRED", object_ref=f"seq {batch.seq_from}-{batch.seq_to}",
+                             after={**entry, "retentionDays": statutory}, rule_set_version=rule_ref)
+            result["expired"].append(entry)
+    return result

@@ -14,7 +14,7 @@ from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.core import check_if_match
 from app.pic.platform.crypto import sha256_hex
 from app.pic.platform.errors import Problem, not_found
-from app.pic.services import bank_files, einvoice, ocr, order, transmission
+from app.pic.services import bank_files, edi_invoice, einvoice, mandatory, ocr, order, transmission
 from app.pic.services.common import by_ref
 
 router = APIRouter(prefix="/v1")
@@ -110,12 +110,63 @@ def edi_inbound(payload: str = Body(..., media_type="application/EDIFACT"), p: P
     supplier user, and this scope is held by no business or supplier role. The interchange sender (UNB) must be a
     supplier's ``order_channel.ediId`` and the receiver this tenant's code; each message then acts as that supplier.
     A re-delivered interchange (same sender and control reference) replays the first result."""
-    interchange = transmission.parse(payload)
+    try:
+        interchange = transmission.parse(payload)
+    except Problem as exc:
+        if exc.code != "EDI_SYNTAX":
+            raise
+        # A syntax error is answered with a CONTRL rejecting the interchange (UCI action 4), carried in the problem document.
+        raise Problem(exc.status, exc.code, exc.detail, rule_ref=exc.rule_ref, contrl=edi_invoice.contrl_reject(payload, exc.detail), **exc.extra)
     with uow(p) as s:
         idem = idempotent(s, "POST /v1/edi/inbound", key or f"EDI|{interchange.sender}|{interchange.reference}", {"sha256": sha256_hex(payload)})
         if idem.replay:
             return idem.replay
         return idem.store(transmission.inbound(s, payload))
+
+
+@router.get("/edi/interchanges", tags=["Integration"])
+def edi_interchanges(p: Principal = Depends(require("admin:integration"))):
+    """Inbound interchanges kept for idempotency and audit, with the CONTRL / APERAK acknowledgements returned to the gateway."""
+    from sqlalchemy import select
+    from app.pic.models import EdiInterchange
+    with uow(p) as s:
+        return [{**edi_invoice.view(r), "id": str(r.id), "receivedAt": r.created_at.isoformat(), "receiver": r.receiver,
+                 "messageTypes": r.message_types} for r in s.execute(select(EdiInterchange).order_by(EdiInterchange.created_at.desc()).limit(100)).scalars()]
+
+
+# ---------------------------------------------------------------- TD §6 / P14 mandatory fields (admin editor)
+@router.get("/admin/mandatory-fields", tags=["Administration"])
+def mandatory_fields_state(p: Principal = Depends(require(READ))):
+    """Field catalogue per document type, the rule versions and what applies by default."""
+    with uow(p) as s:
+        return {"catalogue": mandatory.catalogue_view(), "versions": mandatory.versions(s), "effective": mandatory.resolve(s).body}
+
+
+class MandatoryFieldsIn(BaseModel):
+    documents: dict[str, dict]
+    effectiveFrom: Optional[date] = None
+    companyCode: Optional[str] = Field(default=None, max_length=10)
+    plant: Optional[str] = Field(default=None, max_length=10)
+    category: Optional[str] = Field(default=None, max_length=40)
+    purchaseType: Optional[str] = Field(default=None, max_length=30)
+    supplierGroup: Optional[str] = Field(default=None, max_length=30)
+    reason: str = Field(min_length=3, max_length=300)
+
+
+@router.post("/admin/mandatory-fields", status_code=201, tags=["Administration"])
+def save_mandatory_fields(body: MandatoryFieldsIn, p: Principal = Depends(require("admin:rules")), key: Optional[str] = Depends(idempotency_key)):
+    """A new effective-dated version of rule MANDATORY-FIELDS for a scope (company code, plant, category, purchase type, supplier group).
+    A scoped version replaces the tenant default for that scope; the fields are checked at requisition submit, PO release, GR post, invoice
+    capture and supplier register."""
+    with uow(p) as s:
+        idem = idempotent(s, "POST /v1/admin/mandatory-fields", key, body)
+        if idem.replay:
+            return idem.replay
+        rule = mandatory.save_version(s, p, body={"documents": body.documents}, effective_from=body.effectiveFrom, company_code=body.companyCode,
+                                      plant=body.plant, category=body.category, purchase_type=body.purchaseType, supplier_group=body.supplierGroup,
+                                      reason=body.reason)
+        return idem.store({"key": mandatory.KEY, "version": rule.version, "effectiveFrom": rule.effective_from.isoformat(),
+                           "scope": mandatory.scope_view(rule), "body": rule.body}, 201)
 
 
 # ---------------------------------------------------------------- bank payment files (F7-07)

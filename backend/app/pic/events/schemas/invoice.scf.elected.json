@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:invoice.scf.elected",
+  "title": "invoice.scf.elected",
+  "description": "Payload (outbox_event.payload) of invoice.scf.elected on INVOICE. Produced by services/early_payment.py.",
+  "type": "object",
+  "properties": {
+    "offer": {
+      "type": "string"
+    },
+    "maturity": {
+      "type": "string"
+    },
+    "grossMinor": {}
+  },
+  "required": [
+    "offer",
+    "maturity",
+    "grossMinor"
+  ],
+  "additionalProperties": true
+}

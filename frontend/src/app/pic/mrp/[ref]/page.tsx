@@ -1,10 +1,11 @@
 'use client';
 
 import { useParams } from 'next/navigation';
+import { useState } from 'react';
 import { AuditTrail, LineageView, ProcessPath } from '@/components/pic/object';
-import { Card, DataTable, Empty, Facts, Loading, ProblemBox, StatusChip, Tabs } from '@/components/pic/ui';
+import { Button, Card, DataTable, Empty, Facts, Loading, ProblemBox, StatusChip, Tabs } from '@/components/pic/ui';
 import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
-import { useApi } from '@/lib/pic/hooks';
+import { useApi, useList } from '@/lib/pic/hooks';
 import { PlannedOrder, PlannedOrderActions, SourceSummary, useMe } from '../_components';
 
 type NetResult = {
@@ -18,14 +19,24 @@ type MrpException = { id: string; material_id: string; planned_order_id: string 
 type Run = {
   id: string; number: string; mode: string; plant: string; scope: { materials?: string[] }; run_date: string; status: string;
   materials_planned: number; planned_orders_created: number; exceptions_raised: number; results: NetResult[] | null;
-  created_at: string; completed_at: string | null; plannedOrders: PlannedOrder[];
+  created_at: string; completed_at: string | null; plannedOrders?: PlannedOrder[];
+  /** 'summary' for a large run: counts only, the lists are read page by page (planned orders, exceptions, netting trace). */
+  detail?: 'full' | 'summary'; resultsCount?: number;
 };
+type ExceptionPage = { items: MrpException[]; total: number; nextOffset: number | null };
+type ResultPage = { items: NetResult[]; total: number; nextOffset: number | null };
 type Material = { id: string; number: string; description: string };
 
 export default function MrpRunPage() {
   const { ref } = useParams<{ ref: string }>();
   const { data: run, isLoading, error } = useApi<Run>(`/mrp/runs/${encodeURIComponent(ref)}`);
-  const exceptions = useApi<MrpException[]>(run ? `/mrp/runs/${encodeURIComponent(run.number)}/exceptions` : null);
+  const summary = run?.detail === 'summary';
+  const [exceptionOffset, setExceptionOffset] = useState(0);
+  const [resultOffset, setResultOffset] = useState(0);
+  const exceptionsFull = useApi<MrpException[]>(run && !summary ? `/mrp/runs/${encodeURIComponent(run.number)}/exceptions` : null);
+  const exceptionsPage = useApi<ExceptionPage>(run && summary ? `/mrp/runs/${encodeURIComponent(run.number)}/exceptions?limit=50&offset=${exceptionOffset}` : null);
+  const resultsPage = useApi<ResultPage>(run && summary ? `/mrp/runs/${encodeURIComponent(run.number)}/results?limit=25&offset=${resultOffset}` : null);
+  const exceptions = summary ? { data: exceptionsPage.data?.items, isLoading: exceptionsPage.isLoading, error: exceptionsPage.error } : exceptionsFull;
   // Planned orders and exceptions of the run carry material ids only; resolve them to material numbers.
   const materials = useApi<{ items: Material[] }>('/materials?limit=200');
   const materialNo = (id: string) => materials.data?.items.find((m) => m.id === id)?.number ?? '…';
@@ -33,7 +44,8 @@ export default function MrpRunPage() {
 
   if (isLoading) return <Loading />;
   if (error || !run) return <ProblemBox error={error} />;
-  const results = run.results ?? [];
+  const results = summary ? (resultsPage.data?.items ?? []) : (run.results ?? []);
+  const orders = run.plannedOrders ?? [];
 
   return (
     <div className="space-y-5">
@@ -57,21 +69,30 @@ export default function MrpRunPage() {
 
       <Card title="Netting trace (MRP-02)">
         <p className="mb-3 text-sm text-slate-600">Net requirement = gross − (on hand + open PO + in transit + firm receipts) + safety stock. Positive net requirements are lot-sized into proposals.</p>
+        {summary && <p className="mb-3 text-sm text-slate-600">Large run: {run.resultsCount} material(s) netted, shown 25 at a time.</p>}
         {!results.length ? <Empty title="No materials were in scope for this run" hint={run.mode === 'NET_CHANGE' ? 'Net-change runs only plan materials whose demand changed since the last run.' : undefined} /> : (
           <div className="space-y-3">
             {results.map((r) => <NettingRow key={`${r.material}-${r.plant}`} r={r} />)}
+            {summary && (
+              <div className="flex gap-2">
+                <Button disabled={resultOffset === 0} onClick={() => setResultOffset(Math.max(0, resultOffset - 25))}>Previous</Button>
+                <Button disabled={!resultsPage.data?.nextOffset} onClick={() => setResultOffset(resultsPage.data?.nextOffset ?? resultOffset)}>Next</Button>
+              </div>
+            )}
           </div>
         )}
       </Card>
 
       <Card>
         <Tabs tabs={[
-          { id: 'orders', label: `Planned orders (${run.plannedOrders.length})`, content: (
+          { id: 'orders', label: `Planned orders (${summary ? run.planned_orders_created : orders.length})`, content: summary ? (
+            <SummaryOrders run={run} canPlan={scopes.includes('mrp:plan')} />
+          ) : (
             <DataTable<PlannedOrder>
-              rows={run.plannedOrders} empty={run.status === 'SIMULATED' ? 'Simulation runs create no planned orders' : 'No planned orders from this run'}
+              rows={orders} empty={run.status === 'SIMULATED' ? 'Simulation runs create no planned orders' : 'No planned orders from this run'}
               columns={[
                 { key: 'number', header: 'Planned order', render: (o) => <span className="font-medium">{o.number}</span> },
-                { key: 'material_id', header: 'Material', render: (o) => materialNo(o.material_id) },
+                { key: 'material_id', header: 'Material', render: (o) => o.material ?? materialNo(o.material_id) },
                 { key: 'qty', header: 'Quantity', align: 'right', render: (o) => qty(o.qty) },
                 { key: 'release_date', header: 'Release', render: (o) => date(o.release_date) },
                 { key: 'need_date', header: 'Need', render: (o) => date(o.need_date) },
@@ -81,7 +102,8 @@ export default function MrpRunPage() {
               ]}
             />
           ) },
-          { id: 'exceptions', label: `Exceptions (${exceptions.data?.length ?? run.exceptions_raised})`, content: (
+          { id: 'exceptions', label: `Exceptions (${summary ? run.exceptions_raised : (exceptions.data?.length ?? run.exceptions_raised)})`, content: (
+            <div className="space-y-2">
             <DataTable<MrpException>
               rows={exceptions.data ?? []} loading={exceptions.isLoading} error={exceptions.error} empty="No exceptions raised"
               columns={[
@@ -93,6 +115,13 @@ export default function MrpRunPage() {
                 { key: 'status', header: 'Status', render: (e) => <StatusChip status={e.status} /> },
               ]}
             />
+            {summary && (
+              <div className="flex gap-2">
+                <Button disabled={exceptionOffset === 0} onClick={() => setExceptionOffset(Math.max(0, exceptionOffset - 50))}>Previous</Button>
+                <Button disabled={!exceptionsPage.data?.nextOffset} onClick={() => setExceptionOffset(exceptionsPage.data?.nextOffset ?? exceptionOffset)}>Next</Button>
+              </div>
+            )}
+            </div>
           ) },
           { id: 'process', label: 'Process', content: <ProcessPath type="MRP_RUN" objectRef={run.number} /> },
           { id: 'lineage', label: 'Lineage', content: <LineageView type="MRP_RUN" objectRef={run.number} /> },
@@ -152,5 +181,26 @@ function NettingRow({ r }: { r: NetResult }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Planned orders of a large run, read as cursor pages (a 50,000-material run has ~120,000). */
+function SummaryOrders({ run, canPlan }: { run: Run; canPlan: boolean }) {
+  const list = useList<PlannedOrder>(`/mrp/runs/${encodeURIComponent(run.number)}/planned-orders`);
+  return (
+    <DataTable<PlannedOrder>
+      rows={list.items} loading={list.isLoading} error={list.error} hasMore={list.hasNextPage} onLoadMore={() => list.fetchNextPage()}
+      loadingMore={list.isFetchingNextPage} empty="No planned orders from this run"
+      columns={[
+        { key: 'number', header: 'Planned order', render: (o) => <span className="font-medium">{o.number}</span> },
+        { key: 'material', header: 'Material', render: (o) => o.material ?? '–' },
+        { key: 'qty', header: 'Quantity', align: 'right', render: (o) => qty(o.qty) },
+        { key: 'release_date', header: 'Release', render: (o) => date(o.release_date) },
+        { key: 'need_date', header: 'Need', render: (o) => date(o.need_date) },
+        { key: 'source', header: 'Source determination', render: (o) => <SourceSummary source={o.source} /> },
+        { key: 'status', header: 'Status', render: (o) => <StatusChip status={o.status} /> },
+        { key: 'actions', header: 'Actions', render: (o) => <PlannedOrderActions order={o} canPlan={canPlan} /> },
+      ]}
+    />
   );
 }

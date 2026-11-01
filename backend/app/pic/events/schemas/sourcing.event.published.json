@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.event.published",
+  "title": "sourcing.event.published",
+  "description": "Payload (outbox_event.payload) of sourcing.event.published on SOURCING_EVENT. Produced by services/sourcing.py.",
+  "type": "object",
+  "properties": {
+    "category": {},
+    "baselineMinor": {},
+    "closeAt": {
+      "type": "string"
+    },
+    "lines": {}
+  },
+  "required": [
+    "category",
+    "baselineMinor",
+    "closeAt",
+    "lines"
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:supplier.registered",
+  "title": "supplier.registered",
+  "description": "Payload (outbox_event.payload) of supplier.registered on SUPPLIER. Produced by services/invitations.py.",
+  "type": "object",
+  "properties": {
+    "supplierCode": {},
+    "channel": {
+      "type": "string"
+    },
+    "categories": {
+      "type": "array"
+    },
+    "screening": {}
+  },
+  "required": [
+    "supplierCode",
+    "channel",
+    "categories",
+    "screening"
+  ],
+  "additionalProperties": true
+}

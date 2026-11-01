@@ -350,7 +350,11 @@ BODY_REJECTED = Counter("pic_http_body_too_large_total", "Requests rejected with
 WORKER_TICKS = Counter("pic_worker_ticks_total", "Worker ticks by outcome (this process only).", ("outcome",))
 WORKER_TENANT_FAILURES = Counter("pic_worker_tenant_failures_total",
                                  "One tenant's worker stage (timers, integration, outbox) failed; the other tenants ran.", ("stage",))
-_REGISTRY = [HTTP_REQUESTS, HTTP_ERRORS, HTTP_LATENCY, HTTP_IN_FLIGHT, RATE_LIMITED, BODY_REJECTED, WORKER_TICKS, WORKER_TENANT_FAILURES]
+JOB_RUNS = Counter("pic_job_runs_total", "Scheduled job runs by job and outcome (SUCCESS, PARTIAL, FAILED, SKIPPED; this process only).", ("job", "status"))
+JOB_DURATION = Histogram("pic_job_duration_seconds", "Scheduled job run time by job.", ("job",), buckets=(0.05, 0.2, 0.5, 1, 2, 5, 15, 30, 60, 300, 900))
+JOB_LAST_SUCCESS = Gauge("pic_job_last_success_timestamp_seconds", "Unix time of the job's last successful run (this process only).", ("job",))
+_REGISTRY = [HTTP_REQUESTS, HTTP_ERRORS, HTTP_LATENCY, HTTP_IN_FLIGHT, RATE_LIMITED, BODY_REJECTED, WORKER_TICKS, WORKER_TENANT_FAILURES,
+             JOB_RUNS, JOB_DURATION, JOB_LAST_SUCCESS]
 
 
 def observe_request(method: str, route: str, status: int, seconds: float) -> None:

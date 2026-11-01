@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:ml.model.activated",
+  "title": "ml.model.activated",
+  "description": "Payload (outbox_event.payload) of ml.model.activated on ML_MODEL. Produced by services/ml_registry.py.",
+  "type": "object",
+  "properties": {
+    "code": {},
+    "version": {}
+  },
+  "required": [
+    "code",
+    "version"
+  ],
+  "additionalProperties": true
+}

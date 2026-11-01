@@ -15,7 +15,8 @@ from app.pic.models import (
 )
 from app.pic.platform import agents as agent_catalogue
 from app.pic.platform import clock
-from app.pic.platform.process_defs import PROCESS_DEFINITIONS
+from app.pic.platform import job_defaults, p2p_defaults
+from app.pic.platform.process_defs import baseline
 from app.pic.seed import templates
 
 RULES_VERSION = "2026.1"
@@ -32,6 +33,9 @@ NUMBER_RANGES = {
     "MAVERICK_HIT": ("MAV-", 1001, 0), "CATEGORY_PLAN": ("CP-", 101, 0), "CAPA": ("CAPA-", 301, 0), "PO_CHANGE": ("PCR-", 501, 0),
     "RECONCILIATION": ("REC-", 101, 0), "CONTRACT_AMENDMENT": ("CA-", 101, 0), "PAYMENT_FILE": ("PF-", 1001, 0),
     "SUPPLIER_CHANGE": ("SMC-", 101, 0), "INTEGRATION_BATCH": ("IB-", 101, 0), "PUNCHOUT": ("PUN-", 1001, 0),
+    # wave 1 (engineer C1): material change requests, rebates, clause extraction, supplier development plans
+    "MATERIAL_CHANGE": ("MCR-", 101, 0), "REBATE_AGREEMENT": ("RBA-", 101, 0), "REBATE_SETTLEMENT": ("RBS-", 101, 0),
+    "CLAUSE_EXTRACTION": ("CLX-", 101, 0), "DEVELOPMENT_PLAN": ("SDP-", 101, 0),
 }
 
 L = 100_000 * 100   # one lakh rupees in paise
@@ -62,6 +66,8 @@ EXTRA_OBLIGATIONS = {
 CURRENCIES = [("INR", "Indian rupee"), ("USD", "US dollar"), ("EUR", "Euro"), ("GBP", "Pound sterling"), ("JPY", "Japanese yen")]
 
 RULE_SETS = {
+    **job_defaults.BODIES,  # wave 1 platform: PAYMENT-RUN, MRP-SCHEDULE, PRIVACY-RETENTION, DELEGATION, AI-CONTROL
+    **p2p_defaults.BODIES,  # wave 1 P2P completion: ONE-TIME-VENDOR, PO-PRICE-CHECK, DEBIT-NOTE, EARLY-PAYMENT, MANDATORY-FIELDS, ...
     "DMN-01": ({"bands": [
         {"upTo": 25_000 * 100, "autoChannels": ["CATALOGUE", "CONTRACT"], "chain": ["COST_OBJECT_OWNER"]},
         {"upTo": 2 * L, "chain": ["COST_OBJECT_OWNER"]},
@@ -119,9 +125,13 @@ RULE_SETS = {
         "awardDefaults": {"tolerances": {"over_pct": "2", "under_pct": "5", "price_pct": "0.5"},
                           "index": {"index": "LME_AL", "base": "100.00", "band_pct": "3", "reset": "QUARTERLY"}}},
         "Clause library, playbook positions and award defaults"),
-    "SPEND-GOVERNANCE": ({"classificationThreshold": "0.80", "oneTimeVendorLimitMinor": 5 * L, "groupCurrency": "INR"},
-                         "Spend classification threshold, one-time-vendor limit and group currency (M01)"),
+    "SPEND-GOVERNANCE": ({"classificationThreshold": "0.80", "oneTimeVendorLimitMinor": 5 * L, "groupCurrency": "INR",
+                          "aggregationMinSuppliers": 4, "aggregationSavingPct": "3"},
+                         "Spend classification threshold, one-time-vendor limit, group currency and aggregation-opportunity assumptions (M01)"),
+    "KPI-THRESHOLDS": ({"overrides": {}, "minutesSavedPerAgentRun": 6},
+                       "KPI target / warn overrides per KPI code and the minutes an executed agent run saves (BP Table 28, M12 hours saved)"),
     "DEMAND-SENSING": ({"alpha": "0.3", "biasThreshold": "0.15", "horizon": 3}, "Forecast smoothing and Demand Sensing Agent bias threshold (M02)"),
+    "LLM-GATEWAY": ({"ratePerMinute": 30, "monthlyBudgetMicro": 0, "retentionDays": 90}, "LLM gateway: calls per minute, monthly cost budget (millionths; 0 = unlimited) and call-log retention (TD 13)"),
     "SUPPLIER-RISK": ({"minOtifPct": 90, "maxPpm": 1000, "maxLateProb": "0.30", "certificateWarnDays": 60, "bankChangeInvoiceDays": 30,
                        "preferredOtifPct": 95}, "Supplier risk signals and preferred-status threshold (M06)"),
     "CONTRACT-AMENDMENT": ({"thresholdMinor": 1 * CR, "above": ["LEGAL", "FINANCE_CONTROLLER"], "below": ["CONTRACT_MANAGER"],
@@ -136,6 +146,33 @@ RULE_SETS = {
     "SUPPLIER-INVITATION": ({"validDays": 14}, "Supplier self-registration invitation validity (F8-01)"),
     "CATEGORY-BUDGET": ({"mode": "SOFT", "warnAtPct": 90}, "Category-plan budget check at requisition submit (M01/M04)"),
     "PUNCHOUT": ({"sessionMinutes": 30, "protocols": ["CXML", "OCI"]}, "Punch-out session rules (M04)"),
+    # wave 1 (engineer C1)
+    "MATERIAL-FIELD-OWNERSHIP": ({
+        "fields": {"description": "PURCHASING", "material_group": "PURCHASING", "category": "PURCHASING", "mpn": "PURCHASING",
+                   "attributes": "PURCHASING", "base_uom": "PLANT", "valuation_class": "FINANCE", "hsn_code": "FINANCE", "gst_rate": "FINANCE",
+                   "standard_price_minor": "FINANCE", "quality_managed": "QUALITY", "mrp_type": "PLANT", "lot_size_policy": "PLANT",
+                   "lot_size_qty": "PLANT", "min_lot": "PLANT", "max_lot": "PLANT", "pack_size": "PLANT", "safety_stock": "PLANT",
+                   "planned_delivery_days": "PLANT", "gr_processing_days": "PLANT"},
+        "byType": {"SERVICE": {"notApplicable": ["base_uom", "quality_managed", "mrp_type", "lot_size_policy", "lot_size_qty", "min_lot", "max_lot",
+                                                 "pack_size", "safety_stock", "planned_delivery_days", "gr_processing_days"], "alsoApprove": {}},
+                   "NON_STOCK": {"notApplicable": ["mrp_type", "lot_size_policy", "lot_size_qty", "min_lot", "max_lot", "safety_stock"], "alsoApprove": {}},
+                   "STOCK": {"notApplicable": [], "alsoApprove": {"base_uom": ["QUALITY", "FINANCE"], "valuation_class": ["PLANT"],
+                                                                  "hsn_code": ["PURCHASING"], "gst_rate": ["PURCHASING"], "quality_managed": ["PLANT"]}}},
+        "outsideOwnership": "ROUTE", "distinctApprovers": True, "domains": ["PURCHASING", "QUALITY", "FINANCE", "PLANT"]},
+        "Material change requests: field to owning steward domain per material type, routing of changes outside the requester's domain (BP M03)"),
+    "AWARD-RISK": ({"maxRiskScore": None, "maxSingleSourcePct": None, "maxConditionalSharePct": None, "noDataScore": 50},
+                   "Risk constraints for award optimisation and the score of data-driven bid criteria; an event overrides them in its constraints (M05)"),
+    "SUPPLIER-RISK-EXT": ({"riskPoints": {"Critical": 40, "High": 25, "Medium": 10, "Low": 3}, "highTierPoints": 15, "maxScore": 100,
+                           "concentration": {"windowMonths": 12, "minSpendMinor": 10_00_000 * 100, "supplierSharePct": 30, "regionSharePct": 50,
+                                             "categoryRegionSharePct": 70},
+                           "singleSource": {"enabled": True},
+                           "cyber": {"requiredSegments": ["STRATEGIC", "BOTTLENECK"], "minScore": 60, "warnDays": 60,
+                                     "certificateTypes": ["ISO27001", "SOC2"]}},
+                          "Supplier risk score points, spend / region concentration, single-source and cyber thresholds (M06)"),
+    "SUPPLIER-SEGMENTATION": ({"windowMonths": 12, "highSpendSharePct": 5, "highRiskScore": 40, "criticalQuadrants": ["STRATEGIC", "BOTTLENECK"]},
+                              "Supplier segment from spend share and risk / criticality (M06)"),
+    "SUPPLIER-ASSESSMENT": ({"validDays": 365, "minAcceptScore": {"ESG": 40, "CYBER": 40}}, "ESG and cyber questionnaires: validity (M06)"),
+    "CLAUSE-EXTRACTION": ({"autoApplyAbove": "0.85"}, "Clause extraction on contract migration: confidence from which a clause is written without review (TD 12.4)"),
     "NOTIFICATIONS": ({"email": False, "kinds": ["TASK_ASSIGNED", "TASK_ESCALATED", "RECOMMENDATION", "PO_TRANSMITTED", "INVOICE_EXCEPTION",
                                                  "CHANGE_REQUEST", "CLARIFICATION_ANSWERED", "CONTRACT_EXPIRING",
                                                  "CONTRACT_AMENDED", "CONTRACT_TERMINATED", "SOURCING_CANCELLED", "PO_CANCELLED",
@@ -149,9 +186,38 @@ RULE_SETS = {
         "COST_OBJECT_OWNER": "DEPT_HEAD", "DEPT_HEAD": "PROCUREMENT_HEAD", "PROCUREMENT_HEAD": "CPO", "FINANCE_CONTROLLER": "CPO",
         "BUYER": "PROCUREMENT_HEAD", "CATEGORY_MANAGER": "CPO", "SUPPLIER_MANAGER": "PROCUREMENT_HEAD", "CONTRACT_MANAGER": "PROCUREMENT_HEAD",
         "SERVICE_OWNER": "DEPT_HEAD", "AP_CLERK": "FINANCE_CONTROLLER", "RECEIVER": "DEPT_HEAD", "QUALITY_INSPECTOR": "DEPT_HEAD"},
-        "keepScopeFor": ["DEPT_HEAD"]},
-        "Approval SLA escalation (TD §8): level 1 reminds the approvers; from managerAtLevel each further breach adds the manager role "
-        "as a candidate (four-eyes exclusions kept)"),
+        "keepScopeFor": ["DEPT_HEAD"], "mode": {"2": "ADD", "default": "REASSIGN"}},
+        "Approval SLA escalation (TD §8): level 1 reminds the approvers; level 2 adds the manager role as a candidate; level 3 and beyond "
+        "reassigns the task to the manager role (the original candidates lose it). mode: ADD | REASSIGN, as one value or per level; "
+        "four-eyes exclusions are kept"),
+    # ---- wave 1 (platform): attribute-based access control on commands, SoD exception path
+    "ABAC": ({"mode": "ENFORCE", "dimensions": {"company_code": "company_codes", "plant": "plants", "category": "categories"},
+              "valueLimitAttribute": "value_limit_minor", "limitsAttribute": "approval_limits",
+              "actions": {
+                  "REQ_SUBMIT": {"check": ["company_code", "plant"]},
+                  "REQ_APPROVE": {"check": ["company_code", "plant"], "valueLimit": True},
+                  "PO_CREATE": {"check": ["company_code", "plant"]},
+                  "PO_RELEASE": {"check": ["company_code", "plant"], "valueLimit": True},
+                  "PO_APPROVE": {"check": ["company_code", "plant"], "valueLimit": True},
+                  "GR_POST": {"check": ["company_code", "plant"]},
+                  "INVOICE_APPROVE": {"check": ["company_code"], "valueLimit": True},
+                  "INVOICE_POST": {"check": ["company_code"], "valueLimit": True},
+                  "PAYMENT_RUN": {"check": ["company_code"], "valueLimit": True},
+                  "CONTRACT_SIGN": {"check": ["company_code"], "valueLimit": True},
+                  "AWARD_APPROVE": {"check": ["category"], "valueLimit": True},
+                  "SUPPLIER_CHANGE": {"check": ["category"]},
+                  "MASTER_CHANGE": {"check": ["company_code", "plant"]}}},
+             "ABAC on commands (SEC-AZ): company code, plant, category and value limit from the user attributes; "
+             "mode ENFORCE | AUDIT (log only) | OFF. A user without the attribute is not restricted on that dimension."),
+    "SOD-MITIGATION": ({"approvers": {"Low": ["PROCUREMENT_HEAD"], "Medium": ["PROCUREMENT_HEAD"], "High": ["PROCUREMENT_HEAD", "CPO"]},
+                        "maxValidityHours": {"Low": 168, "Medium": 72, "High": 24}, "maxUses": {"Low": 5, "Medium": 3, "High": 1},
+                        "compensatingControls": {
+                            "default": "The approver reviews every transaction the actor completes under this exception within five "
+                                       "working days and confirms the review in the audit trail.",
+                            "SOD-03": "A second person re-counts the receipt and the receiver's supervisor countersigns the goods receipt note."},
+                        "minJustificationLength": 20, "slaBusinessDays": 2},
+                       "SoD exception path: who may approve a mitigation by risk (Critical is never mitigable), maximum validity "
+                       "and uses, compensating control text. Applies to SoD rules in mode MITIGATE."),
 }
 
 SOD_RULES = [
@@ -177,25 +243,46 @@ SANCTIONS = [
 
 
 def deploy_process_definitions() -> None:
+    """Version 1 of the nine flows (platform/process_defs.py), shared by all tenants. Idempotent; never touches the versions
+    tenants published themselves."""
     with system_tx() as s:
-        for d in PROCESS_DEFINITIONS:
+        for d in baseline():
             existing = s.get(ProcessDefinition, (d["key"], d["version"]))
-            body = {"steps": d["steps"], "branches": d["branches"]}
             if existing:
-                existing.definition = body
+                existing.definition = d["definition"]
                 existing.name = d["name"]
+                existing.status, existing.active = "ACTIVE", True
             else:
-                s.add(ProcessDefinition(key=d["key"], version=d["version"], flow_id=d["flow_id"], name=d["name"], definition=body, active=True))
+                s.add(ProcessDefinition(key=d["key"], version=d["version"], flow_id=d["flow_id"], name=d["name"],
+                                        definition=d["definition"], active=True, status="ACTIVE", published_at=clock.now()))
 
 
-def create_tenant(code: str, name: str, template: str = "MANUFACTURING") -> uuid.UUID:
+def _is_bundled_seed(frame_depth: int = 2) -> bool:
+    import sys
+    module = sys._getframe(frame_depth).f_globals.get("__name__", "")
+    return module.startswith(("app.pic.seed", "app.pic.tools", "__main__"))
+
+
+def create_tenant(code: str, name: str, template: str = "MANUFACTURING", *, mfa_enforce: Optional[bool] = None) -> uuid.UUID:
+    """Create (or find) a tenant. ``mfa_enforce`` sets the MFA rule of the tenant's bootstrap: unset, tenants created by the
+    bundled demo seeds and tools (app.pic.seed, app.pic.tools) stay unenforced until the operator flips them, and every other
+    new tenant starts with enforce=true for the approver, finance and admin roles."""
+    enforce = (not _is_bundled_seed()) if mfa_enforce is None else mfa_enforce
     with system_tx() as s:
         tenant = s.execute(select(Tenant).where(Tenant.code == code)).scalar_one_or_none()
         if tenant is None:
-            tenant = Tenant(code=code, name=name, industry_template=template)
+            tenant = Tenant(code=code, name=name, industry_template=template, mfa_enforce=enforce)
             s.add(tenant)
             s.flush()
         return tenant.id
+
+
+def _with_mfa_default(rules: dict, tenant: Tenant) -> dict:
+    """The tenant's rule bodies with the MFA default of its creation applied (copy; RULE_SETS is never modified)."""
+    if not tenant.mfa_enforce or "MFA" not in rules:
+        return rules
+    body, description = rules["MFA"]
+    return {**rules, "MFA": ({**body, "enforce": True}, description.replace("set enforce=true per tenant once users have enrolled", "enforced from tenant creation"))}
 
 
 def bootstrap(tenant_id: uuid.UUID, *, company: tuple[str, str, str], plants: list[tuple[str, str, str]],
@@ -206,7 +293,7 @@ def bootstrap(tenant_id: uuid.UUID, *, company: tuple[str, str, str], plants: li
         template = s.get(Tenant, tenant_id).industry_template
         for object_type, (prefix, first, padding) in NUMBER_RANGES.items():
             s.add(NumberRange(tenant_id=tenant_id, object_type=object_type, prefix=prefix, next_value=first, padding=padding))
-        for key, (body, description) in templates.merged_rules(RULE_SETS, template).items():
+        for key, (body, description) in _with_mfa_default(templates.merged_rules(RULE_SETS, template), s.get(Tenant, tenant_id)).items():
             s.add(RuleSet(tenant_id=tenant_id, key=key, version=RULES_VERSION, effective_from=RULES_FROM, body=body, description=description))
         for code, name_ in CURRENCIES:
             s.add(Currency(tenant_id=tenant_id, code=code, name=name_, decimals=0 if code == "JPY" else 2))
@@ -222,6 +309,8 @@ def bootstrap(tenant_id: uuid.UUID, *, company: tuple[str, str, str], plants: li
         s.flush()
         from app.pic.services import spend
         spend.ensure_taxonomy(s, tenant_id)
+        from app.pic.services import ml_registry
+        ml_registry.ensure_baselines(s)          # model registry: the built-in baseline versions (rules, smoothing, seeded twin)
         cc_code, cc_name, gstin = company
         s.add(CompanyCode(tenant_id=tenant_id, code=cc_code, name=cc_name, gstin=gstin, currency="INR"))
         for code, name_, state in plants:
@@ -251,7 +340,7 @@ def ensure_extensions(tenant_id: uuid.UUID) -> list[str]:
         for rs in s.execute(select(RuleSet).where(RuleSet.company_code.is_(None), RuleSet.plant.is_(None), RuleSet.category.is_(None),
                                                   RuleSet.purchase_type.is_(None)).order_by(RuleSet.effective_from)).scalars():
             current[rs.key] = rs
-        for key, (body, description) in templates.merged_rules(RULE_SETS, tenant.industry_template).items():
+        for key, (body, description) in _with_mfa_default(templates.merged_rules(RULE_SETS, tenant.industry_template), tenant).items():
             if key not in current:
                 s.add(RuleSet(tenant_id=tenant_id, key=key, version=RULES_VERSION, effective_from=RULES_FROM, body=body, description=description))
                 added.append(f"rule set {key}")
@@ -275,4 +364,7 @@ def ensure_extensions(tenant_id: uuid.UUID) -> list[str]:
                 added.append(f"agent {code}")
         s.flush()
         spend.ensure_taxonomy(s, tenant_id)
+        from app.pic.services import ml_registry
+        if ml_registry.ensure_baselines(s):
+            added.append("ML model registry baselines")
     return added

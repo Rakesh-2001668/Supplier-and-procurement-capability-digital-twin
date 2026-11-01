@@ -16,7 +16,7 @@ from app.pic.models import RuleSet
 from app.pic.platform import clock
 from app.pic.platform.errors import Problem
 
-SCOPE_FIELDS = ("company_code", "plant", "category", "purchase_type")
+SCOPE_FIELDS = ("company_code", "plant", "category", "purchase_type", "supplier_group")
 
 
 @dataclass
@@ -66,10 +66,12 @@ def refs(*rules: Rule) -> str:
 
 
 # ---------------------------------------------------------------- DMN-01 requisition approval route
+# Band edges are inclusive at the upper bound (BP Table 24 reads "2 L - 10 L"): exactly the ``upTo`` amount belongs to the
+# LOWER band. requisition_chain, band_chain, the simulator and the quote policy all follow this one convention.
 def requisition_chain(rule: Rule, value_minor: int, channel: str, account_type: Optional[str], purchase_type: str) -> list[str]:
     chain: list[str] = []
     for band in rule.body["bands"]:
-        if band["upTo"] is None or value_minor < band["upTo"]:
+        if band["upTo"] is None or value_minor <= band["upTo"]:
             if channel in band.get("autoChannels", []):
                 chain = []
             else:
@@ -84,7 +86,8 @@ def requisition_chain(rule: Rule, value_minor: int, channel: str, account_type: 
 
 # ---------------------------------------------------------------- PO risk score (§7.4)
 def po_risk(rule: Rule, *, late_prob: Decimal, price_deviation: bool, supplier_not_qualified: bool,
-            value_above_band: bool, split_pattern: bool, account_changed: bool, model_version: str = "eta-v3") -> dict:
+            value_above_band: bool, split_pattern: bool, account_changed: bool, model_version: str = "eta-v3",
+            price_evidence: Optional[str] = None, split_evidence: Optional[str] = None) -> dict:
     b = rule.body
     factors = []
     p = Decimal(str(late_prob))
@@ -93,13 +96,13 @@ def po_risk(rule: Rule, *, late_prob: Decimal, price_deviation: bool, supplier_n
     if p >= Decimal(str(b["lateHigh"])):
         factors.append({"code": "LATE_RISK_HIGH", "points": b["lateHighPts"], "evidence": f"model {model_version}: {p}"})
     if price_deviation:
-        factors.append({"code": "PRICE_DEVIATION", "points": b["priceDevPts"], "evidence": "price outside contract tolerance"})
+        factors.append({"code": "PRICE_DEVIATION", "points": b["priceDevPts"], "evidence": price_evidence or "price outside contract tolerance"})
     if supplier_not_qualified:
         factors.append({"code": "SUPPLIER_NOT_QUALIFIED", "points": b["notQualifiedPts"], "evidence": "supplier not Qualified/Preferred for category"})
     if value_above_band:
         factors.append({"code": "VALUE_ABOVE_BAND", "points": b["valueAboveBandPts"], "evidence": "value above touchless band"})
     if split_pattern:
-        factors.append({"code": "SPLIT_PATTERN", "points": b["splitPts"], "evidence": f"split pattern within {b['splitWindowDays']} days"})
+        factors.append({"code": "SPLIT_PATTERN", "points": b["splitPts"], "evidence": split_evidence or f"split pattern within {b['splitWindowDays']} days"})
     if account_changed:
         factors.append({"code": "ACCOUNT_ASSIGNMENT_CHANGED", "points": b["acctChangedPts"], "evidence": "account assignment differs from requisition"})
     score = min(sum(f["points"] for f in factors), 100)
@@ -131,6 +134,6 @@ def touchless(rule: Rule, *, price_sources: set[str], supplier_status: str, valu
 # ---------------------------------------------------------------- generic value-band chains
 def band_chain(rule: Rule, value_minor: int) -> list[str]:
     for band in rule.body["bands"]:
-        if band["upTo"] is None or value_minor < band["upTo"]:
+        if band["upTo"] is None or value_minor <= band["upTo"]:
             return list(band["chain"])
     return []

@@ -8,6 +8,6 @@
     }
   },
   "crons": [
-    { "path": "/internal/worker/tick", "schedule": "0 3 * * *" }
+    { "path": "/internal/worker/tick", "schedule": "* * * * *" }
   ]
 }

@@ -15,7 +15,7 @@ export default function PurchaseOrders() {
   const list = useList<Po>(`/purchase-orders${status ? `?status=${status}` : ''}`);
   return (
     <div>
-      <PageHeader eyebrow="PO-01 · Operational purchasing" title="Purchase orders"
+      <PageHeader kpis="M08" eyebrow="PO-01 · Operational purchasing" title="Purchase orders"
         subtitle="Every PO inherits price and terms from its requisition and contract, is risk-scored, and is released touchless or after approval."
         actions={<>
           <LinkButton href="/pic/purchase-orders/changes">Confirmations & changes</LinkButton>

@@ -33,13 +33,25 @@ function newKey(): string {
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+// ETag / If-Match (API-3): the ETag of each document's own GET (/collection/ref) is remembered, and a later write to that
+// document (/collection/ref/...) sends it as If-Match, so a command refuses to overwrite a version the user has not seen (412).
+// The entry is dropped after a successful write: the next reload brings the new version.
+const etags = new Map<string, string>();
+
+function documentKey(path: string): string | null {
+  const segments = path.split('?')[0].split('/').filter(Boolean);
+  return segments.length >= 2 ? `/${segments[0]}/${segments[1]}` : null;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, options: Options = {}): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
+  const docKey = documentKey(path);
   // FormData sets its own multipart content type (with the boundary).
   const isForm = typeof FormData !== 'undefined' && body instanceof FormData;
   if (body !== undefined && !isForm) headers['content-type'] = 'application/json';
-  if (method === 'POST' && options.idempotencyKey !== false) headers['idempotency-key'] = options.idempotencyKey || newKey();
+  if (method !== 'GET' && options.idempotencyKey !== false) headers['idempotency-key'] = options.idempotencyKey || newKey();
   if (options.ifMatch) headers['if-match'] = options.ifMatch;
+  else if (method !== 'GET' && docKey && etags.has(docKey)) headers['if-match'] = etags.get(docKey) as string;
   const response = await fetch(`/api/pic/v1${path}`, {
     method,
     headers,
@@ -48,6 +60,13 @@ async function request<T>(method: string, path: string, body?: unknown, options:
   });
   if (response.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/pic/login')) {
     window.location.href = `/pic/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+  }
+  if (method === 'GET') {
+    const tag = response.headers.get('etag');
+    // Only a document's own URL (/collection/ref) carries the validator the commands on it need.
+    if (tag && docKey && path.split('?')[0].split('/').filter(Boolean).length === 2) etags.set(docKey, tag);
+  } else if (response.ok && docKey) {
+    etags.delete(docKey);
   }
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -62,6 +81,7 @@ export const api = {
   post: <T,>(path: string, body?: unknown, options?: Options) => request<T>('POST', path, body ?? {}, options),
   patch: <T,>(path: string, body: unknown, options?: Options) => request<T>('PATCH', path, body, options),
   put: <T,>(path: string, body: unknown, options?: Options) => request<T>('PUT', path, body, options),
+  delete: <T = null,>(path: string) => request<T>('DELETE', path),
   upload: <T,>(path: string, form: FormData, options?: Options) => request<T>('POST', path, form, { idempotencyKey: false, ...options }),
 };
 

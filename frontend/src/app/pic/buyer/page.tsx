@@ -85,6 +85,7 @@ function CreatePoDialog({ item, onClose }: { item: WorkItem; onClose: () => void
   const [needDate, setNeedDate] = useState(item.needDate);
   const [price, setPrice] = useState('');
   const [reason, setReason] = useState('');
+  const [otvReason, setOtvReason] = useState('');
   const [result, setResult] = useState<PoResult[] | null>(null);
 
   const contractOptions = (contracts.data?.items ?? []).filter((c) => !supplier || c.supplier_code === supplier);
@@ -98,6 +99,7 @@ function CreatePoDialog({ item, onClose }: { item: WorkItem; onClose: () => void
     release: { qty: releaseQty, needDate },
     unitPriceMinor: price ? rupeesToMinor(price) : undefined,
     deviationReason: reason.trim() || undefined,
+    oneTimeVendorReason: otvReason.trim() || undefined,
   }), {
     success: (r) => 'purchaseOrders' in r ? `${r.purchaseOrders.length} purchase orders created` : `${r.id} created (${label(r.status)})`,
     onSuccess: (r) => setResult('purchaseOrders' in r ? r.purchaseOrders : [r]),
@@ -131,8 +133,11 @@ function CreatePoDialog({ item, onClose }: { item: WorkItem; onClose: () => void
             <Field label="Unit price override (₹, optional)" hint="Leave empty to inherit the price (P07)">{(id) => (
               <Input id={id} type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} />
             )}</Field>
-            <Field label="Deviation reason" hint="Required when the price deviates from the contract beyond tolerance">{(id) => (
-              <Input id={id} value={reason} onChange={(e) => setReason(e.target.value)} disabled={!price} />
+            <Field label="Deviation reason" hint="Required when the price is above the contract price +2% or the last price paid +5% (BP §24): a buyer lead approves it">{(id) => (
+              <Input id={id} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} />
+            )}</Field>
+            <Field label="One-time vendor reason" hint="Only for a supplier that is not Qualified/Preferred for the category (BP M06): within the value cap, approved by the procurement head">{(id) => (
+              <Input id={id} value={otvReason} maxLength={500} onChange={(e) => setOtvReason(e.target.value)} />
             )}</Field>
           </div>
           <div className="mt-3"><SourcingProblem error={create.error} /></div>
@@ -149,9 +154,18 @@ function CreatePoDialog({ item, onClose }: { item: WorkItem; onClose: () => void
 function SourcingProblem({ error }: { error: ApiError | null }) {
   if (!error) return null;
   const excluded = error.problem?.excluded;
+  const findings = error.problem?.findings;
   return (
     <div className="space-y-1">
       <ProblemBox error={error} />
+      {Array.isArray(findings) && findings.length > 0 && (
+        <div className="text-xs text-slate-600">
+          <p className="font-semibold">Price check (PO-PRICE-CHECK)</p>
+          <ul className="list-disc pl-5">{findings.map((f: { basis: string; unitPriceMinor: number; referencePriceMinor: number; overPct: string; bandPct: string; reference: string }, i: number) => (
+            <li key={i}>{f.basis === 'CONTRACT' ? 'Contract' : 'Last paid'} {f.reference}: {inr(f.unitPriceMinor)} vs {inr(f.referencePriceMinor)} (+{f.overPct}%, band +{f.bandPct}%)</li>
+          ))}</ul>
+        </div>
+      )}
       {Array.isArray(excluded) && excluded.length > 0 && (
         <div className="text-xs text-slate-600">
           <p className="font-semibold">Excluded sources</p>

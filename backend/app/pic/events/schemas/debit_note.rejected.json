@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:debit_note.rejected",
+  "title": "debit_note.rejected",
+  "description": "Payload (outbox_event.payload) of debit_note.rejected on DEBIT_NOTE. Produced by services/debit_notes.py.",
+  "type": "object",
+  "properties": {
+    "invoice": {},
+    "reason": {}
+  },
+  "required": [
+    "invoice",
+    "reason"
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:agent.recommendation.created",
+  "title": "agent.recommendation.created",
+  "description": "Payload (outbox_event.payload) of agent.recommendation.created on RECOMMENDATION. Produced by services/notifications.py.",
+  "type": "object",
+  "properties": {
+    "agent": {},
+    "title": {},
+    "candidateRole": {},
+    "objectType": {},
+    "objectId": {},
+    "objectRef": {}
+  },
+  "required": [
+    "agent",
+    "title",
+    "candidateRole",
+    "objectType",
+    "objectId",
+    "objectRef"
+  ],
+  "additionalProperties": true
+}

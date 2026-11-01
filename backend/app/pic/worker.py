@@ -45,6 +45,7 @@ import app.pic.services  # noqa: F401,E402  (registers consumers and handlers)
 from app.pic.config import get_settings  # noqa: E402
 from app.pic.platform import integration, observability as obs, outbox, workflow  # noqa: E402
 from app.pic.platform.auth import Principal  # noqa: E402
+from app.pic.services import jobs  # noqa: E402
 
 log = logging.getLogger("pic.worker")
 
@@ -62,7 +63,7 @@ def tick(tenant_id: Optional[uuid.UUID] = None) -> dict:
     tenant's write, admin tick). Each tenant's timers, ERP messages and outbox run in isolation: a failure is logged and
     counted (pic_worker_tenant_failures_total) and the other tenants and the second relay still run."""
     tenant_id = tenant_id or _tick_tenant.get()
-    stats = {"events": _relay(tenant_id), "integration": 0, "timers": 0}
+    stats = {"events": _relay(tenant_id), "integration": 0, "timers": 0, "jobs": 0}
     for tid in ([tenant_id] if tenant_id else workflow.tenants()):
         principal = system_principal(tid)
         try:
@@ -75,6 +76,11 @@ def tick(tenant_id: Optional[uuid.UUID] = None) -> dict:
                 stats["integration"] += integration.run_pending(tid, principal)
         except Exception:
             _tenant_failed("integration", tid)
+        try:
+            with obs.span("worker.jobs", tenant=str(tid)):
+                stats["jobs"] += jobs.run_due(tid)  # scheduled jobs (services/jobs.py): single-flight, each isolated
+        except Exception:
+            _tenant_failed("jobs", tid)
     stats["events"] += _relay(tenant_id)
     return stats
 
@@ -106,7 +112,7 @@ def drain(budget_seconds: float = 50.0, max_rounds: int = 20, tenant_id: Optiona
     if not _drain_lock.acquire(blocking=False):
         return {"skipped": "a drain is already running in this process"}
     started = time.monotonic()
-    totals = {"rounds": 0, "events": 0, "integration": 0, "timers": 0}
+    totals = {"rounds": 0, "events": 0, "integration": 0, "timers": 0, "jobs": 0}
     scope = _tick_tenant.set(tenant_id)
     try:
         with obs.span("worker.drain", kind="INTERNAL"):
@@ -114,7 +120,7 @@ def drain(budget_seconds: float = 50.0, max_rounds: int = 20, tenant_id: Optiona
                 stats = tick()
                 totals["rounds"] += 1
                 for key, value in stats.items():
-                    totals[key] += value
+                    totals[key] = totals.get(key, 0) + value
                 if not any(stats.values()):
                     break
         obs.WORKER_TICKS.inc("ok")
@@ -126,7 +132,7 @@ def drain(budget_seconds: float = 50.0, max_rounds: int = 20, tenant_id: Optiona
         _tick_tenant.reset(scope)
         _drain_lock.release()
     totals["ms"] = round((time.monotonic() - started) * 1000)
-    if totals["events"] or totals["integration"] or totals["timers"]:
+    if totals["events"] or totals["integration"] or totals["timers"] or totals["jobs"]:
         log.info("drain %s", totals, extra={"fields": {"event": "worker_drain", **totals}})
     return totals
 

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:supplier.segment.changed",
+  "title": "supplier.segment.changed",
+  "description": "Payload (outbox_event.payload) of supplier.segment.changed on SUPPLIER. Produced by services/supplier_mgmt.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "from": {},
+    "to": {},
+    "method": {}
+  },
+  "required": [
+    "supplier",
+    "from",
+    "to",
+    "method"
+  ],
+  "additionalProperties": true
+}

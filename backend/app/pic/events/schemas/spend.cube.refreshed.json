@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:spend.cube.refreshed",
+  "title": "spend.cube.refreshed",
+  "description": "Payload (outbox_event.payload) of spend.cube.refreshed on SPEND_CUBE. Produced by services/spend_cube.py.",
+  "type": "object",
+  "properties": {
+    "mode": {},
+    "periods": {},
+    "lines": {}
+  },
+  "required": [
+    "mode",
+    "periods",
+    "lines"
+  ],
+  "additionalProperties": true
+}

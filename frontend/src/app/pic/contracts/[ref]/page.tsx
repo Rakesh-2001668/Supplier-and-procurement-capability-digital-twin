@@ -2,13 +2,15 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useMemo, useState, useSyncExternalStore } from 'react';
+import { ReactNode, useMemo, useState, useSyncExternalStore } from 'react';
 import { ObjectPage } from '@/components/pic/object';
 import { Button, DataTable, Dialog, Empty, Facts, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, readSessionUser, SessionUser } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { AmendKind, AmendmentDialog, AmendmentsTab, AmendmentSummary, useAmendmentRule } from './_amendments';
+import { ExtractionTab } from './_extraction';
+import { RebatesTab } from './_rebates';
 
 type ContractLine = { id: string; line_no: number; description: string; plant: string; uom: string; target_qty: string; released_qty: string;
   released_value_minor: number };
@@ -24,9 +26,11 @@ type Contract = {
   company_code: string; valid_from: string; valid_to: string; payment_terms: string; incoterms: string | null; over_tolerance_pct: string;
   under_tolerance_pct: string; price_tolerance_pct: string; target_value_minor: number; index_ref: IndexRef | null; source_event_id: string | null;
   thresholds_hit: number[] | null; rule_set_version: string; activated_at: string | null; version: number;
-  terminated_at: string | null; termination_reason: string | null;
+  terminated_at: string | null; termination_reason: string | null; framework_contract_id: string | null; jurisdiction: string | null;
   lines: ContractLine[]; priceValidity: PriceValidity[]; clauses: Clause[]; signatures: Signature[]; pendingRedlines?: PendingRedline[];
 };
+type Brief = { number: string; title: string; type: string; status: string; validFrom: string; validTo: string; targetValueMinor: number };
+type Framework = { contract: string; type: string; jurisdiction: string | null; framework: Brief | null; callOffs: Brief[] };
 type Review = { risk: number; findings: { clause: string; position: string; risk: number; fallback: string | null }[]; aiRef: string };
 type Consumption = { contract: string; status: string; thresholdsHit: number[] | null;
   lines: { line: number; description: string; targetQty: string; releasedQty: string; releasedValueMinor: number; consumedPct: string;
@@ -105,6 +109,8 @@ export default function ContractPage() {
               ['Price index', c.index_ref ? `${c.index_ref.index} base ${c.index_ref.base} · band ±${c.index_ref.band_pct}%${c.index_ref.reset ? ` · ${label(c.index_ref.reset)}` : ''}` : 'not indexed'],
               ['Consumption alerts', c.thresholds_hit?.length ? c.thresholds_hit.map((t) => `${t}% reached`).join(', ') : 'none'],
               ['Company code', c.company_code],
+              ['Governing-law variant', c.jurisdiction ?? 'playbook default'],
+              ...(c.framework_contract_id || c.type === 'MASTER_AGREEMENT' ? [['Framework', <FrameworkLink key="fw" number={c.number} />] as [string, ReactNode]] : []),
               ['Activated', dateTime(c.activated_at)],
               ['Playbook', <span key="p" className="font-mono text-xs">{c.rule_set_version}</span>],
               ['Version', `v${c.version ?? 1}`],
@@ -162,7 +168,11 @@ export default function ContractPage() {
               ]} />
             ),
           },
+          ...(c.type === 'MASTER_AGREEMENT' || c.framework_contract_id ? [{ id: 'framework', label: c.type === 'MASTER_AGREEMENT' ? 'Call-off contracts' : 'Framework', content: <FrameworkTab number={c.number} /> }] : []),
           { id: 'consumption', label: 'Consumption & obligations', content: <ConsumptionTab path={path} canManage={manager} /> },
+          ...(c.type !== 'NDA' ? [{ id: 'rebates', label: 'Rebates', content: <RebatesTab contractNumber={c.number} contractType={c.type} contractStatus={c.status}
+            validFrom={c.valid_from} validTo={c.valid_to} canManage={manager} /> }] : []),
+          { id: 'extraction', label: 'Clause extraction', content: <ExtractionTab contractNumber={c.number} canManage={manager} /> },
           { id: 'amendments', label: `Amendments (v${c.version ?? 1})`, content: <AmendmentsTab contract={c} canManage={manager} /> },
         ] : []}
       />
@@ -175,6 +185,39 @@ export default function ContractPage() {
 }
 
 const POSITIONS = ['STANDARD', 'FALLBACK', 'NON_STANDARD'];
+
+/** The master agreement a call-off refers to (one line in the facts), or how many call-offs a master agreement has. */
+function FrameworkLink({ number }: { number: string }) {
+  const { data } = useApi<Framework>(`/contracts/${encodeURIComponent(number)}/framework`);
+  if (!data) return <span>…</span>;
+  if (data.framework) return <Link href={`/pic/contracts/${encodeURIComponent(data.framework.number)}`} className="text-[#1A56DB] hover:underline">{data.framework.number}</Link>;
+  return <span>{data.callOffs.length} call-off contract(s)</span>;
+}
+
+/** CLM framework: the master agreement of a call-off contract, or the call-off contracts of a master agreement. */
+function FrameworkTab({ number }: { number: string }) {
+  const { data, isLoading, error } = useApi<Framework>(`/contracts/${encodeURIComponent(number)}/framework`);
+  if (isLoading) return <Loading />;
+  if (error) return <ProblemBox error={error} />;
+  if (!data) return null;
+  const rows = data.framework ? [data.framework] : data.callOffs;
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-slate-600">
+        {data.framework ? 'This contract is a call-off of the master agreement below. Its period must stay inside the master agreement, which cannot be terminated while call-offs are live.'
+          : 'Call-off contracts refer to this master agreement for their commercial terms. It cannot be terminated while a call-off is active.'}
+      </p>
+      <DataTable<Brief & Record<string, unknown>> rows={rows} empty="No call-off contracts yet" rowHref={(b) => `/pic/contracts/${encodeURIComponent(b.number)}`} columns={[
+        { key: 'number', header: 'Contract' },
+        { key: 'title', header: 'Title' },
+        { key: 'type', header: 'Type', render: (b) => label(b.type) },
+        { key: 'status', header: 'Status', render: (b) => <StatusChip status={b.status} /> },
+        { key: 'validFrom', header: 'Validity', render: (b) => `${date(b.validFrom)} – ${date(b.validTo)}` },
+        { key: 'targetValueMinor', header: 'Target value', align: 'right', render: (b) => inr(b.targetValueMinor) },
+      ]} />
+    </div>
+  );
+}
 
 /** CLM-REDLINE: the contract manager classifies the supplier's text (NON_STANDARD routes the approval through LEGAL) or restores the text it replaced. */
 function RedlineReviewDialog({ contract, redline, onClose }: { contract: Contract; redline: PendingRedline; onClose: () => void }) {

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:quality.usage_decision",
+  "title": "quality.usage_decision",
+  "description": "Payload (outbox_event.payload) of quality.usage_decision on GOODS_RECEIPT. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "grId": {
+      "type": "string"
+    },
+    "lot": {},
+    "accepted": {
+      "type": "string"
+    },
+    "rejected": {
+      "type": "string"
+    },
+    "defect": {},
+    "po": {},
+    "lots": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "grId",
+    "lot",
+    "accepted",
+    "rejected",
+    "defect",
+    "po",
+    "lots"
+  ],
+  "additionalProperties": true
+}

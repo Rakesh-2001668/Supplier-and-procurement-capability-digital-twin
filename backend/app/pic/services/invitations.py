@@ -26,6 +26,7 @@ from app.pic.config import get_settings
 from app.pic.db import current_tenant
 from app.pic.models import AppUser, Supplier, SupplierInvitation, Tenant
 from app.pic.platform import audit, clock, mailer, outbox, rules
+from app.pic.platform import passwords
 from app.pic.platform.auth import Principal, hash_password, scopes_for
 from app.pic.platform.errors import Problem
 from app.pic.platform.serialize import row
@@ -173,6 +174,8 @@ def password_errors(password: str, email: str, legal_name: str) -> list[str]:
         errors.append("password must not contain your company name")
     if any(c in lowered for c in COMMON_PASSWORDS):
         errors.append("password is too common")
+    # Offline breached / common-password list and pattern checks (platform/passwords.py), shared with POST /v1/me/password.
+    errors.extend(e for e in passwords.check(password, email=email, names=(legal_name,)) if e not in errors)
     return errors
 
 

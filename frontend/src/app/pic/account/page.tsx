@@ -8,6 +8,7 @@ import { api, ApiError } from '@/lib/pic/api';
 import { dateTime, label } from '@/lib/pic/format';
 import { useApi } from '@/lib/pic/hooks';
 import { AuthenticatorSetup, Enrolment } from './_authenticator';
+import { DelegationsCard } from './_delegations';
 
 type Me = { userId: string; user: string; name: string; tenant: string; roles: string[]; attributes: Record<string, unknown>; supplierId: string | null };
 type MfaStatus = { enrolled: boolean; pending: boolean; confirmedAt: string | null; enforced: boolean; required: boolean; issuer: string };
@@ -113,6 +114,7 @@ export default function AccountPage() {
         )}
       </Card>
       <SecurityCard />
+      {me.data && !me.data.supplierId && <DelegationsCard roles={me.data.roles} />}
     </div>
   );
 }

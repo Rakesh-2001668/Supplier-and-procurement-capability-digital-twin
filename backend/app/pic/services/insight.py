@@ -6,10 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.pic.models import (
     AgentRun, AuditEvent, IntegrationMessage, Invoice, InvoiceException, PurchaseOrder, Requisition, SavingsLedgerEntry, SodViolation,
-    SpendLine, Supplier, SupplierCategoryStatus, Task,
+    SpendCubeSummary, Supplier, SupplierCategoryStatus, Task,
 )
 from app.pic.platform import clock, workflow
 from app.pic.platform.money import crore
+from app.pic.services import spend_cube
 
 
 def _pct(num, den) -> str | None:
@@ -21,10 +22,11 @@ def _counts(session: Session, column) -> dict:
 
 
 def dashboard(session: Session, principal) -> dict:
-    spend_total = session.execute(select(func.coalesce(func.sum(SpendLine.amount_minor), 0))).scalar()
-    contracted = session.execute(select(func.coalesce(func.sum(SpendLine.amount_minor), 0)).where(SpendLine.contracted.is_(True))).scalar()
-    maverick = session.execute(select(func.coalesce(func.sum(SpendLine.amount_minor), 0)).where(
-        func.jsonb_array_length(SpendLine.maverick_flags) > 0)).scalar()
+    spend_cube.ensure_fresh(session)  # spend totals come from the cube summary, never from a scan of spend_line
+    spend_total, contracted, maverick = (int(x) for x in session.execute(select(
+        func.coalesce(func.sum(SpendCubeSummary.amount_group_minor), 0),
+        func.coalesce(func.sum(case((SpendCubeSummary.contracted.is_(True), SpendCubeSummary.amount_group_minor), else_=0)), 0),
+        func.coalesce(func.sum(case((SpendCubeSummary.maverick.is_(True), SpendCubeSummary.amount_group_minor), else_=0)), 0))).one())
     released = session.execute(select(func.count(), func.sum(case((PurchaseOrder.touchless.is_(True), 1), else_=0))).where(
         PurchaseOrder.released_at.is_not(None))).one()
     matched = session.execute(select(func.count(), func.sum(case((Invoice.first_pass_matched.is_(True), 1), else_=0))).where(

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:guarantee.expired",
+  "title": "guarantee.expired",
+  "description": "Payload (outbox_event.payload) of guarantee.expired on BANK_GUARANTEE. Produced by services/ind_construction.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "expiry": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "po",
+    "expiry"
+  ],
+  "additionalProperties": true
+}

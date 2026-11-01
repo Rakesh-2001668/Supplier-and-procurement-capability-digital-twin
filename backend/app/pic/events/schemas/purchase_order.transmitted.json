@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:purchase_order.transmitted",
+  "title": "purchase_order.transmitted",
+  "description": "Payload (outbox_event.payload) of purchase_order.transmitted on PURCHASE_ORDER. Produced by services/transmission.py.",
+  "type": "object",
+  "properties": {
+    "version": {},
+    "channels": {},
+    "transmissions": {}
+  },
+  "required": [
+    "version",
+    "channels",
+    "transmissions"
+  ],
+  "additionalProperties": true
+}

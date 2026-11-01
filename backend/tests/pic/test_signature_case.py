@@ -60,7 +60,10 @@ def test_savings_three_kinds(client, login):
     assert Decimal(register["avoidanceCr"]) == Decimal("0.32")
     # Realised only from posted invoices: (410 − 398) × 5,380 (INV-TF-8812, net of the credit note)
     # + (410 − 398) × 5,400 (INV-TF-9031) + (410 − 410) × 3,420 (Kovai's accepted price drift realises nothing).
-    assert register["realisedMinor"] == 12 * 100 * 5380 + 12 * 100 * 5400
+    # + the SA-5520 call-offs of seed/operations.py Case 9 (Blueprint section 20: realised YTD 0.38 Cr): Trichy Forge 249,000 pcs at 398
+    # (410 - 398) and Kovai 134,000 pcs at the contract price 405 (410 - 405); March's Kovai invoice is not yet received.
+    assert register["realisedMinor"] == 12 * 100 * 5380 + 12 * 100 * 5400 + 12 * 100 * 249_000 + 5 * 100 * 134_000
+    assert register["realisedCr"] == "0.38"
 
 
 def test_process_paths(client, login):

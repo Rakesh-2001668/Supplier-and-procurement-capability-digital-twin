@@ -328,8 +328,10 @@ def test_simulation_dmn01_band_edges(client, login):
             continue
         below = _simulate(client, login, key="DMN-01", inputs={"valueMinor": band["upTo"] - 1, "channel": "OTHER"})["result"]
         at = _simulate(client, login, key="DMN-01", inputs={"valueMinor": band["upTo"], "channel": "OTHER"})["result"]
+        above = _simulate(client, login, key="DMN-01", inputs={"valueMinor": band["upTo"] + 1, "channel": "OTHER"})["result"]
         assert below["band"] == index + 1 and below["chain"] == band["chain"]
-        assert at["band"] == index + 2 and at["chain"] == bands[index + 1]["chain"], "the band bound is exclusive"
+        assert at["band"] == index + 1 and at["chain"] == band["chain"], "the upper band bound is inclusive (BP Table 24)"
+        assert above["band"] == index + 2 and above["chain"] == bands[index + 1]["chain"]
     auto = [b for b in bands if b.get("autoChannels")]
     if auto:
         r = _simulate(client, login, key="DMN-01", inputs={"valueMinor": auto[0]["upTo"] - 1, "channel": auto[0]["autoChannels"][0]})

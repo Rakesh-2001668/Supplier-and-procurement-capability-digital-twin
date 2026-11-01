@@ -17,10 +17,12 @@ from app.pic.models import DemandElement, Forecast, Material, StockMovement
 from app.pic.platform import agents, audit, clock, rules
 from app.pic.platform.errors import Problem
 from app.pic.platform.money import D
+from app.pic.services import ml_models, ml_registry
 from app.pic.services.common import principal
 
 ISSUE_MOVEMENTS = ("201", "261", "221", "601")
 MODEL_VERSION = "demand-es-v1"
+FORCE_VERSION: Optional[str] = None     # evaluation only: ai_eval runs the baseline version side by side with the registry's
 
 
 def _period(d: date) -> str:
@@ -49,6 +51,7 @@ def generate(session: Session, horizon: int = 3) -> list[Forecast]:
     alpha = Decimal(str(rules.resolve(session, "DEMAND-SENSING").body["alpha"]))
     current = _period(clock.today())
     created = []
+    forecast_version = FORCE_VERSION or ml_registry.effective_version(session, ml_models.DEMAND)
     materials = session.execute(select(Material).where(Material.type == "STOCK", Material.status == "ACTIVE")).scalars().all()
     for material in materials:
         plants = {p for p in session.execute(select(StockMovement.plant).where(StockMovement.material_id == material.id).distinct()).scalars()} \
@@ -71,17 +74,23 @@ def generate(session: Session, horizon: int = 3) -> list[Forecast]:
             for _, qty in actuals[1:]:
                 level = alpha * qty + (1 - alpha) * level
             level = level.quantize(Decimal("1"), ROUND_HALF_UP)
+            # Registry-driven model (ml_models.forecast_series): seasonal baseline + boosted stumps where a series back-tests better
+            # than smoothing; demand-es-v1 (also the fallback after a drift suspension) is plain smoothing as before.
+            ml = ml_models.forecast_series([(p, float(q)) for p, q in actuals], current, horizon, float(alpha), version=forecast_version)
             for h in range(0, horizon):
                 period = _shift(current, h)
+                method, qty, version = "EXP_SMOOTHING", level, MODEL_VERSION
+                if ml["method"] != "EXP_SMOOTHING" and ml["methods"][h] != "EXP_SMOOTHING":
+                    method, qty, version = ml["methods"][h], Decimal(str(round(ml["values"][h]))).quantize(Decimal("1"), ROUND_HALF_UP), ml_models.DEMAND_VERSION
                 f = rows.get(period)
                 if f is None:
-                    f = Forecast(tenant_id=material.tenant_id, material_id=material.id, plant=plant, period=period, method="EXP_SMOOTHING",
-                                 statistical_qty=level, model_version=MODEL_VERSION, created_by=principal(session).user_id)
+                    f = Forecast(tenant_id=material.tenant_id, material_id=material.id, plant=plant, period=period, method=method,
+                                 statistical_qty=qty, model_version=version, created_by=principal(session).user_id)
                     session.add(f)
                     rows[period] = f
                     created.append(f)
                 elif f.override_qty is None:
-                    f.statistical_qty, f.method, f.model_version = level, "EXP_SMOOTHING", MODEL_VERSION
+                    f.statistical_qty, f.method, f.model_version = qty, method, version
             session.flush()
     return created
 

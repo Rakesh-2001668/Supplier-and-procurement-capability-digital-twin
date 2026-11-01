@@ -14,8 +14,18 @@ type RequisitionDetail = Requisition & { lines: PrLine[] };
 type Supplier = { id: string; code: string; legal_name: string; status: string; categories: Record<string, string> };
 type CreatedEvent = { number: string };
 
-type LineSel = { key: string; requisition: string; line: number; description: string; uom: string; annual_qty: string; monthly_qty: string };
-type CriterionRow = { code: string; name: string; weight: string };
+type Source = { requisition: string; line: number; qty: string };
+type LineSel = { key: string; requisition: string; line: number; description: string; uom: string; annual_qty: string; monthly_qty: string;
+  lot: string; baseline: string; sources?: Source[] };
+type CriterionRow = { code: string; name: string; weight: string; data_source: string };
+type Candidate = { code: string; name: string; status: string; waiverNeeded: boolean; segment: string; riskScore: number; riskLevel: string; openSignals: string[] };
+type CandidateResult = { candidates: Candidate[]; hiddenByFilter: { segment: number; risk: number; signals: number } };
+type BundleItem = { requisition: string; line: number; origin: string; category: string; description: string; plant: string; qty: string; uom: string;
+  needDate: string; valueMinor: number };
+type BundleResult = { items: BundleItem[]; totalValueMinor: number };
+type BundlePreview = { lines: { description: string; qty: string; annual_qty: string; monthly_qty: string; uom: string; sources: Source[]; valueMinor: number }[];
+  warnings: string[]; category: string | null; estimatedValueMinor: number };
+type CategoryPlan = { number: string; category: string; fiscal_year: string };
 
 const TYPES = [
   { value: 'RFQ', label: 'RFQ – request for quotation' },
@@ -24,15 +34,24 @@ const TYPES = [
   { value: 'REVERSE_AUCTION', label: 'Reverse auction' },
 ];
 const CRITERIA_CODES: Record<string, string> = {
-  PRICE_TCO: 'Price / TCO', QUALITY: 'Quality', DELIVERY: 'Delivery', TECHNICAL: 'Technical', ESG: 'ESG', RISK: 'Risk',
+  PRICE_TCO: 'Price / TCO', QUALITY: 'Quality', DELIVERY: 'Delivery', TECHNICAL: 'Technical', ESG: 'ESG', RISK: 'Risk', RESPONSIVENESS: 'Responsiveness',
 };
+const SEGMENTS = ['STRATEGIC', 'LEVERAGE', 'BOTTLENECK', 'ROUTINE', 'UNSEGMENTED'];
 const DEFAULT_CRITERIA: CriterionRow[] = [
-  { code: 'PRICE_TCO', name: 'Price / TCO', weight: '50' },
-  { code: 'QUALITY', name: 'Quality', weight: '20' },
-  { code: 'DELIVERY', name: 'Delivery', weight: '15' },
-  { code: 'TECHNICAL', name: 'Technical', weight: '10' },
-  { code: 'ESG', name: 'ESG', weight: '5' },
+  { code: 'PRICE_TCO', name: 'Price / TCO', weight: '50', data_source: 'MANUAL' },
+  { code: 'QUALITY', name: 'Quality', weight: '20', data_source: 'MANUAL' },
+  { code: 'DELIVERY', name: 'Delivery', weight: '15', data_source: 'MANUAL' },
+  { code: 'TECHNICAL', name: 'Technical', weight: '10', data_source: 'MANUAL' },
+  { code: 'ESG', name: 'ESG', weight: '5', data_source: 'MANUAL' },
 ];
+// Criteria whose score can come from platform data at close instead of an evaluator: code -> data source.
+const DATA_SOURCE_FOR: Record<string, { value: string; label: string }> = {
+  QUALITY: { value: 'SCORECARD', label: 'Supplier scorecard (PPM)' },
+  DELIVERY: { value: 'SCORECARD', label: 'Supplier scorecard (OTIF)' },
+  RESPONSIVENESS: { value: 'SCORECARD', label: 'Supplier scorecard (RFQ response)' },
+  ESG: { value: 'ESG', label: 'Accepted ESG assessment' },
+  RISK: { value: 'RISK', label: 'Open risk signals' },
+};
 const BASELINE_METHODS = [
   { value: 'LAST_PRICE', label: 'Last price paid (info record)' },
   { value: 'STANDARD_PRICE', label: 'Standard price' },
@@ -77,6 +96,14 @@ export default function NewSourcingEvent() {
   const [maxSuppliers, setMaxSuppliers] = useState('2');
   const [maxShare, setMaxShare] = useState('60');
   const [minShare, setMinShare] = useState('20');
+  const [maxRisk, setMaxRisk] = useState('');
+  const [maxSingle, setMaxSingle] = useState('');
+  const [maxConditional, setMaxConditional] = useState('');
+  const [maxTotal, setMaxTotal] = useState('');
+  const [requireAll, setRequireAll] = useState(false);
+  const [bundle, setBundle] = useState<{ kind: string; ref: string }>({ kind: 'PR_LINES', ref: '' });
+  const [segmentFilter, setSegmentFilter] = useState('');
+  const [riskFilter, setRiskFilter] = useState('');
   const [savingsTarget, setSavingsTarget] = useState('');
   const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -86,14 +113,20 @@ export default function NewSourcingEvent() {
 
   const weightTotal = criteria.reduce((sum, c) => sum + (Number(c.weight) || 0), 0);
   const duplicateCodes = criteria.map((c) => c.code).filter((c, i, all) => all.indexOf(c) !== i);
+  const candidateQuery = category
+    ? `/sourcing/invitee-candidates?category=${encodeURIComponent(category)}${segmentFilter ? `&segment=${segmentFilter}` : ''}${riskFilter ? `&maxRisk=${riskFilter}` : ''}`
+    : null;
+  const candidates = useApi<CandidateResult>(candidateQuery);
   const chosen = suppliers.items.filter((s) => invitees[s.code]?.selected);
+  const lotCounts = lines.reduce<Record<string, number>>((acc, l) => (l.lot.trim() ? { ...acc, [l.lot.trim().toUpperCase()]: (acc[l.lot.trim().toUpperCase()] ?? 0) + 1 } : acc), {});
   const closeDate = new Date(closeAt);
 
   const problems: string[] = [];
   if (!title.trim()) problems.push('Give the event a title.');
   if (!category.trim()) problems.push('Choose the category being sourced.');
-  if (!lines.length) problems.push('Add the requirement line from an approved requisition.');
-  if (lines.length > 1) problems.push('One requirement line per event: TCO evaluation, award scenarios and the award contract work per item (SRC-ONE-LINE). Run one event per item.');
+  if (!lines.length) problems.push('Add at least one requirement line from an approved requisition.');
+  if (lines.length > 1 && type === 'REVERSE_AUCTION') problems.push('A live reverse auction ranks one price ladder: use one line, or an RFQ / RFP for several lines.');
+  Object.entries(lotCounts).filter(([, n]) => n === 1).forEach(([code]) => problems.push(`Lot ${code} has a single line; a lot groups at least two lines.`));
   lines.forEach((l) => {
     if (!(num(l.annual_qty) > 0) || !(num(l.monthly_qty) > 0)) problems.push(`${l.requisition}/${l.line}: annual and monthly quantity must be positive.`);
   });
@@ -110,6 +143,11 @@ export default function NewSourcingEvent() {
   if (useShouldCost) SHOULD_COST_FIELDS.filter((f) => f.required).forEach((f) => {
     if (!(num(shouldCost[f.key] ?? '') >= 0)) problems.push(`Should-cost: ${f.label} is required.`);
   });
+  const opt = (v: string, low: number, high: number, name: string) => {
+    if (v.trim() !== '' && !(Number(v) >= low && Number(v) <= high)) problems.push(`${name} must be between ${low} and ${high}.`);
+  };
+  opt(maxRisk, 0, 100, 'Maximum risk score'); opt(maxSingle, 1, 100, 'Single-source cap (%)'); opt(maxConditional, 0, 100, 'Conditional-supplier cap (%)');
+  opt(maxTotal, 1, 50, 'Maximum suppliers across the event');
   const maxS = Number(maxShare), minS = Number(minShare), maxN = Number(maxSuppliers);
   if (!(maxN >= 1) || !Number.isInteger(maxN)) problems.push('Max suppliers must be a whole number ≥ 1.');
   if (!(maxS > 0 && maxS <= 100) || !(minS >= 0 && minS <= 100) || minS > maxS) problems.push('Shares must be 0–100 % with min share ≤ max share.');
@@ -125,8 +163,12 @@ export default function NewSourcingEvent() {
 
   const body = () => ({
     type, title: title.trim(), category: category.trim(),
-    lines: lines.map((l) => ({ requisition: l.requisition, line: l.line, annual_qty: l.annual_qty, monthly_qty: l.monthly_qty })),
-    criteria: criteria.map((c) => ({ code: c.code, name: c.name.trim(), weight: Number(c.weight) })),
+    lines: lines.map((l) => ({
+      ...(l.sources ? { sources: l.sources.map((s) => ({ requisition: s.requisition, line: s.line, qty: s.qty })) } : { requisition: l.requisition, line: l.line }),
+      annual_qty: l.annual_qty, monthly_qty: l.monthly_qty, lot: l.lot.trim() ? l.lot.trim().toUpperCase() : undefined,
+      baseline_price_minor: l.baseline ? rupeesToMinor(l.baseline) : undefined,
+    })),
+    criteria: criteria.map((c) => ({ code: c.code, name: c.name.trim(), weight: Number(c.weight), data_source: c.data_source === 'MANUAL' ? undefined : c.data_source })),
     invitees: chosen.map((s) => ({ supplier: s.code, waiver_reason: invitees[s.code]?.waiver.trim() || undefined })),
     close_at: closeDate.toISOString(),
     baseline_method: baselineMethod,
@@ -134,8 +176,14 @@ export default function NewSourcingEvent() {
     should_cost_params: useShouldCost
       ? Object.fromEntries(SHOULD_COST_FIELDS.filter((f) => (shouldCost[f.key] ?? '') !== '').map((f) => [f.key, shouldCost[f.key]]))
       : undefined,
-    constraints: { max_suppliers: maxN, max_share: (maxS / 100).toFixed(2), min_share: (minS / 100).toFixed(2) },
+    constraints: {
+      max_suppliers: maxN, max_share: (maxS / 100).toFixed(2), min_share: (minS / 100).toFixed(2),
+      ...(maxRisk.trim() ? { max_risk_score: Number(maxRisk) } : {}), ...(maxSingle.trim() ? { max_single_source_pct: Number(maxSingle) } : {}),
+      ...(maxConditional.trim() ? { max_conditional_share_pct: Number(maxConditional) } : {}), ...(maxTotal.trim() ? { max_total_suppliers: Number(maxTotal) } : {}),
+      ...(requireAll ? { require_all_lines: true } : {}),
+    },
     savings_target_pct: savingsTarget || undefined,
+    bundle: lines.length > 1 || lines.some((l) => l.sources) ? { kind: bundle.kind, ref: bundle.kind === 'CATEGORY_PLAN' ? bundle.ref || undefined : undefined } : undefined,
   });
 
   const create = useCommand(async (publish: boolean) => {
@@ -182,23 +230,35 @@ export default function NewSourcingEvent() {
         </div>
       </Card>
 
-      <Card title="2 · Requirement line (approved requisitions only, one item per event)">
-        <RequirementPicker lines={lines} onAdd={(l) => setLines((prev) => [...prev, l])} />
+      <Card title="2 · Requirement lines (approved requisitions; several items and lots per event)">
+        <BundleBuilder category={category} bundle={bundle} onBundle={setBundle} onApply={(proposal) => {
+          if (proposal.category && !category) setCategory(proposal.category);
+          setLines(proposal.lines.map((l, i) => ({
+            key: `bundle-${i}-${l.sources[0].requisition}-${l.sources[0].line}`, requisition: l.sources[0].requisition, line: l.sources[0].line, description: l.description,
+            uom: l.uom, annual_qty: l.annual_qty, monthly_qty: l.monthly_qty, lot: '', baseline: '', sources: l.sources,
+          })));
+        }} />
+        <div className="mt-4"><RequirementPicker lines={lines} onAdd={(l) => setLines((prev) => [...prev, l])} /></div>
         {lines.length > 0 && (
           <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr><th className="px-3 py-2">Requirement</th><th className="px-3 py-2">Item</th><th className="px-3 py-2">Annual qty</th><th className="px-3 py-2">Monthly qty</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr>
+                <tr><th className="px-3 py-2">Requirement</th><th className="px-3 py-2">Item</th><th className="px-3 py-2">Annual qty</th><th className="px-3 py-2">Monthly qty</th>
+                  <th className="px-3 py-2">Lot</th><th className="px-3 py-2">Baseline ₹/unit</th><th className="px-3 py-2"><span className="sr-only">Remove</span></th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {lines.map((l, i) => (
                   <tr key={l.key}>
-                    <td className="px-3 py-2 font-mono text-xs">{l.requisition} / {l.line}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{l.sources ? l.sources.map((s) => `${s.requisition}/${s.line}`).join(', ') : `${l.requisition} / ${l.line}`}</td>
                     <td className="px-3 py-2">{l.description} <span className="text-xs text-slate-500">({l.uom})</span></td>
                     <td className="px-3 py-2"><Input aria-label={`Annual quantity for ${l.requisition} line ${l.line}`} type="number" min="0" value={l.annual_qty}
                       onChange={(e) => setLines((p) => p.map((x, j) => (j === i ? { ...x, annual_qty: e.target.value } : x)))} className="w-32" /></td>
                     <td className="px-3 py-2"><Input aria-label={`Monthly quantity for ${l.requisition} line ${l.line}`} type="number" min="0" value={l.monthly_qty}
                       onChange={(e) => setLines((p) => p.map((x, j) => (j === i ? { ...x, monthly_qty: e.target.value } : x)))} className="w-32" /></td>
+                    <td className="px-3 py-2"><Input aria-label={`Lot for line ${i + 1}`} value={l.lot} placeholder="none" maxLength={20} className="w-24"
+                      onChange={(e) => setLines((p) => p.map((x, j) => (j === i ? { ...x, lot: e.target.value.toUpperCase() } : x)))} /></td>
+                    <td className="px-3 py-2"><Input aria-label={`Baseline price for line ${i + 1}`} type="number" min="0" step="0.01" value={l.baseline} placeholder="last price" className="w-28"
+                      onChange={(e) => setLines((p) => p.map((x, j) => (j === i ? { ...x, baseline: e.target.value } : x)))} /></td>
                     <td className="px-3 py-2 text-right"><Button variant="ghost" onClick={() => setLines((p) => p.filter((_, j) => j !== i))}>Remove</Button></td>
                   </tr>
                 ))}
@@ -206,7 +266,8 @@ export default function NewSourcingEvent() {
             </table>
           </div>
         )}
-        <p className="mt-2 text-xs text-slate-500">Award scenarios and capacity checks use the first line&apos;s monthly quantity as the demand Q.</p>
+        <p className="mt-2 text-xs text-slate-500">Each line is bid, evaluated and awarded on its own; lines with the same lot code can also be bid as a bundle (discount for the whole lot, optionally all-or-nothing)
+          and are then awarded to one supplier as a whole. The monthly quantity is the demand used for the capacity check of that line. With several lines the baseline is the annual value.</p>
       </Card>
 
       <Card title="3 · Scoring model" actions={
@@ -219,30 +280,60 @@ export default function NewSourcingEvent() {
             <div key={i} className="grid grid-cols-[1fr_1.5fr_6rem_auto] items-end gap-2">
               <Field label={i === 0 ? 'Code' : ' '}>{(id) => (
                 <Select id={id} aria-label={`Criterion ${i + 1} code`} value={c.code}
-                  onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, code: e.target.value, name: x.name === CRITERIA_CODES[x.code] || !x.name ? CRITERIA_CODES[e.target.value] : x.name } : x)))}
+                  onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, code: e.target.value, data_source: 'MANUAL', name: x.name === CRITERIA_CODES[x.code] || !x.name ? CRITERIA_CODES[e.target.value] : x.name } : x)))}
                   options={Object.entries(CRITERIA_CODES).map(([value, name]) => ({ value, label: `${value} – ${name}` }))} />
               )}</Field>
               <Field label={i === 0 ? 'Name' : ' '}>{(id) => <Input id={id} aria-label={`Criterion ${i + 1} name`} value={c.name} onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />}</Field>
               <Field label={i === 0 ? 'Weight' : ' '}>{(id) => <Input id={id} aria-label={`Criterion ${i + 1} weight`} type="number" min="0" max="100" value={c.weight} onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, weight: e.target.value } : x)))} />}</Field>
               <Button variant="ghost" aria-label={`Remove criterion ${c.code}`} onClick={() => setCriteria((p) => p.filter((_, j) => j !== i))}>Remove</Button>
+              {DATA_SOURCE_FOR[c.code] && (
+                <label className="col-span-4 flex items-center gap-2 pl-1 text-xs text-slate-600">
+                  <input type="checkbox" className="h-3.5 w-3.5" checked={c.data_source !== 'MANUAL'}
+                    onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, data_source: e.target.checked ? DATA_SOURCE_FOR[c.code].value : 'MANUAL' } : x)))} />
+                  Score {c.code} from data at close: {DATA_SOURCE_FOR[c.code].label} (no evaluator scoring)
+                </label>
+              )}
             </div>
           ))}
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button onClick={() => {
             const unused = Object.keys(CRITERIA_CODES).find((k) => !criteria.some((c) => c.code === k)) ?? 'RISK';
-            setCriteria((p) => [...p, { code: unused, name: CRITERIA_CODES[unused], weight: '0' }]);
+            setCriteria((p) => [...p, { code: unused, name: CRITERIA_CODES[unused], weight: '0', data_source: 'MANUAL' }]);
           }}>Add criterion</Button>
-          <p className="text-xs text-slate-500">PRICE_TCO is scored automatically from total cost of ownership; the other criteria are scored by evaluators after close. Weights lock at publish.</p>
+          <p className="text-xs text-slate-500">PRICE_TCO is scored automatically from total cost of ownership per line. ESG, Risk and the scorecard criteria can take their score from platform data at close
+            (frozen on the bid); the others are scored by evaluators after close. Weights lock at publish.</p>
         </div>
       </Card>
 
       <Card title="4 · Invitees">
+        <div className="mb-3 grid gap-3 md:grid-cols-3">
+          <Field label="Filter by segment">{(id) => <Select id={id} value={segmentFilter} onChange={(e) => setSegmentFilter(e.target.value)}
+            options={[{ value: '', label: 'All segments' }, ...SEGMENTS.map((s) => ({ value: s, label: label(s) }))]} />}</Field>
+          <Field label="Filter by risk" hint="Hide suppliers whose risk score is above this.">{(id) => <Select id={id} value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)}
+            options={[{ value: '', label: 'Any risk' }, { value: '15', label: 'Low only (score ≤ 15)' }, { value: '40', label: 'Up to medium (score ≤ 40)' }, { value: '70', label: 'Up to high (score ≤ 70)' }]} />}</Field>
+          <p className="self-end text-xs text-slate-500">
+            {candidates.data ? `${candidates.data.candidates.length} supplier(s) shown; hidden by filter: ${candidates.data.hiddenByFilter.segment} by segment, ${candidates.data.hiddenByFilter.risk} by risk.` : ' '}
+          </p>
+        </div>
+        {candidates.data && candidates.data.candidates.length > 0 && (
+          <div className="mb-3 overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <caption className="sr-only">Suppliers eligible for the category with segment and risk</caption>
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Supplier</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Segment</th><th className="px-3 py-2">Risk</th><th className="px-3 py-2">Open signals</th></tr></thead>
+              <tbody className="divide-y divide-slate-100">{candidates.data.candidates.map((c) => (
+                <tr key={c.code}><td className="px-3 py-2">{c.name} <span className="font-mono text-xs text-slate-500">{c.code}</span></td><td className="px-3 py-2"><StatusChip status={c.status} /></td>
+                  <td className="px-3 py-2">{label(c.segment)}</td><td className="px-3 py-2">{c.riskScore} <span className="text-xs text-slate-500">{label(c.riskLevel)}</span></td>
+                  <td className="px-3 py-2 text-xs">{c.openSignals.length ? c.openSignals.map(label).join(', ') : '–'}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
         {suppliers.isLoading ? <Loading /> : suppliers.error ? <ProblemBox error={suppliers.error} /> : !category ? (
           <Empty title="Choose a category first" hint="Each supplier's qualification status is shown for the chosen category." />
         ) : (
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-            {suppliers.items.map((s) => {
+            {suppliers.items.filter((s) => !candidates.data || (!segmentFilter && !riskFilter) || candidates.data.candidates.some((c) => c.code === s.code)).map((s) => {
               const st = s.categories?.[category] ?? 'NOT_REGISTERED';
               const eligible = ELIGIBLE.includes(st) || st === 'CONDITIONAL';
               const sel = invitees[s.code];
@@ -301,7 +392,14 @@ export default function NewSourcingEvent() {
           <Field label="Max share per supplier (%)">{(id) => <Input id={id} type="number" min="0" max="100" value={maxShare} onChange={(e) => setMaxShare(e.target.value)} />}</Field>
           <Field label="Min share per awarded supplier (%)">{(id) => <Input id={id} type="number" min="0" max="100" value={minShare} onChange={(e) => setMinShare(e.target.value)} />}</Field>
         </div>
-        <p className="mt-2 text-xs text-slate-500">The capacity-constrained award scenario also caps each supplier at its verified free capacity from the digital twin.</p>
+        <p className="mt-2 text-xs text-slate-500">The capacity-constrained award scenario also caps each supplier at its verified free capacity from the digital twin. Shares apply per line; a lot awarded as a bundle is indivisible.</p>
+        <div className="mt-4 grid gap-4 md:grid-cols-4">
+          <Field label="Risk constraint: max risk score" hint="Suppliers above it are left out of every scenario (blocked ones always are).">{(id) => <Input id={id} type="number" min="0" max="100" value={maxRisk} onChange={(e) => setMaxRisk(e.target.value)} placeholder="no cap" />}</Field>
+          <Field label="No single supplier above (% of award value)">{(id) => <Input id={id} type="number" min="1" max="100" value={maxSingle} onChange={(e) => setMaxSingle(e.target.value)} placeholder="no cap" />}</Field>
+          <Field label="Conditional suppliers at most (% of value)">{(id) => <Input id={id} type="number" min="0" max="100" value={maxConditional} onChange={(e) => setMaxConditional(e.target.value)} placeholder="no cap" />}</Field>
+          <Field label="Suppliers across the whole event (max)">{(id) => <Input id={id} type="number" min="1" max="50" value={maxTotal} onChange={(e) => setMaxTotal(e.target.value)} placeholder="no cap" />}</Field>
+        </div>
+        <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4" checked={requireAll} onChange={(e) => setRequireAll(e.target.checked)} /> Every bid must price every line (otherwise suppliers may bid some lines)</label>
       </Card>
 
       {attempted && problems.length > 0 && (
@@ -316,6 +414,69 @@ export default function NewSourcingEvent() {
         <Button busy={create.isPending} onClick={() => submit(false)}>Save draft</Button>
         <Button variant="primary" busy={create.isPending} onClick={() => submit(true)}>Save and publish</Button>
       </div>
+    </div>
+  );
+}
+
+/** Requirement bundling: pick open lines of several requisitions (or MRP demand, or a category plan's category) and merge them into event lines. */
+function BundleBuilder({ category, bundle, onBundle, onApply }: {
+  category: string; bundle: { kind: string; ref: string }; onBundle: (b: { kind: string; ref: string }) => void; onApply: (p: BundlePreview) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [preview, setPreview] = useState<BundlePreview | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  const plans = useApi<CategoryPlan[]>(open && bundle.kind === 'CATEGORY_PLAN' ? '/category-plans' : null);
+  const plan = (plans.data ?? []).find((x) => x.number === bundle.ref);
+  const origin = bundle.kind === 'MRP_DEMAND' ? 'origin=MRP' : '';
+  const scope = bundle.kind === 'CATEGORY_PLAN' ? (plan ? `category_plan=${encodeURIComponent(plan.number)}` : null) : category ? `category=${encodeURIComponent(category)}` : '';
+  const candidates = useApi<BundleResult>(open && scope !== null ? `/sourcing/bundle-candidates?${[origin, scope].filter(Boolean).join('&')}` : null);
+  const key = (i: BundleItem) => `${i.requisition}/${i.line}`;
+  const chosen = (candidates.data?.items ?? []).filter((i) => picked[key(i)]);
+  const run = useCommand(async () => api.post<BundlePreview>('/sourcing/bundles/preview', {
+    lines: chosen.map((i) => ({ requisition: i.requisition, line: i.line })), kind: bundle.kind, ref: bundle.ref || undefined }), {
+    onSuccess: (r) => { setPreview(r); setError(null); },
+  });
+  if (!open) return <Button onClick={() => setOpen(true)}>Bundle requirements (several requisitions, MRP demand or a category plan)…</Button>;
+  return (
+    <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="grid gap-3 md:grid-cols-3">
+        <Field label="Bundle from">{(id) => <Select id={id} value={bundle.kind} onChange={(e) => { onBundle({ kind: e.target.value, ref: '' }); setPicked({}); setPreview(null); }}
+          options={[{ value: 'PR_LINES', label: 'Requisition lines' }, { value: 'MRP_DEMAND', label: 'MRP demand (requisitions from MRP runs)' }, { value: 'CATEGORY_PLAN', label: 'Category plan' }]} />}</Field>
+        {bundle.kind === 'CATEGORY_PLAN' && (
+          <Field label="Category plan">{(id) => <Select id={id} value={bundle.ref} onChange={(e) => { onBundle({ kind: 'CATEGORY_PLAN', ref: e.target.value }); setPicked({}); }}
+            options={[{ value: '', label: 'Choose a plan…' }, ...(plans.data ?? []).map((x) => ({ value: x.number, label: `${x.number} · ${x.category} · ${x.fiscal_year}` }))]} />}</Field>
+        )}
+        <div className="flex items-end gap-2"><Button onClick={() => setOpen(false)}>Close</Button></div>
+      </div>
+      {candidates.isLoading ? <Loading /> : candidates.error ? <ProblemBox error={candidates.error} /> : candidates.data && (
+        candidates.data.items.length === 0 ? <Empty title="No open requirement lines" hint="Only approved requisition lines that are not yet in sourcing can be bundled." /> : (
+          <ul className="max-h-64 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+            {candidates.data.items.map((i) => (
+              <li key={key(i)} className="flex items-center gap-3 px-3 py-2 text-sm">
+                <input type="checkbox" className="h-4 w-4" aria-label={`Bundle ${key(i)}`} checked={!!picked[key(i)]} onChange={(e) => setPicked((p) => ({ ...p, [key(i)]: e.target.checked }))} />
+                <span className="font-mono text-xs text-slate-500">{key(i)}</span><span className="font-medium">{i.description}</span>
+                <span className="text-slate-600">· {qty(i.qty, i.uom)} · {i.plant} · {label(i.origin)}</span><span className="ml-auto">{inr(i.valueMinor)}</span>
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+      <ProblemBox error={error} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button busy={run.isPending} disabled={!chosen.length} onClick={() => run.mutate(undefined, { onError: (e) => setError(e) })}>Preview merged lines ({chosen.length} selected)</Button>
+        {preview && <Button variant="primary" disabled={preview.lines.length === 0} onClick={() => { onApply(preview); setOpen(false); }}>Use these {preview.lines.length} line(s)</Button>}
+      </div>
+      {preview && (
+        <div className="text-sm">
+          {preview.warnings.length > 0 && <ul className="mb-2 list-disc pl-5 text-amber-800">{preview.warnings.map((w) => <li key={w}>{w}</li>)}</ul>}
+          <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+            {preview.lines.map((l, i) => (
+              <li key={i} className="px-3 py-2">{l.description} · {qty(l.qty, l.uom)} <span className="text-xs text-slate-500">from {l.sources.map((s) => `${s.requisition}/${s.line}`).join(', ')}</span></li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -351,10 +512,10 @@ function RequirementPicker({ lines, onAdd }: { lines: LineSel[]; onAdd: (l: Line
                   <span className="text-slate-600">· {qty(l.qty, l.uom)} · {l.plant}{l.category ? ` · ${l.category}` : ''}</span>
                   {inSourcing && <span className="ml-2 text-xs text-amber-700">sourcing status: {label(l.sourcing_status)}</span>}
                 </div>
-                <Button disabled={added || (lines.length > 0)} title={!added && lines.length > 0 ? 'One requirement line per event – remove the current line first' : undefined} onClick={() => {
+                <Button disabled={added || !!inSourcing} title={inSourcing ? 'This requirement line is already in sourcing' : undefined} onClick={() => {
                   const annual = Number(l.qty);
                   onAdd({ key: `${selected}-${l.line_no}`, requisition: selected, line: l.line_no, description: l.description, uom: l.uom,
-                    annual_qty: String(annual), monthly_qty: String(Math.max(1, Math.round(annual / 12))) });
+                    annual_qty: String(annual), monthly_qty: String(Math.max(1, Math.round(annual / 12))), lot: '', baseline: '' });
                 }}>{added ? 'Added' : 'Add line'}</Button>
               </li>
             );

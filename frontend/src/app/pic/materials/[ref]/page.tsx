@@ -8,6 +8,7 @@ import { Button, Card, Dialog, Empty, Facts, Field, Loading, ProblemBox, StatusC
 import { api } from '@/lib/pic/api';
 import { dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import { ChangeRequestDetail, MaterialDetail } from '../_changes';
 
 /** A duplicate candidate: an active material, or a material request still in flight (no material yet). */
 type Candidate = {
@@ -28,7 +29,16 @@ type Material = { id: string; number: string; description: string };
 const PART_LABEL: Record<string, string> = { description: 'Description', classification: 'Classification', mpn: 'MPN', attributes: 'Attributes' };
 const pct = (v: number | string | null | undefined) => (v == null ? '–' : `${Math.round(Number(v) * 100)}%`);
 
-export default function MaterialRequestPage() {
+/** One route, three documents: MRQ-… a new-material request (F9), MCR-… a change request for an existing material, anything else a material. */
+export default function MaterialRoute() {
+  const { ref } = useParams<{ ref: string }>();
+  const key = decodeURIComponent(ref);
+  if (/^MRQ-/i.test(key)) return <MaterialRequestPage />;
+  if (/^MCR-/i.test(key)) return <ChangeRequestDetail number={key} />;
+  return <MaterialDetail number={key} />;
+}
+
+function MaterialRequestPage() {
   const { ref } = useParams<{ ref: string }>();
   const { data: mr, isLoading, error } = useApi<MaterialRequest>(`/materials/requests/${encodeURIComponent(ref)}`);
   const tasks = useApi<Task[]>('/tasks');

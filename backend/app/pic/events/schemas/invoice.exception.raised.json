@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:invoice.exception.raised",
+  "title": "invoice.exception.raised",
+  "description": "Payload (outbox_event.payload) of invoice.exception.raised on INVOICE. Produced by services/payables.py.",
+  "type": "object",
+  "properties": {
+    "exceptions": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "exceptions"
+  ],
+  "additionalProperties": true
+}

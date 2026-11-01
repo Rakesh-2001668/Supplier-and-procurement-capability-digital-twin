@@ -17,7 +17,7 @@ from app.pic.seed import reference
 @pytest.fixture(scope="module")
 def timer_tenant():
     # A tenant of its own: run_due_timers fires every due timer of a tenant, so the signature case must not be involved.
-    return reference.create_tenant("TMRT", "Timer Test Pvt Ltd", "GENERAL")
+    return reference.create_tenant("TMRT", "Timer Test Pvt Ltd", "GENERAL", mfa_enforce=False)
 
 
 @pytest.fixture
@@ -242,18 +242,20 @@ def test_f9_sla_escalation_adds_the_manager_role_keeping_four_eyes(tmrt):
         assert notes[_user_principal(s, "dh1").user_id].title.startswith("Escalated to you")
         assert _user_principal(s, "coo").user_id in notes
         assert _user_principal(s, "dh2").user_id not in notes and _user_principal(s, "dh.other").user_id not in notes
-    _breach(tmrt, task_id)  # level 3: one step further up, without scope
+    _breach(tmrt, task_id)  # level 3 (decision: level 3 and beyond reassigns): the task moves to the manager role, the original loses it
     with tenant_tx(tmrt) as s:
         task = s.get(Task, task_id)
-        assert [e["role"] for e in task.candidate_scope[workflow.ESCALATION_KEY]] == ["DEPT_HEAD", "PROCUREMENT_HEAD"]
-        assert workflow.can_work(_user_principal(s, "ph"), task) is None
+        assert task.candidate_role == "DEPT_HEAD" and workflow.ESCALATION_KEY not in task.candidate_scope
+        assert workflow.can_work(_user_principal(s, "coo"), task) is not None, "the original approver lost the task"
+        assert workflow.can_work(_user_principal(s, "dh1"), task) is None
+        assert workflow.can_work(_user_principal(s, "ph"), task) is not None
     with tenant_tx(tmrt) as s:
         _act(s, "dh1")
         workflow.complete(s, task_id, "APPROVE")
     with tenant_tx(tmrt) as s:
         task = s.get(Task, task_id)
         event = s.execute(select(AuditEvent).where(AuditEvent.object_id == task.object_id, AuditEvent.action == "APPROVAL_APPROVE")).scalar_one()
-        assert task.status == "COMPLETED" and event.after["actingRole"] == "DEPT_HEAD"
+        assert task.status == "COMPLETED" and event.after["role"] == "DEPT_HEAD" and "actingRole" not in event.after
 
 
 # ---------------------------------------------------------------- F2 / F11 worker isolation and tenant scope

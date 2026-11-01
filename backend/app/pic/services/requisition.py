@@ -12,11 +12,12 @@ from app.pic.db import current_tenant
 from app.pic.models import (
     Budget, BudgetCommitment, CatalogueItem, Contract, ContractLine, CostObject, Material, PrLine, Requisition, Task,
 )
+from app.pic.platform import abac
 from app.pic.platform import audit, clock, outbox, rules, workflow
 from app.pic.platform.core import StateMachine, next_number
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount
-from app.pic.services import mdm, source
+from app.pic.services import guided_buying, mandatory, mdm, request_templates, sales_order, source
 from app.pic.services.common import material_by_number, principal
 
 PROCESS = "pic.requisition"
@@ -147,6 +148,7 @@ def create(session: Session, *, origin: str, lines: list[dict], plant: str, purp
             reusable_lines.append((line, data))
     pr.total_minor = total
     session.flush()
+    guided_buying.on_create(session, pr, lines, _lines(session, pr))  # Guided Buying Agent (AG-03): suggestions and the requester's feedback
     workflow.step(session, instance, "F2-02", outcome="channels: " + ", ".join(sorted(channels)))
     found = channels & {"CONTRACT", "CATALOGUE"}
     other = "material master" if "MATERIAL" in channels else "free text"
@@ -168,6 +170,9 @@ def create(session: Session, *, origin: str, lines: list[dict], plant: str, purp
 
 
 def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> PrLine:
+    template = data.get("template")
+    if template:  # BP M04 request template: defaults for the line; the required fields are checked at submit
+        data = request_templates.apply(session, template, data)
     item_type = data.get("item_type", "FREE_TEXT").upper()
     purchase_type = data.get("purchase_type", "NON_STOCK").upper()
     material = material_by_number(session, data["material"]) if data.get("material") else None
@@ -226,6 +231,11 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
     determination = dict(data.get("source_determination") or {})
     if quotes:
         determination["quotes"] = quotes
+    if template:
+        determination["template"] = str(template)
+    if (data.get("account_assignment_type") or "").upper() == sales_order.TYPE and data.get("account_assignment_code"):
+        sales_order.check(session, code=data["account_assignment_code"], plant=data.get("plant", pr.plant),
+                          material_id=material.id if material else None, qty=qty, company_code=pr.company_code)
     return PrLine(
         tenant_id=pr.tenant_id, requisition_id=pr.id, line_no=line_no, item_type=item_type, purchase_type=purchase_type,
         material_id=material.id if material else None, catalogue_item_id=catalogue.id if catalogue else None,
@@ -245,6 +255,16 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
 
 def _lines(session: Session, pr: Requisition) -> list[PrLine]:
     return session.execute(select(PrLine).where(PrLine.requisition_id == pr.id).order_by(PrLine.line_no)).scalars().all()
+
+
+def _mandatory_fields(session: Session, pr: Requisition, lines: list[PrLine]) -> None:
+    """Rule MANDATORY-FIELDS (document REQUISITION), scoped by company code, plant and the dominant category / purchase type."""
+    category, purchase_type = mandatory.dominant((l.category or l.material_group, l.purchase_type, line_amount(l.qty, l.price_est_minor))
+                                                 for l in lines)
+    header = mandatory.plain(pr, mandatory.CATALOGUE["REQUISITION"]["header"])
+    body = [{**mandatory.plain(l, mandatory.CATALOGUE["REQUISITION"]["lines"]), "_line_no": l.line_no} for l in lines]
+    mandatory.check(session, "REQUISITION", header, body, company_code=pr.company_code, plant=pr.plant, category=category,
+                    purchase_type=purchase_type)
 
 
 def add_lines(session: Session, pr: Requisition, lines: list[dict], source: str) -> list[PrLine]:
@@ -275,10 +295,12 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
     if not SM.can(pr.status, "submit"):
         raise illegal_transition("Requisition", pr.number, pr.status, "submit")
     lines = _lines(session, pr)
+    abac.guard(session, "REQ_SUBMIT", pr)  # SEC-AZ: company code / plant
     if not lines:
         raise rule_violation("A requisition needs at least one line before submission", "REQ-02")
     if not pr.purpose_code:
         raise rule_violation("A purpose code is mandatory before submission", "P01")
+    _mandatory_fields(session, pr, lines)
     hints, violations = [], []
     quote_rule = rules.resolve(session, "QUOTE-POLICY", company_code=pr.company_code)
     for line in lines:
@@ -292,10 +314,20 @@ def submit(session: Session, pr: Requisition, justification: Optional[str] = Non
                               f"not {(line.account_assignment_type or 'none').lower().replace('_', ' ')}")
         if line.purchase_type in NEEDS_MATERIAL and not line.material_id:
             violations.append(f"line {line.line_no}: {line.purchase_type.lower()} purchases need a material master")
+        template = request_templates.get(session, request_templates.code_of(line)) if request_templates.code_of(line) else None
+        if template is not None:  # BP M04: the template's required fields, then its approver hints
+            absent = request_templates.missing(template, line)
+            if absent:
+                violations.append(f"line {line.line_no}: the {template.get('name', 'request')} template needs {', '.join(absent)}")
+            hints += [f"{template.get('name')}: {h}" for h in template.get("approverHints") or [] if f"{template.get('name')}: {h}" not in hints]
+        if (line.account_assignment_type or "").upper() == sales_order.TYPE and line.account_assignment_code:
+            sales_order.check(session, code=line.account_assignment_code, plant=line.plant, material_id=line.material_id, qty=line.qty,
+                              exclude_line_id=line.id, company_code=pr.company_code)
         if unstructured(line):  # free text and free services alike (no material, catalogue or contract price)
-            required = quotes_required(quote_rule, line_amount(line.qty, line.price_est_minor))
+            value = line_amount(line.qty, line.price_est_minor)
+            required, sourcing_from = request_templates.quote_requirement(template, value, quotes_required(quote_rule, value))
             if quote_count(line) < required:
-                if required == 3 and request_sourcing:
+                if (required == 3 or (sourcing_from is not None and value >= sourcing_from)) and request_sourcing:
                     line.sourcing_status = "SOURCING_REQUIRED"
                     hints.append(f"line {line.line_no}: sourcing event required instead of three quotes")
                 else:
@@ -368,7 +400,8 @@ def _route(session: Session, pr: Requisition, lines: list[PrLine]):
 def _cost_objects(lines: list[PrLine]) -> list[str]:
     objects = []
     for line in lines:
-        if line.account_assignment_type and line.account_assignment_code:
+        # A sales order is not a budget-owning cost object: it has no owner to approve in parallel (its plant does).
+        if line.account_assignment_type and line.account_assignment_code and line.account_assignment_type != sales_order.TYPE:
             key = f"{line.account_assignment_type}:{line.account_assignment_code}"
             if key not in objects:
                 objects.append(key)
@@ -434,7 +467,7 @@ def _next_stage(session: Session, pr: Requisition, instance) -> bool:
 
 
 def _scopes(lines: list[PrLine], chain: list[str]) -> dict:
-    accounted = next((l for l in lines if l.account_assignment_code), None)
+    accounted = next((l for l in lines if l.account_assignment_code and l.account_assignment_type != sales_order.TYPE), None)
     scope = ({"cost_object": f"{accounted.account_assignment_type}:{accounted.account_assignment_code}"}
              if accounted else {"plant": lines[0].plant})
     return {role: scope for role in chain if role in ("COST_OBJECT_OWNER", "DEPT_HEAD")}
@@ -453,6 +486,11 @@ def _budget_check(session: Session, pr: Requisition, lines: list[PrLine], rule, 
     for (obj_type, code), amount in totals.items():
         budget = session.execute(select(Budget).where(Budget.cost_object_type == obj_type, Budget.cost_object_code == code,
                                                       Budget.fiscal_year == fiscal_year).with_for_update()).scalar_one_or_none()
+        if budget is None and obj_type == sales_order.TYPE:
+            # BP M04: a customer order without its own budget carries the cost to the order (rule SALES-ORDER-ACCOUNT, budget handling).
+            checks.append({"costObject": f"{obj_type}:{code}", "amountMinor": amount, "availableMinor": None, "control": "NONE",
+                           "result": "SETTLES_TO_SALES_ORDER"})
+            continue
         if budget is None:
             raise rule_violation(f"No {fiscal_year} budget for {obj_type} {code}", rule.ref)
         available = budget.amount_minor - budget.committed_minor - budget.consumed_minor
@@ -468,7 +506,7 @@ def _budget_check(session: Session, pr: Requisition, lines: list[PrLine], rule, 
                                      justification=None if ok else justification, created_by=pr.requester_id))
         checks.append({"costObject": f"{obj_type}:{code}", "amountMinor": amount, "availableMinor": available,
                        "control": "HARD" if hard else "SOFT", "result": "OK" if ok else "SOFT_STOP_JUSTIFIED"})
-    return {"outcome": "OK" if all(c["result"] == "OK" for c in checks) else "SOFT_STOP_JUSTIFIED", "checks": checks}
+    return {"outcome": "OK" if all(c["result"] in ("OK", "SETTLES_TO_SALES_ORDER") for c in checks) else "SOFT_STOP_JUSTIFIED", "checks": checks}
 
 
 # ---------------------------------------------------------------- §24.1 / M01 category-plan budget
@@ -655,6 +693,10 @@ def change_line(session: Session, pr: Requisition, line_no: int, changes: dict) 
             if field == "need_date" and not isinstance(value, date):
                 value = date.fromisoformat(str(value))
             setattr(line, field, value)
+    if ((line.account_assignment_type or "").upper() == sales_order.TYPE and line.account_assignment_code
+            and {"qty", "account_assignment_code", "account_assignment_type"} & set(changes)):
+        sales_order.check(session, code=line.account_assignment_code, plant=line.plant, material_id=line.material_id, qty=line.qty,
+                          exclude_line_id=line.id, company_code=pr.company_code)
     lines = _lines(session, pr)
     pr.total_minor = sum(line_amount(l.qty, l.price_est_minor) for l in lines)
     restart = False

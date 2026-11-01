@@ -8,13 +8,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.pic.api.deps import uow
+from app.pic.api.deps import idempotency_key, idempotent, uow
 from app.pic.models import (
     Capa, CategoryPlan, ClassificationReview, Forecast, MaverickHit, ReconciliationItem, ReconciliationRun, RiskSignal, SavingsInitiative, Supplier,
 )
 from app.pic.platform import clock
 from app.pic.platform.auth import READ, Principal, require, require_any
-from app.pic.platform.errors import not_found
+from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row
 from app.pic.services import forecasting, payables, risk, savings, spend
 from app.pic.services.common import by_ref, supplier_ref
@@ -59,6 +59,79 @@ def spend_forecast(category: Optional[str] = None, plant: Optional[str] = None, 
                    p: Principal = Depends(require("spend:read"))):
     with uow(p) as s:
         return spend.forecast(s, category, plant, horizon)
+
+
+def _csv(value: Optional[str]) -> list:
+    return [x.strip() for x in (value or "").split(",") if x.strip()]
+
+
+def _cube_filter(period_from, period_to, category, supplier, parent, plant, company_code, cost_centre, wbs, cost_object, currency, source_system,
+                 source, contracted, addressable, maverick) -> spend.CubeFilter:
+    for label, value in (("period_from", period_from), ("period_to", period_to)):
+        if value and not (len(value) == 7 and value[4] == "-" and value[:4].isdigit() and value[5:].isdigit()):
+            raise Problem(422, "INVALID_PERIOD", f"{label} must be YYYY-MM")
+    return spend.CubeFilter(period_from=period_from, period_to=period_to, categories=_csv(category), suppliers=_csv(supplier), parents=_csv(parent),
+                            plants=_csv(plant), company_codes=_csv(company_code), cost_centres=_csv(cost_centre), wbs=_csv(wbs),
+                            cost_objects=_csv(cost_object), currencies=_csv(currency), source_systems=_csv(source_system), sources=_csv(source),
+                            contracted=contracted, addressable=addressable, maverick=maverick)
+
+
+@router.get("/spend/analysis", tags=["M01 Spend"])
+def spend_analysis(dims: str = Query("category", description="Comma-separated: " + ", ".join(spend.CUBE_DIMENSIONS)),
+                   period_from: Optional[str] = None, period_to: Optional[str] = None,
+                   category: Optional[str] = Query(None, description="Taxonomy node code(s) at any level L1..L4"),
+                   supplier: Optional[str] = Query(None, description="Supplier code(s), child level"),
+                   parent: Optional[str] = Query(None, description="Parent supplier code(s)"), plant: Optional[str] = None,
+                   company_code: Optional[str] = None, cost_centre: Optional[str] = None, wbs: Optional[str] = None,
+                   cost_object: Optional[str] = None, currency: Optional[str] = None, source_system: Optional[str] = None,
+                   source: Optional[str] = None, contracted: Optional[bool] = None, addressable: Optional[bool] = None,
+                   maverick: Optional[bool] = None, limit: int = Query(1000, ge=1, le=5000), commitments: bool = False,
+                   p: Principal = Depends(require("spend:read"))):
+    """The spend cube (BP M01 7.2): any dimensions, filters and measures, served from the cube summary tables."""
+    flt = _cube_filter(period_from, period_to, category, supplier, parent, plant, company_code, cost_centre, wbs, cost_object, currency,
+                       source_system, source, contracted, addressable, maverick)
+    with uow(p) as s:
+        return spend.cube(s, _csv(dims), flt, limit=limit, include_commitments=commitments)
+
+
+@router.get("/spend/commitments", tags=["M01 Spend"])
+def spend_commitments(dims: str = "category", category: Optional[str] = None, supplier: Optional[str] = None, parent: Optional[str] = None,
+                      plant: Optional[str] = None, company_code: Optional[str] = None, cost_centre: Optional[str] = None,
+                      wbs: Optional[str] = None, currency: Optional[str] = None, period_from: Optional[str] = None,
+                      period_to: Optional[str] = None, p: Principal = Depends(require("spend:read"))):
+    """Open PO commitments (PO value not yet invoiced) and received-not-invoiced value, by need-date month."""
+    flt = _cube_filter(period_from, period_to, category, supplier, parent, plant, company_code, cost_centre, wbs, None, currency, None, None,
+                       None, None, None)
+    with uow(p) as s:
+        return spend.commitments(s, _csv(dims), flt)
+
+
+@router.get("/spend/cube-status", tags=["M01 Spend"])
+def spend_cube_status(p: Principal = Depends(require("spend:read"))):
+    """When the cube summaries were last built, how long it took and which periods still wait for a refresh."""
+    from app.pic.services import spend_cube
+    with uow(p) as s:
+        return {"cube": spend_cube.freshness(s), "dimensions": list(spend.CUBE_DIMENSIONS)}
+
+
+class CubeRefreshIn(BaseModel):
+    periods: Optional[list[str]] = Field(default=None, max_length=240, description="YYYY-MM periods to rebuild; omit for the dirty ones")
+    full: bool = False
+
+
+@router.post("/admin/spend/refresh", tags=["M01 Spend"])
+def refresh_spend_cube(body: CubeRefreshIn, p: Principal = Depends(require("admin:integration")),
+                       key: Optional[str] = Depends(idempotency_key)):
+    """Rebuild the spend cube summaries now (the scheduler runs the same function every few minutes)."""
+    for period in body.periods or []:
+        if not (len(period) == 7 and period[4] == "-" and period[:4].isdigit() and period[5:].isdigit()):
+            raise Problem(422, "INVALID_PERIOD", "periods must be YYYY-MM")
+    with uow(p) as s:
+        idem = idempotent(s, "POST /v1/admin/spend/refresh", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(spend.refresh_spend_views(p.tenant_id, periods=body.periods, full=body.full, dirty_only=not (body.full or body.periods),
+                                                    session=s))
 
 
 @router.get("/spend/maverick", tags=["M01 Spend"])
@@ -351,3 +424,21 @@ class LoseIn(BaseModel):
 def lose_initiative(ref: str, body: LoseIn, p: Principal = Depends(require("savings:manage"))):
     with uow(p) as s:
         return row(savings.lose(s, by_ref(s, SavingsInitiative, ref, lock=True), body.reason))
+
+
+# ---------------------------------------------------------------- SPD-08 pipeline tracker, M11-C4 savings P&L
+@router.get("/savings/pipeline", tags=["M11 Savings"])
+def savings_pipeline(stage: Optional[str] = None, category: Optional[str] = None, owner: Optional[uuid.UUID] = None,
+                     created_from: Optional[date] = None, created_to: Optional[date] = None, min_forecast_minor: int = Query(0, ge=0),
+                     p: Principal = Depends(require(READ))):
+    """Forecast vs realised savings and cost avoidance by initiative and stage, with filters (SPD-08)."""
+    with uow(p) as s:
+        return savings.pipeline(s, stage=stage, category=category, owner=owner, created_from=created_from, created_to=created_to,
+                                min_forecast_minor=min_forecast_minor)
+
+
+@router.get("/savings/pnl", tags=["M11 Savings"])
+def savings_pnl(fiscal_year: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"), p: Principal = Depends(require(READ))):
+    """Savings P&L and budget impact for a fiscal year: validated realised savings, the finance validation queue (M11-C4)."""
+    with uow(p) as s:
+        return savings.pnl(s, fiscal_year)

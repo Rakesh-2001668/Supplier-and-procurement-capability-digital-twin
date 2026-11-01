@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:accessorial.claimed",
+  "title": "accessorial.claimed",
+  "description": "Payload (outbox_event.payload) of accessorial.claimed on ACCESSORIAL_CHARGE. Produced by services/ind_logistics.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "status": {},
+    "amountMinor": {}
+  },
+  "required": [
+    "po",
+    "status",
+    "amountMinor"
+  ],
+  "additionalProperties": true
+}

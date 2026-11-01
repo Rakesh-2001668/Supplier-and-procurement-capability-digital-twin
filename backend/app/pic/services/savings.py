@@ -15,7 +15,7 @@ from app.pic.platform import agents, audit, clock, outbox, sod, workflow
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition
 from app.pic.platform.money import D, crore, fmt_inr, line_amount
-from app.pic.services import spend
+from app.pic.services import spend, spend_cube as cube_engine
 from app.pic.services.common import principal
 
 SM = StateMachine("SAVINGS_INITIATIVE", {
@@ -146,10 +146,14 @@ def _realised(session: Session, event) -> None:
             booked.append(entry)
             if initiative.stage in ("NEGOTIATED", "CONTRACTED"):
                 SM.apply(session, initiative, "realise", extra_after={"firstRealisedFrom": invoice.number})
-            agents.log_run(session, "SAVINGS_VALIDATION", object_type="SAVINGS_INITIATIVE", object_id=initiative.id,
-                           object_ref=initiative.number, inputs={"invoice": invoice.number, "qty": str(qty)},
-                           evidence=[invoice.number, invoice.erp_doc_no], output={"realisedMinor": amount}, confidence=1.0,
-                           action_taken="EXECUTED")
+            # The ledger entry above is bookkeeping from the posted invoice; the agent's run (its attribution) needs the guard.
+            if agents.permit(session, "SAVINGS_VALIDATION", object_type="SAVINGS_INITIATIVE", object_id=initiative.id,
+                             object_ref=initiative.number, required_level="L3", sod_action="SAVINGS_VALIDATE",
+                             sod_refs={"initiative_id": initiative.id}):
+                agents.log_run(session, "SAVINGS_VALIDATION", object_type="SAVINGS_INITIATIVE", object_id=initiative.id,
+                               object_ref=initiative.number, inputs={"invoice": invoice.number, "qty": str(qty)},
+                               evidence=[invoice.number, invoice.erp_doc_no], output={"realisedMinor": amount}, confidence=1.0,
+                               action_taken="EXECUTED")
             outbox.emit(session, "savings.realised", "SAVINGS_INITIATIVE", initiative.id, initiative.number,
                         {"invoice": invoice.number, "amountMinor": amount})
     from app.pic.services import payables
@@ -242,40 +246,40 @@ def _spend(session: Session, event) -> None:
         elif material and material.standard_price_minor:
             reference = material.standard_price_minor
         variance = line_amount(qty, line.unit_price_minor - reference) if reference and line.unit_price_minor > reference else 0
+        last_price = _last_price_paid(session, po_line, po)
+        variance_last = line_amount(qty, line.unit_price_minor - last_price) if last_price and line.unit_price_minor > last_price else 0
+        amount = line_amount(qty, line.unit_price_minor)
+        fx = cube_engine.rate_for_line(session, invoice.currency, invoice.invoice_date)
         spend_line = SpendLine(
             tenant_id=invoice.tenant_id, invoice_line_id=line.id, invoice_ref=invoice.number, po_ref=po.number, supplier_id=invoice.supplier_id,
             category=material.category if material else po_line.material_group, material_group=po_line.material_group, plant=po_line.plant,
             company_code=invoice.company_code, cost_object=po_line.account_assignment_code, period=invoice.invoice_date.strftime("%Y-%m"),
-            amount_minor=line_amount(qty, line.unit_price_minor), contracted=po_line.contract_line_id is not None, addressable=True,
+            amount_minor=amount, contracted=po_line.contract_line_id is not None, addressable=True,
             maverick_flags=flags, classification_confidence=Decimal("1.000") if material else Decimal("0.000"), created_by=invoice.created_by,
             description=po_line.description, po_line_id=po_line.id, price_variance_minor=variance, source="PLATFORM",
+            currency=invoice.currency, source_system="PIC", cost_object_type=po_line.account_assignment_type,
+            fx_rate=fx[0] if fx else None, fx_date=fx[1] if fx else None,
+            amount_group_minor=int((Decimal(amount) * fx[0]).quantize(Decimal("1"), ROUND_HALF_UP)) if fx else None,
+            price_variance_last_minor=variance_last,
         )
         session.add(spend_line)
         spend.after_spend_line(session, spend_line)
 
 
+def _last_price_paid(session: Session, po_line: PoLine, po: PurchaseOrder) -> Optional[int]:
+    """Unit price of the material on the latest earlier PO line (the price actually paid last time)."""
+    if po_line.material_id is None:
+        return None
+    return session.execute(
+        select(PoLine.unit_price_minor).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
+            PoLine.material_id == po_line.material_id, PoLine.id != po_line.id, PurchaseOrder.created_at < po.created_at,
+            PurchaseOrder.status != "CANCELLED").order_by(PurchaseOrder.created_at.desc()).limit(1)).scalar()
+
+
 def spend_cube(session: Session, dimensions: list[str]) -> dict:
-    allowed = {"category", "supplier", "plant", "company_code", "period", "material_group", "cost_object"}
-    unknown = [d for d in dimensions if d and d not in allowed]
-    if unknown:
-        raise Problem(400, "INVALID_DIMENSION", f"Unknown spend dimension(s): {', '.join(unknown)}. Use {', '.join(sorted(allowed))}")
-    dims = [d for d in dimensions if d in allowed] or ["category"]
-    columns = [SpendLine.supplier_id if d == "supplier" else getattr(SpendLine, d) for d in dims]
-    contracted_amount = func.sum(case((SpendLine.contracted.is_(True), SpendLine.amount_minor), else_=0))
-    rows = session.execute(select(*columns, func.sum(SpendLine.amount_minor), func.count(), contracted_amount)
-                           .group_by(*columns)).all()
-    total = sum(r[len(dims)] for r in rows) or 0
-    suppliers = {s.id: s.code for s in session.execute(select(Supplier)).scalars()}
-    out = []
-    for r in rows:
-        key = {d: (suppliers.get(r[i]) if d == "supplier" else r[i]) for i, d in enumerate(dims)}
-        amount, count, contracted = r[len(dims)], r[len(dims) + 1], r[len(dims) + 2] or 0
-        out.append({**key, "spendMinor": amount, "lines": count,
-                    "contractCoveragePct": str((Decimal(contracted) * 100 / amount).quantize(Decimal("0.1"))) if amount else "0"})
-    maverick = session.execute(select(func.sum(SpendLine.amount_minor)).where(func.jsonb_array_length(SpendLine.maverick_flags) > 0)).scalar() or 0
-    contracted_total = session.execute(select(func.sum(SpendLine.amount_minor)).where(SpendLine.contracted.is_(True))).scalar() or 0
-    return {"dimensions": dims, "totalMinor": total, "contractedPct": str((Decimal(contracted_total) * 100 / total).quantize(Decimal("0.1"))) if total else "0",
-            "maverickPct": str((Decimal(maverick) * 100 / total).quantize(Decimal("0.1"))) if total else "0", "rows": out}
+    """GET /v1/spend/cube?dims=...: the spend cube grouped by the given dimensions (see ``spend_cube.cube`` for filters and measures).
+    Served from the cube summary tables, so it stays fast at 50 M spend lines."""
+    return cube_engine.cube(session, dimensions)
 
 
 # ---------------------------------------------------------------- SAV-01 manual initiatives and baseline methods (blueprint §26)
@@ -360,3 +364,157 @@ def lose(session: Session, initiative: SavingsInitiative, reason: str) -> Saving
         raise Problem(422, "REASON_REQUIRED", "Say why the initiative was lost")
     SM.apply(session, initiative, "lose", reason=reason)
     return initiative
+
+
+# ---------------------------------------------------------------- SPD-08 pipeline tracker and M11-C4 savings P&L
+STAGES = ("IDENTIFIED", "NEGOTIATED", "CONTRACTED", "REALISING", "VALIDATED", "LOST")
+
+
+def _owner_names(session: Session) -> dict:
+    from app.pic.models import AppUser
+    return {u.id: u.full_name for u in session.execute(select(AppUser)).scalars()}
+
+
+def _ledger_totals(session: Session, since=None, until=None) -> dict:
+    """initiative id -> {type: amount} (optionally for a posting-date range)."""
+    query = select(SavingsLedgerEntry.initiative_id, SavingsLedgerEntry.type, func.sum(SavingsLedgerEntry.amount_minor)).group_by(
+        SavingsLedgerEntry.initiative_id, SavingsLedgerEntry.type)
+    if since:
+        query = query.where(SavingsLedgerEntry.posting_date >= since)
+    if until:
+        query = query.where(SavingsLedgerEntry.posting_date <= until)
+    out: dict = {}
+    for initiative_id, type_, amount in session.execute(query):
+        out.setdefault(initiative_id, {})[type_] = int(amount)
+    return out
+
+
+def _pct1(num, den) -> Optional[str]:
+    return str((Decimal(num) * 100 / den).quantize(Decimal("0.1"))) if den else None
+
+
+def pipeline(session: Session, *, stage: Optional[str] = None, category: Optional[str] = None, owner: Optional[uuid.UUID] = None,
+             created_from=None, created_to=None, min_forecast_minor: int = 0) -> dict:
+    """SPD-08: forecast vs realised savings and cost avoidance by initiative and stage, with filters. Forecast is the negotiated
+    annual saving once there is one, else the sourcing event's savings target on baseline x annual volume (basis shown)."""
+    if stage and stage.upper() not in STAGES:
+        raise Problem(422, "INVALID_STAGE", f"Use one of {', '.join(STAGES)}")
+    query = select(SavingsInitiative).order_by(SavingsInitiative.number)
+    if stage:
+        query = query.where(SavingsInitiative.stage == stage.upper())
+    if category:
+        query = query.where(SavingsInitiative.category == category)
+    if owner:
+        query = query.where(SavingsInitiative.owner_id == owner)
+    if created_from:
+        query = query.where(func.date(SavingsInitiative.created_at) >= created_from)
+    if created_to:
+        query = query.where(func.date(SavingsInitiative.created_at) <= created_to)
+    initiatives = session.execute(query).scalars().all()
+    ledger = _ledger_totals(session)
+    targets = {e.id: e.savings_target_pct for e in session.execute(select(SourcingEvent)).scalars()}
+    owners = _owner_names(session)
+    items = []
+    for i in initiatives:
+        t = ledger.get(i.id, {})
+        negotiated, avoidance, realised = t.get("NEGOTIATED", 0), t.get("AVOIDANCE", 0), t.get("REALISED", 0)
+        target_pct = targets.get(i.source_event_id)
+        estimate = int(Decimal(i.baseline_price_minor) * (i.annual_volume or 0) * Decimal(target_pct) / 100) if target_pct and i.annual_volume else 0
+        forecast, basis = (negotiated, "NEGOTIATED") if negotiated else ((estimate, "TARGET") if estimate and i.stage != "LOST" else (0, "NONE"))
+        if forecast < min_forecast_minor:
+            continue
+        items.append({"id": str(i.id), "number": i.number, "title": i.title, "category": i.category, "stage": i.stage, "owner": owners.get(i.owner_id),
+                      "ownerId": str(i.owner_id), "baselineMethod": i.baseline_method, "forecastMinor": forecast, "forecastBasis": basis,
+                      "negotiatedMinor": negotiated, "avoidanceMinor": avoidance, "realisedMinor": realised,
+                      "realisationPct": _pct1(realised, negotiated), "gapMinor": max(0, forecast - realised) if i.stage != "LOST" else 0,
+                      "validated": i.stage == "VALIDATED", "createdAt": i.created_at.isoformat()})
+    stages = []
+    for name in STAGES:
+        group = [x for x in items if x["stage"] == name]
+        negotiated, realised = sum(x["negotiatedMinor"] for x in group), sum(x["realisedMinor"] for x in group)
+        stages.append({"stage": name, "count": len(group), "forecastMinor": sum(x["forecastMinor"] for x in group), "negotiatedMinor": negotiated,
+                       "avoidanceMinor": sum(x["avoidanceMinor"] for x in group), "realisedMinor": realised, "realisationPct": _pct1(realised, negotiated)})
+    live = [x for x in items if x["stage"] != "LOST"]
+    reached = {name: sum(1 for x in live if STAGES.index(x["stage"]) >= STAGES.index(name)) for name in STAGES[:-1]}
+    totals = {"initiatives": len(items), "forecastMinor": sum(x["forecastMinor"] for x in live), "negotiatedMinor": sum(x["negotiatedMinor"] for x in live),
+              "avoidanceMinor": sum(x["avoidanceMinor"] for x in live), "realisedMinor": sum(x["realisedMinor"] for x in live),
+              "lostMinor": sum(x["forecastMinor"] for x in items if x["stage"] == "LOST")}
+    totals["realisationPct"] = _pct1(totals["realisedMinor"], totals["negotiatedMinor"])
+    return {"filters": {k: v for k, v in {"stage": stage, "category": category, "owner": str(owner) if owner else None,
+                                          "createdFrom": created_from, "createdTo": created_to}.items() if v},
+            "stages": stages, "funnel": reached, "initiatives": items, "totals": totals,
+            "categories": sorted({x["category"] for x in items}),
+            "owners": [{"id": o[0], "name": o[1]} for o in sorted({(x["ownerId"], x["owner"]) for x in items}, key=lambda o: o[1] or "")]}
+
+
+def fiscal_year_bounds(fiscal_year: str):
+    from datetime import date
+    start = int(fiscal_year[:4])
+    return date(start, 4, 1), date(start + 1, 3, 31)
+
+
+def pnl(session: Session, fiscal_year: Optional[str] = None) -> dict:
+    """M11-C4: the savings P&L and budget impact for a fiscal year. Only REALISED entries of initiatives that finance has
+    VALIDATED reduce the budget; realised-but-unvalidated savings wait in the validation queue; negotiated savings and cost
+    avoidance are reported but never counted."""
+    from datetime import date
+    from app.pic.models import CategoryPlan
+    fiscal_year = fiscal_year or clock.fiscal_year(clock.today())
+    try:
+        start, end = fiscal_year_bounds(fiscal_year)
+    except ValueError:
+        raise Problem(422, "INVALID_FISCAL_YEAR", "fiscal_year looks like 2026-27")
+    initiatives = {i.id: i for i in session.execute(select(SavingsInitiative)).scalars()}
+    entries = session.execute(select(SavingsLedgerEntry).where(SavingsLedgerEntry.posting_date >= start, SavingsLedgerEntry.posting_date <= end)
+                              .order_by(SavingsLedgerEntry.posting_date)).scalars().all()
+    months: dict = {}
+    cursor = start
+    for _ in range(12):
+        months[cursor.strftime("%Y-%m")] = {"period": cursor.strftime("%Y-%m"), "realisedMinor": 0, "validatedMinor": 0, "pendingValidationMinor": 0,
+                                           "negotiatedMinor": 0, "avoidanceMinor": 0}
+        cursor = date(cursor.year + (cursor.month // 12), cursor.month % 12 + 1, 1)
+    categories: dict = {}
+    for e in entries:
+        i = initiatives.get(e.initiative_id)
+        if i is None or i.stage == "LOST":
+            continue
+        month = months[e.posting_date.strftime("%Y-%m")]
+        cat = categories.setdefault(i.category, {"category": i.category, "realisedMinor": 0, "validatedMinor": 0, "pendingValidationMinor": 0,
+                                                 "negotiatedMinor": 0, "avoidanceMinor": 0})
+        if e.type == "REALISED" and e.counts_toward_budget:
+            key = "validatedMinor" if i.stage == "VALIDATED" else "pendingValidationMinor"
+            for bucket in (month, cat):
+                bucket["realisedMinor"] += e.amount_minor
+                bucket[key] += e.amount_minor
+        elif e.type == "NEGOTIATED":
+            month["negotiatedMinor"] += e.amount_minor
+            cat["negotiatedMinor"] += e.amount_minor
+        elif e.type == "AVOIDANCE":
+            month["avoidanceMinor"] += e.amount_minor
+            cat["avoidanceMinor"] += e.amount_minor
+    plans = {p.category: p for p in session.execute(select(CategoryPlan).where(CategoryPlan.fiscal_year == fiscal_year)).scalars()}
+    for name, cat in categories.items():
+        plan = plans.get(name)
+        cat["planBudgetMinor"] = plan.budget_minor if plan else None
+        cat["planTargetMinor"] = plan.savings_target_minor if plan else None
+        cat["attainmentPct"] = _pct1(cat["validatedMinor"], plan.savings_target_minor) if plan else None
+    ordered, running = [months[k] for k in sorted(months)], 0
+    for m in ordered:
+        running += m["validatedMinor"]
+        m["cumulativeValidatedMinor"] = running
+    ledger = _ledger_totals(session, start, end)
+    owners = _owner_names(session)
+    me = session.info["principal"].user_id if session.info.get("principal") else None
+    queue = [{"id": str(i.id), "number": i.number, "title": i.title, "category": i.category, "stage": i.stage,
+              "realisedMinor": ledger.get(i.id, {}).get("REALISED", 0), "owner": owners.get(i.owner_id),
+              "canValidate": i.stage == "REALISING" and i.owner_id != me}
+             for i in initiatives.values() if i.stage in ("NEGOTIATED", "CONTRACTED", "REALISING") and ledger.get(i.id, {}).get("REALISED", 0) > 0]
+    totals = {k: sum(m[k] for m in ordered) for k in ("realisedMinor", "validatedMinor", "pendingValidationMinor", "negotiatedMinor", "avoidanceMinor")}
+    target = sum((p.savings_target_minor or 0) for p in plans.values())
+    return {"fiscalYear": fiscal_year, "from": start.isoformat(), "to": end.isoformat(), "months": ordered,
+            "categories": sorted(categories.values(), key=lambda c: -c["realisedMinor"]),
+            "totals": {**totals, "budgetImpactMinor": totals["validatedMinor"], "planTargetMinor": target or None,
+                       "attainmentPct": _pct1(totals["validatedMinor"], target)},
+            "validationQueue": sorted(queue, key=lambda q: -q["realisedMinor"]),
+            "rule": "Budget impact = REALISED savings of VALIDATED initiatives (SOD-07: validated by finance, never by the initiative owner); "
+                    "negotiated savings and cost avoidance never count toward budget."}

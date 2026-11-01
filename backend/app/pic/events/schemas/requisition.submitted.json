@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:requisition.submitted",
+  "title": "requisition.submitted",
+  "description": "Payload (outbox_event.payload) of requisition.submitted on REQUISITION. Produced by services/requisition.py.",
+  "type": "object",
+  "properties": {
+    "origin": {},
+    "totalMinor": {},
+    "chain": {}
+  },
+  "required": [
+    "origin",
+    "totalMinor",
+    "chain"
+  ],
+  "additionalProperties": true
+}

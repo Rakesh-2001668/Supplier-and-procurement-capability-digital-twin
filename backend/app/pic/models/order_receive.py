@@ -50,6 +50,9 @@ class PurchaseOrder(TenantScoped, Base):
     rule_set_version: Mapped[str] = mapped_column(String(120), nullable=False)
     erp_doc_no: Mapped[Optional[str]] = mapped_column(String(40))
     retention_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))  # construction/subcontract retention withheld per invoice
+    # BP M06: an order to a supplier that is not Qualified/Preferred for the category is released only under rule ONE-TIME-VENDOR
+    # {"reason", "requestedBy", "rule", "valueMinor", "approvedBy", "approvedAt"}
+    one_time_vendor: Mapped[Optional[dict]] = mapped_column(JSONB)
 
 
 class PoLine(TenantScoped, Base):
@@ -97,6 +100,9 @@ class PoLine(TenantScoped, Base):
     ses_approved_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     invoiced_qty: Mapped[Decimal] = mapped_column(QTY, default=0)
     invoiced_minor: Mapped[int] = mapped_column(BigInteger, default=0)
+    # M09 receipt tolerance in force for this line (receipt_tolerance override at PO creation); null = the order's tolerance
+    over_tol_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    under_tol_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
 
 
 class PoVersion(TenantScoped, Base):

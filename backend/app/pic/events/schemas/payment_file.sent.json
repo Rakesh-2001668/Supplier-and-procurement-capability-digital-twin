@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:payment_file.sent",
+  "title": "payment_file.sent",
+  "description": "Payload (outbox_event.payload) of payment_file.sent on PAYMENT_FILE. Produced by services/bank_files.py.",
+  "type": "object",
+  "properties": {
+    "run": {},
+    "status": {},
+    "bankRef": {},
+    "totalMinor": {}
+  },
+  "required": [
+    "run",
+    "status",
+    "bankRef",
+    "totalMinor"
+  ],
+  "additionalProperties": true
+}

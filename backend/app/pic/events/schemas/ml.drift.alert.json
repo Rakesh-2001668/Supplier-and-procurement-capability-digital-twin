@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:ml.drift.alert",
+  "title": "ml.drift.alert",
+  "description": "Payload (outbox_event.payload) of ml.drift.alert on ML_MODEL. Produced by services/ml_registry.py.",
+  "type": "object",
+  "properties": {
+    "code": {},
+    "version": {},
+    "alerts": {}
+  },
+  "required": [
+    "code",
+    "version",
+    "alerts"
+  ],
+  "additionalProperties": true
+}

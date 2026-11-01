@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:process.definition.published",
+  "title": "process.definition.published",
+  "description": "Payload (outbox_event.payload) of process.definition.published on PROCESS_DEFINITION. Produced by platform/definitions.py.",
+  "type": "object",
+  "properties": {
+    "key": {},
+    "version": {},
+    "baseVersion": {}
+  },
+  "required": [
+    "key",
+    "version",
+    "baseVersion"
+  ],
+  "additionalProperties": true
+}

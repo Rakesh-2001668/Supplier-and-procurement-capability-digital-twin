@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:material.change.rejected",
+  "title": "material.change.rejected",
+  "description": "Payload (outbox_event.payload) of material.change.rejected on MATERIAL_CHANGE_REQUEST. Produced by services/material_changes.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "reason": {}
+  },
+  "required": [
+    "material",
+    "reason"
+  ],
+  "additionalProperties": true
+}

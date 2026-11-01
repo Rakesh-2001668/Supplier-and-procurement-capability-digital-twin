@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:invoice.posted",
+  "title": "invoice.posted",
+  "description": "Payload (outbox_event.payload) of invoice.posted on INVOICE. Produced by services/payables.py.",
+  "type": "object",
+  "properties": {
+    "invoiceId": {
+      "type": "string"
+    },
+    "erpDocument": {},
+    "supplier": {},
+    "grossMinor": {}
+  },
+  "required": [
+    "invoiceId",
+    "erpDocument",
+    "supplier",
+    "grossMinor"
+  ],
+  "additionalProperties": true
+}

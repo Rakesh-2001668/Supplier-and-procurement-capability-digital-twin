@@ -27,7 +27,7 @@ export default function Invoices() {
 
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="INV-01 · Invoice worklist" title="Invoices"
+      <PageHeader kpis="M10" eyebrow="INV-01 · Invoice worklist" title="Invoices"
         subtitle="Captured invoices are duplicate-checked, matched 2-way, 3-way (against received quantity), 4-way for quality-managed lines (against inspection-accepted quantity) or against approved service entries, then approved, posted to ERP exactly once and paid."
         actions={<>
           {canCapture && <Button variant="primary" onClick={() => setDialog('capture')}>Capture invoice</Button>}

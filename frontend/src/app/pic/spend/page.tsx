@@ -78,7 +78,7 @@ function SpendWorkspace() {
 export default function SpendAnalysis() {
   return (
     <div className="space-y-6">
-      <PageHeader eyebrow="SPD-01..09 · Spend governance" title="Spend analysis"
+      <PageHeader kpis="M01" eyebrow="SPD-01..09 · Spend governance" title="Spend analysis"
         subtitle="Spend from posted invoice lines: where it goes, who it goes to, how much is on contract, what breaks policy and where the category strategy should take it. Amounts are in rupees; shares are of addressable spend." />
       <Suspense fallback={<Loading />}>
         <SpendWorkspace />

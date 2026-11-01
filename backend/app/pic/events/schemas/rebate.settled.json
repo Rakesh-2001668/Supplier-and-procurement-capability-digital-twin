@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:rebate.settled",
+  "title": "rebate.settled",
+  "description": "Payload (outbox_event.payload) of rebate.settled on REBATE_SETTLEMENT. Produced by services/rebates.py.",
+  "type": "object",
+  "properties": {
+    "supplierId": {
+      "type": "string"
+    },
+    "supplier": {},
+    "agreement": {},
+    "period": {},
+    "amountMinor": {},
+    "companyCode": {},
+    "erpKey": {}
+  },
+  "required": [
+    "supplierId",
+    "supplier",
+    "agreement",
+    "period",
+    "amountMinor",
+    "companyCode",
+    "erpKey"
+  ],
+  "additionalProperties": true
+}

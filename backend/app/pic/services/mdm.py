@@ -111,10 +111,11 @@ def _check_duplicates(session: Session, request: MaterialRequest, instance) -> N
     top = Decimal(str(candidates[0]["score"])) if candidates else Decimal("0")
     request.duplicate_score = top
     request.duplicate_candidates = candidates[:5]
-    ai_ref = agents.log_run(session, "MATERIAL_DEDUP", object_type="MATERIAL_REQUEST", object_id=request.id,
+    ai_ref = (agents.log_run(session, "MATERIAL_DEDUP", object_type="MATERIAL_REQUEST", object_id=request.id,
                             object_ref=request.number, inputs={"description": request.description, "mpn": request.mpn},
                             evidence=[_candidate_ref(c) for c in candidates[:5]], output={"topScore": float(top)},
                             confidence=0.9, action_taken="DRAFTED")
+             if agents.permit(session, "MATERIAL_DEDUP", object_type="MATERIAL_REQUEST", object_id=request.id, object_ref=request.number, required_level="L2") else None)
     workflow.step(session, instance, "F9-03", outcome=f"top duplicate score {top}")
     block_at = Decimal(str(rule.body["blockAt"]))
     if top >= block_at:
@@ -232,6 +233,9 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
                  after={"description": material.description, "group": material.material_group, "category": material.category,
                         "uom": material.base_uom, "fromRequest": request.number}, rule_set_version=request.rule_set_version)
     link(session, "MATERIAL_REQUEST", request.id, request.number, "MATERIAL", material.id, material.number, "created_material")
+    from app.pic.services import material_changes  # version 1 of the material's history
+
+    material_changes.record_version(session, material, reason=f"created from {request.number}")
     outbox.emit(session, "material_request.approved", "MATERIAL_REQUEST", request.id, request.number,
                 {"material": material.number, "materialId": str(material.id)})
     message = integration.enqueue(
@@ -245,6 +249,10 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
 
 @integration.on_posted("MATERIAL_MASTER")
 def _material_synced(session: Session, message) -> None:
+    if message.object_type == "MATERIAL_CHANGE_REQUEST":  # pending workflow 17: an ERP update of an existing material
+        from app.pic.services import material_changes
+
+        return material_changes.erp_posted(session, message)
     request = session.get(MaterialRequest, message.object_id)
     material = session.get(Material, request.material_id)
     material.erp_synced = True

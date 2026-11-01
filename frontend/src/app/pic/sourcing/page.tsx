@@ -25,7 +25,7 @@ export default function SourcingEvents() {
   }, [cookie]);
   return (
     <div>
-      <PageHeader eyebrow="SRC-01 · Strategic sourcing" title="Sourcing events"
+      <PageHeader kpis="M05" eyebrow="SRC-01 · Strategic sourcing" title="Sourcing events"
         subtitle="RFx events start only from approved requirements, invite only suppliers qualified for the category, keep bids sealed until close and award on TCO and verified capacity."
         actions={canCreate && <LinkButton variant="primary" href="/pic/sourcing/new">New sourcing event</LinkButton>} />
       <Card title="Worklist" actions={

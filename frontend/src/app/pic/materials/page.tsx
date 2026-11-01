@@ -1,11 +1,13 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, Card, DataTable, Dialog, Field, Input, PageHeader, ProblemBox, Select, StatusChip, Tabs, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { date, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
+import { AllChangeRequests, usePendingChanges } from './_changes';
 
 type Material = { id: string; number: string; description: string; type: string; material_group: string | null; category: string | null;
   base_uom: string; hsn_code: string | null; gst_rate: string | null; mpn: string | null; status: string; erp_synced: boolean; created_at: string };
@@ -22,13 +24,14 @@ export default function Materials() {
   const canRequest = !!me.data?.scopes.includes('req:create');
   return (
     <div>
-      <PageHeader eyebrow="MDM-01 / MDM-02 / MDM-03 · Material master governance" title="Materials"
+      <PageHeader kpis="M03" eyebrow="MDM-01 / MDM-02 / MDM-03 · Material master governance" title="Materials"
         subtitle="Every new material is duplicate-checked (description, classification, MPN, attributes) and approved by a data steward before it is synced to ERP."
         actions={canRequest ? <Button variant="primary" onClick={() => setOpen(true)}>New material request</Button> : undefined} />
       <Card>
         <Tabs tabs={[
           { id: 'materials', label: 'Materials', content: <MaterialList /> },
           { id: 'requests', label: 'Material requests', content: <RequestList /> },
+          { id: 'changes', label: 'Change requests', content: <AllChangeRequests /> },
         ]} />
       </Card>
       {open && <NewRequestDialog onClose={() => setOpen(false)} />}
@@ -38,10 +41,11 @@ export default function Materials() {
 
 function MaterialList() {
   const list = useList<Material>('/materials');
+  const pending = usePendingChanges();
   return (
     <DataTable<Material>
       rows={list.items} loading={list.isLoading} error={list.error} hasMore={list.hasNextPage} onLoadMore={() => list.fetchNextPage()}
-      loadingMore={list.isFetchingNextPage} empty="No materials"
+      loadingMore={list.isFetchingNextPage} empty="No materials" rowHref={(m) => `/pic/materials/${encodeURIComponent(m.number)}`}
       columns={[
         { key: 'number', header: 'Material', render: (m) => <span className="font-medium">{m.number}</span> },
         { key: 'description', header: 'Description' },
@@ -53,6 +57,8 @@ function MaterialList() {
         { key: 'mpn', header: 'MPN', render: (m) => m.mpn ?? '–' },
         { key: 'status', header: 'Status', render: (m) => <StatusChip status={m.status} /> },
         { key: 'erp_synced', header: 'ERP', render: (m) => (m.erp_synced ? 'Synced' : 'Pending sync') },
+        { key: 'pending', header: 'Pending change', render: (m) => (pending[m.number]
+          ? <Link href={`/pic/materials/${encodeURIComponent(pending[m.number])}`} className="font-medium text-[#1A56DB] hover:underline">{pending[m.number]}</Link> : '–') },
       ]}
     />
   );

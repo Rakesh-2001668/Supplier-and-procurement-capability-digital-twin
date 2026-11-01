@@ -229,12 +229,11 @@ class SanctionsProvider:
         return cls(name.strip().upper(), url.strip(), os.environ.get("PIC_SANCTIONS_API_KEY")) if name and url else None
 
     def _get(self, path: str, params: Optional[dict] = None):
-        import httpx
+        from app.pic.services import sanctions_feed   # timeout, retries, HTTPS-only and size cap: PIC_SANCTIONS_*
         headers = {"accept": "application/json", "user-agent": "AlphaHelion PIC screening"}
         if self.api_key:
             headers.update({"authorization": f"Bearer {self.api_key}", "x-api-key": self.api_key})
-        response = httpx.get(f"{self.url}{path}", params=params, headers=headers, timeout=10)
-        return response
+        return sanctions_feed.get(f"{self.url}{path}", params=params, headers=headers)
 
     @staticmethod
     def _items(data, keys: tuple[str, ...]) -> list:
@@ -816,6 +815,16 @@ def twin(session: Session, supplier_id: uuid.UUID, category: str) -> Optional[Tw
                                                       TwinSnapshot.category == category)).scalar_one_or_none()
 
 
+def qualification_status(session: Session, supplier_id: uuid.UUID, category: str) -> dict:
+    """BP M06-R1 helper for the purchase-order hard block: the supplier's qualification for a category and whether a PO may be placed.
+    ``allowed`` is True for QUALIFIED / PREFERRED; CONDITIONAL needs a waiver, everything else (including BLOCKED) is not allowed."""
+    from app.pic.services.common import category_status
+
+    status = category_status(session, supplier_id, category)
+    return {"status": status, "allowed": status in ACTIVE_CATEGORY_STATUSES, "needsWaiver": status == "CONDITIONAL",
+            "reason": None if status in ACTIVE_CATEGORY_STATUSES else f"supplier is {status} for {category}"}
+
+
 def _scorecard(session: Session, supplier_id: uuid.UUID, period: str) -> Scorecard:
     card = session.execute(select(Scorecard).where(Scorecard.supplier_id == supplier_id, Scorecard.period == period)
                            .with_for_update()).scalar_one_or_none()
@@ -948,3 +957,78 @@ def _scorecard_on_invoice(session: Session, event) -> None:
     card.invoices_first_pass += 1 if invoice.first_pass_matched else 0
     _recompute(card)
     _feedback(session, invoice.supplier_id, "INVOICE_ACCURACY", card.invoice_accuracy_pct or Decimal(0), event, invoice.number)
+
+
+# ---------------------------------------------------------------- monthly recalculation (job scorecard-monthly, BP M06)
+def recalculate_scorecards(session: Session, period: str, *, dry_run: bool = False) -> dict:
+    """Recompute the scorecards of one month (YYYY-MM) from the receipts and invoices themselves and correct any drift of the
+    event-driven counters (a missed event, a receipt decided after the month closed). Idempotent: the values are derived from the
+    documents, never incremented, so a second run of the same month changes nothing. Receipts in quality hold and reversed
+    receipts do not count (as in the event-driven path); every corrected card is audited with its before and after values."""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period or ""):
+        raise Problem(422, "INVALID_PERIOD", "period must be YYYY-MM", rule_ref="M06")
+    year, month = int(period[:4]), int(period[5:])
+    first = date(year, month, 1)
+    last = (date(year + (month == 12), month % 12 + 1, 1)) - timedelta(days=1)
+    facts: dict[uuid.UUID, dict] = {}
+
+    def entry(supplier_id: uuid.UUID) -> dict:
+        return facts.setdefault(supplier_id, {"receipts": 0, "on_time_in_full": 0, "qty_received": Decimal(0), "qty_rejected": Decimal(0),
+                                              "invoices": 0, "invoices_first_pass": 0})
+
+    receipts = session.execute(
+        select(GoodsReceipt, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == GoodsReceipt.po_id)
+        .where(GoodsReceipt.posting_date >= first, GoodsReceipt.posting_date <= last,
+               GoodsReceipt.status.not_in(("QUALITY_HOLD", "REVERSED")), GoodsReceipt.reversal_of.is_(None))
+        .order_by(GoodsReceipt.posting_date, GoodsReceipt.number)).all()
+    for gr, po in receipts:
+        item = entry(po.supplier_id)
+        on_time = True
+        for line in session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars():
+            on_time = receipt_line_otif(session, gr, po, line) and on_time
+            item["qty_received"] += line.qty
+            item["qty_rejected"] += line.rejected_qty or 0
+        item["receipts"] += 1
+        item["on_time_in_full"] += 1 if on_time else 0
+    for invoice in session.execute(select(Invoice).where(Invoice.invoice_date >= first, Invoice.invoice_date <= last,
+                                                         Invoice.status.in_(("POSTED", "PAID")))).scalars():
+        item = entry(invoice.supplier_id)
+        item["invoices"] += 1
+        item["invoices_first_pass"] += 1 if invoice.first_pass_matched else 0
+
+    cards = {c.supplier_id: c for c in session.execute(select(Scorecard).where(Scorecard.period == period).with_for_update()).scalars()}
+    changed, unchanged = [], 0
+    for supplier_id in sorted(set(facts) | set(cards), key=str):
+        data = facts.get(supplier_id) or {"receipts": 0, "on_time_in_full": 0, "qty_received": Decimal(0), "qty_rejected": Decimal(0),
+                                          "invoices": 0, "invoices_first_pass": 0}
+        card = cards.get(supplier_id)
+        fields = ("receipts", "on_time_in_full", "qty_received", "qty_rejected", "invoices", "invoices_first_pass")
+        current = {f: (getattr(card, f) if card is not None else (Decimal(0) if f.startswith("qty") else 0)) for f in fields}
+        if all(Decimal(str(current[f])) == Decimal(str(data[f])) for f in fields) and card is not None:
+            unchanged += 1
+            continue
+        if card is None:
+            card = Scorecard(tenant_id=current_tenant(session), supplier_id=supplier_id, period=period, receipts=0, on_time_in_full=0,
+                             qty_received=0, qty_rejected=0, invoices=0, invoices_first_pass=0)
+            if not dry_run:
+                session.add(card)
+                session.flush()
+        before = {f: str(current[f]) for f in fields} | {"otifPct": str(card.otif_pct) if card.otif_pct is not None else None,
+                                                         "ppm": str(card.ppm) if card.ppm is not None else None}
+        supplier = session.get(Supplier, supplier_id)
+        entry_out = {"supplier": supplier.code if supplier else str(supplier_id), "before": before,
+                     "after": {f: str(data[f]) for f in fields}}
+        changed.append(entry_out)
+        if dry_run:
+            continue
+        for f in fields:
+            setattr(card, f, data[f])
+        card.otif_pct = card.ppm = card.invoice_accuracy_pct = None
+        _recompute(card)
+        entry_out["after"] |= {"otifPct": str(card.otif_pct) if card.otif_pct is not None else None,
+                               "ppm": str(card.ppm) if card.ppm is not None else None}
+        audit.record(session, "SUPPLIER", supplier_id, "SCORECARD_RECALCULATED", object_ref=entry_out["supplier"],
+                     before=before, after=entry_out["after"], reason=f"monthly recalculation {period} from receipts and invoices",
+                     rule_set_version="M06-SCORECARD")
+    return {"period": period, "suppliers": len(set(facts) | set(cards)), "corrected": len(changed), "unchanged": unchanged,
+            "changes": changed[:100]}

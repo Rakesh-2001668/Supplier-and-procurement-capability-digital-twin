@@ -7,7 +7,13 @@ import { date, dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { useSessionUser } from '../invoices/_components';
 import { ConnectorsTab } from './_connectors';
+import { ErpSyncTab } from './_sync';
+import { DelegationsTab, JobsTab } from './_jobs';
 import { SimulationTab } from './_simulation';
+import { MandatoryFieldsTab } from './_mandatory';
+import { WorkflowTab } from './_designer';
+import { MappingsTab } from './_mappings';
+import { MitigationReport, MitigationReportData, RuleModeButton } from './_sod';
 
 // ---------------------------------------------------------------- types
 type Rule = { id: string; key: string; version: string; company_code: string | null; plant: string | null; category: string | null;
@@ -128,8 +134,8 @@ function RulesTab() {
 }
 
 // ---------------------------------------------------------------- roles & SoD (ADM-04)
-function SodTab() {
-  const { data, isLoading, error } = useApi<{ rules: SodRule[]; violations: SodViolation[] }>('/admin/sod');
+function SodTab({ isAdmin }: { isAdmin: boolean }) {
+  const { data, isLoading, error } = useApi<{ rules: SodRule[]; violations: SodViolation[]; mitigations: MitigationReportData }>('/admin/sod');
   if (isLoading) return <Loading />;
   if (error || !data) return <ProblemBox error={error} />;
   return (
@@ -142,10 +148,11 @@ function SodTab() {
           { key: 'scope', header: 'Same', render: (r) => <span className="font-mono text-xs">{r.scope}</span> },
           { key: 'condition', header: 'Condition', render: (r) => r.condition ?? '–' },
           { key: 'risk', header: 'Risk' },
-          { key: 'mode', header: 'Mode', render: (r) => <StatusChip status={r.mode} /> },
+          { key: 'mode', header: 'Mode', render: (r) => <RuleModeButton code={r.code} mode={r.mode} risk={r.risk} isAdmin={isAdmin} /> },
           { key: 'description', header: 'Description', className: 'min-w-[220px]' },
         ]} />
       </Card>
+      {data.mitigations && <MitigationReport data={data.mitigations} isAdmin={isAdmin} />}
       <Card title={`Violations and blocks (${data.violations.length})`}>
         <DataTable<SodViolation> rows={data.violations} empty="No SoD conflicts have been attempted" columns={[
           { key: 'created_at', header: 'When', render: (r) => dateTime(r.created_at) },
@@ -561,7 +568,7 @@ export default function Admin() {
   const isAdmin = !!user?.roles.includes('TENANT_ADMIN');
   return (
     <div className="space-y-4">
-      <PageHeader eyebrow="ADM-01..06 · Administration" title="Administration"
+      <PageHeader kpis="M13" eyebrow="ADM-01..06 · Administration" title="Administration"
         subtitle="Organisation and currencies, rules and thresholds, users, roles and segregation of duties, ERP integration, the audit trail, operations and industry templates." />
       {user && !isAdmin && (
         <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900">
@@ -573,12 +580,18 @@ export default function Admin() {
         { id: 'org', label: 'Organisation (ADM-01)', content: <OrganisationTab isAdmin={isAdmin} /> },
         { id: 'rules', label: 'Rules & thresholds', content: <RulesTab /> },
         { id: 'simulate', label: 'Approval simulation (ADM-03)', content: <SimulationTab /> },
+        { id: 'mandatory', label: 'Mandatory fields', content: <MandatoryFieldsTab /> },
         { id: 'users', label: 'Users & roles (ADM-04)', content: <UsersTab isAdmin={isAdmin} /> },
-        { id: 'sod', label: 'Roles & SoD', content: <SodTab /> },
+        { id: 'sod', label: 'Roles & SoD', content: <SodTab isAdmin={isAdmin} /> },
+        { id: 'workflow', label: 'Workflow designer', content: <WorkflowTab /> },
         { id: 'integration', label: 'Integration monitor', content: <IntegrationTab /> },
         { id: 'connectors', label: 'ERP connectors & imports', content: <ConnectorsTab /> },
+        { id: 'mappings', label: 'ERP field mappings', content: <MappingsTab /> },
+        { id: 'erp-sync', label: 'ERP sync', content: <ErpSyncTab /> },
         { id: 'audit', label: 'Audit explorer', content: <AuditTab /> },
         { id: 'ops', label: 'Operations', content: <OpsTab /> },
+        { id: 'jobs', label: 'Jobs', content: <JobsTab /> },
+        { id: 'delegations', label: 'Delegations', content: <DelegationsTab /> },
         { id: 'templates', label: 'Industry templates', content: <TemplatesTab /> },
       ]} />
     </div>

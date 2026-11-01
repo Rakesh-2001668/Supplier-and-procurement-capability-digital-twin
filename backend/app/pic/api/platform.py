@@ -94,7 +94,7 @@ class TaskDecision(BaseModel):
 @router.get("/tasks", tags=["Workflow"])
 def my_tasks(p: Principal = Depends(require(TASKS))):
     with uow(p) as s:
-        return [row(t, extra={"canComplete": True}) for t in workflow.open_tasks_for(s, p)]
+        return [row(t, extra={"canComplete": True, "actingFor": workflow.acting_for(s, p, t)}) for t in workflow.open_tasks_for(s, p)]
 
 
 @router.post("/tasks/{task_id}/complete", tags=["Workflow"])
@@ -111,10 +111,11 @@ def complete_task(task_id: uuid.UUID, body: TaskDecision, p: Principal = Depends
 # ---------------------------------------------------------------- processes (BPMN token position)
 @router.get("/process-definitions", tags=["Workflow"])
 def process_definitions(p: Principal = Depends(require(READ))):
+    """The definition new instances start on, per flow (the tenant's own published version, else the shared baseline). Versions,
+    drafts, validation, publish, diff and BPMN: see the Workflow designer routes."""
+    from app.pic.platform import definitions
     with uow(p) as s:
-        return [{"key": d.key, "flow": d.flow_id, "version": d.version, "name": d.name, "steps": d.definition["steps"],
-                 "branches": d.definition.get("branches")}
-                for d in s.execute(select(ProcessDefinition).order_by(ProcessDefinition.flow_id)).scalars()]
+        return [{**definitions.view(d), "versions": len(definitions.versions(s, d.key))} for d in definitions.effective(s)]
 
 
 @router.get("/processes/{instance_id}", tags=["Workflow"])
@@ -172,6 +173,7 @@ class RuleSetIn(BaseModel):
     plant: Optional[str] = None
     category: Optional[str] = None
     purchase_type: Optional[str] = None
+    supplier_group: Optional[str] = None
     body: dict
     description: Optional[str] = None
     supersedes: Optional[str] = Field(default=None, description="Version label this one replaces when both have the same scope and "
@@ -193,9 +195,9 @@ def new_rule_version(body: RuleSetIn, p: Principal = Depends(require("admin:rule
         if any(r.version == body.version for r in same_key):
             raise Problem(409, "RULE_VERSION_EXISTS", f"{body.key}@{body.version} already exists; give the new version its own label",
                           rule_ref="P14")
-        scope = (body.company_code, body.plant, body.category, body.purchase_type)
+        scope = (body.company_code, body.plant, body.category, body.purchase_type, body.supplier_group)
         clash = [r for r in same_key if r.effective_from == body.effective_from
-                 and (r.company_code, r.plant, r.category, r.purchase_type) == scope]
+                 and (r.company_code, r.plant, r.category, r.purchase_type, r.supplier_group) == scope]
         if clash and body.supersedes not in {r.version for r in clash}:
             raise Problem(409, "RULE_VERSION_CONFLICT",
                           f"{body.key} already has version {', '.join(r.version for r in clash)} for this scope effective "
@@ -211,8 +213,10 @@ def new_rule_version(body: RuleSetIn, p: Principal = Depends(require("admin:rule
 @router.get("/admin/sod", tags=["Administration"])
 def sod_rules(p: Principal = Depends(require(READ))):
     with uow(p) as s:
+        from app.pic.platform import sod
         return {"rules": rows(s.execute(select(SodRule).order_by(SodRule.code)).scalars()),
-                "violations": rows(s.execute(select(SodViolation).order_by(SodViolation.created_at.desc())).scalars())}
+                "violations": rows(s.execute(select(SodViolation).order_by(SodViolation.created_at.desc())).scalars()),
+                "mitigations": sod.report(s)}
 
 
 # ---------------------------------------------------------------- agents (AIX-03)
@@ -237,12 +241,8 @@ class KillSwitch(BaseModel):
 @router.put("/agents/{code}/kill-switch", tags=["Agents"])
 def kill_switch(code: str, body: KillSwitch, p: Principal = Depends(require("agents:manage"))):
     with uow(p) as s:
-        agent = s.execute(select(Agent).where(Agent.code == code.upper())).scalar_one_or_none()
-        if agent is None:
-            raise not_found("Agent", code)
-        agent.kill_switch = body.on
-        audit.record(s, "AGENT", agent.id, "KILL_SWITCH_ON" if body.on else "KILL_SWITCH_OFF", object_ref=agent.code, reason=body.reason)
-        return row(agent)
+        from app.pic.platform import agents as agent_registry  # also clears an automatic suspension and restarts the feedback window
+        return row(agent_registry.set_kill_switch(s, code, body.on, body.reason))
 
 
 # ---------------------------------------------------------------- operations

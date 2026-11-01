@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:punchout.cart.returned",
+  "title": "punchout.cart.returned",
+  "description": "Payload (outbox_event.payload) of punchout.cart.returned on PUNCHOUT_SESSION. Produced by services/punchout.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "items": {
+      "type": "integer"
+    },
+    "totalMinor": {},
+    "protocol": {}
+  },
+  "required": [
+    "supplier",
+    "items",
+    "totalMinor",
+    "protocol"
+  ],
+  "additionalProperties": true
+}

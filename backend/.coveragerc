@@ -1,0 +1,13 @@
+[run]
+source = app/pic
+branch = False
+omit =
+    app/pic/tools/*
+    app/pic/seed/datasets/*
+    */__pycache__/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError

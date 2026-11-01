@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:subcontracting.components_provided",
+  "title": "subcontracting.components_provided",
+  "description": "Payload (outbox_event.payload) of subcontracting.components_provided on PURCHASE_ORDER. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "line": {},
+    "supplier": {},
+    "components": {}
+  },
+  "required": [
+    "line",
+    "supplier",
+    "components"
+  ],
+  "additionalProperties": true
+}

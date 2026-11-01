@@ -31,8 +31,9 @@ def _ensure_session_current(session, principal: Principal) -> None:
         raise Problem(401, "SESSION_OUTDATED", "Your roles changed since you signed in; sign in again")
 
 
-def idempotency_key(key: Optional[str] = Header(default=None, alias="Idempotency-Key")) -> Optional[str]:
-    return key
+def idempotency_key(idempotency_key_header: Optional[str] = Header(default=None, alias="Idempotency-Key")) -> Optional[str]:
+    """The Idempotency-Key header. (The parameter is not called ``key`` so routes with a ``{key}`` path parameter can use it.)"""
+    return idempotency_key_header
 
 
 def body_of(model: Any) -> dict:

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:material.change.requested",
+  "title": "material.change.requested",
+  "description": "Payload (outbox_event.payload) of material.change.requested on MATERIAL_CHANGE_REQUEST. Produced by services/material_changes.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "domains": {},
+    "fields": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "material",
+    "domains",
+    "fields"
+  ],
+  "additionalProperties": true
+}

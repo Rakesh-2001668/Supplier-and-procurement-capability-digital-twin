@@ -138,5 +138,28 @@ def test_tenants_without_the_freight_audit_rule_keep_the_standard_match(loaded):
         assert "freightAudit" not in detail and invoice.first_pass_matched
 
 
+def test_detention_claims_freight_movements_and_index_feed(loaded):
+    """Wave 1 (item 41): rate rule per carrier and lane, a claim blocked without POD and one approved with it, freight movements for the
+    cost-per-tonne-km KPI (which agrees with the pack's own calculation) and the fed demonstration index."""
+    from app.pic.models import AccessorialCharge, AccessorialRate, FreightMovement, IndexValue, Tenant
+    from app.pic.services import ind_kpis
+    with system_tx() as s:
+        tenant_id = s.execute(select(Tenant.id).where(Tenant.code == "LOG")).scalar_one()
+    with tenant_tx(tenant_id) as s:
+        rate = s.execute(select(AccessorialRate)).scalar_one()
+        assert (rate.charge_type, rate.unit, rate.free_units, rate.rate_minor, rate.lane) == ("DETENTION", "HOUR", Decimal(4), 60_000, "PNQ1-CHE1")
+        charges = {c.status: c for c in s.execute(select(AccessorialCharge)).scalars()}
+        assert set(charges) == {"BLOCKED", "APPROVED"} and "proof of delivery" in charges["BLOCKED"].reason and charges["BLOCKED"].ses_id is None
+        approved = charges["APPROVED"]
+        assert (approved.units, approved.billable_units, approved.amount_minor) == (Decimal(11), Decimal(7), 7 * 60_000) and approved.pod_ses_id and approved.ses_id
+        movements = s.execute(select(FreightMovement)).scalars().all()
+        assert movements and all(m.lane == "CHE1-PNQ1" and m.ses_id for m in movements)
+        index = s.execute(select(IndexValue).where(IndexValue.index_code == "DEMO-DIESEL-IDX").order_by(IndexValue.as_of)).scalars().all()
+        assert [str(v.value) for v in index] == ["101.5000", "103.2000", "104.6000", "102.8000"] and all(v.source == "IMPORT" for v in index)
+        kpi = {k["code"]: k for k in ind_kpis.industry_kpis(s, include_other_templates=True)["kpis"]}["TPL.COST_PER_TONNE_KM"]
+        pack_kpis = datasets.loaded("LOG", pack.KEY).summary["counts"]["kpis"]
+        assert kpi["detail"]["trips"] == len(movements)
+        assert abs(Decimal(kpi["value"]) / 100 - Decimal(pack_kpis["costPerTonneKm"])) < Decimal("0.01")
+
 def test_second_apply_is_idempotent(loaded):
     assert [r["status"] for r in datasets.apply_pack("industry_logistics", PASSWORD)] == ["ALREADY_LOADED"]

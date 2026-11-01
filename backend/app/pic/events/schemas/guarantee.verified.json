@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:guarantee.verified",
+  "title": "guarantee.verified",
+  "description": "Payload (outbox_event.payload) of guarantee.verified on BANK_GUARANTEE. Produced by services/ind_construction.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "kind": {},
+    "expiry": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "po",
+    "kind",
+    "expiry"
+  ],
+  "additionalProperties": true
+}

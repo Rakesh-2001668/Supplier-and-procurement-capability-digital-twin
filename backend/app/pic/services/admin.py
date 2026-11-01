@@ -170,6 +170,9 @@ def set_autonomy(session: Session, code: str, *, level: str, value_limit_minor: 
     if categories is not None:
         agent.categories = categories
     if kill_switch is not None:
+        if agent.kill_switch and not kill_switch:  # resumed: clears an automatic suspension and restarts the feedback window
+            agent.suspended_at = agent.suspended_by = agent.suspension_reason = None
+            agent.acceptance_reset_at = clock.now()
         agent.kill_switch = kill_switch
     audit.record(session, "AGENT", agent.id, "AUTONOMY_CHANGED", object_ref=code, before=before,
                  after={"level": level, "limit": agent.value_limit_minor, "categories": agent.categories, "killSwitch": agent.kill_switch}, reason=reason)
@@ -192,8 +195,9 @@ def run_agent(session: Session, code: str) -> dict:
     if scope not in p.scopes and "agents:manage" not in p.scopes:
         raise Problem(403, "FORBIDDEN", f"Running {code} requires {scope}")
     agent = agents.get(session, code)
-    if agent.kill_switch:
-        raise Problem(409, "KILL_SWITCH", f"{code} is switched off")
+    allowed, reason = agents.guard(session, code, required_level="L1")  # tenant-wide AI switch, kill switch, drift suspension
+    if not allowed:
+        raise Problem(409, "KILL_SWITCH", f"{code} is switched off: {reason}")
     result = fn()
     audit.record(session, "AGENT", agent.id, "RUN_REQUESTED", object_ref=code, after=result)
     return {"agent": code, "result": result}

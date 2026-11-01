@@ -24,6 +24,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
@@ -32,10 +33,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.pic.models import IntegrationMessage
-from app.pic.platform import integration
+from app.pic.platform import clock, integration, sap_mapping, sap_odata, sap_pull
 from app.pic.platform.integration import ConnectorError, ConnectorTimeout
 
-MESSAGE_TYPES = ("SUPPLIER_INVOICE", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
+MESSAGE_TYPES = ("SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
 
 
 class ConnectorNotConfigured(ConnectorError):
@@ -170,6 +171,10 @@ class Connector:
     def after_post(self) -> None:
         return None
 
+    def pull(self, kind: str, since: Optional[str] = None, company_code: Optional[str] = None):
+        """Inbound read (live ERP sync, ``services/erp_sync``): connectors without a read interface say so."""
+        raise ConnectorUnsupported(f"{self.system} connector has no inbound read interface; use the file drop (PIC_ERP_SYNC_DROP_DIR)")
+
     def health(self) -> dict:
         if not self.configured():
             return {"healthy": False, "detail": f"not configured: set {', '.join(self.missing())}"}
@@ -189,7 +194,7 @@ class Connector:
 
 
 # ---------------------------------------------------------------- SAP S/4HANA (sandbox simulator)
-class SapS4(Connector):
+class SapS4Simulator(Connector):
     """Wraps ``integration.SapS4Connector`` so the simulator, its fault injection and document numbering are unchanged."""
     system = "SAP_S4"
     name = "SAP S/4HANA (sandbox simulator)"
@@ -227,6 +232,387 @@ class SapS4(Connector):
         return {"healthy": True, "detail": "sandbox simulator (erp_document table)"}
 
 
+# ---------------------------------------------------------------- SAP S/4HANA: sandbox simulator by default, the real connector when configured
+REF_LEN = {"PURCHASE_ORDER": 12, "SUPPLIER_INVOICE": 25, "SUPPLIER_CREDIT_MEMO": 25, "GOODS_RECEIPT": 25, "SUPPLIER_MASTER": 20,
+           "PURCHASE_REQUISITION": 40, "MATERIAL_MASTER": 40, "PAYMENT": 25}
+# message type -> (mapping key in sap_mapping.SERVICES, entity set, reference field, number field, select)
+SAP_FIND = {
+    "PURCHASE_REQUISITION": ("A_PurchaseRequisitionHeader", "PurReqnDescription", "PurchaseRequisition"),
+    "PURCHASE_ORDER": ("A_PurchaseOrder", "CorrespncExternalReference", "PurchaseOrder"),
+    "SUPPLIER_INVOICE": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
+    "SUPPLIER_CREDIT_MEMO": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
+    "GOODS_RECEIPT": ("A_MaterialDocumentHeader", "MaterialDocumentHeaderText", "MaterialDocument"),
+    "SUPPLIER_MASTER": ("A_BusinessPartner", "SearchTerm1", "BusinessPartner"),
+}
+
+
+class SapS4(SapS4Simulator):
+    """SAP S/4HANA (TD §12.1). Without ``PIC_ERP_SAP_S4_URL`` (or ``..._IDOC_DIR``) this is the sandbox simulator, exactly as
+    before. With it, documents are posted to the real system:
+
+        PIC_ERP_SAP_S4_URL            base URL of the SAP Gateway / ICF host, e.g. https://s4.example.com:44300
+        PIC_ERP_SAP_S4_USER, _PASSWORD  basic credentials of the technical user, or PIC_ERP_SAP_S4_TOKEN (bearer / OAuth)
+        PIC_ERP_SAP_S4_SAP_CLIENT     SAP client (mandant), sent as ``sap-client``
+        PIC_ERP_SAP_S4_ODATA_VERSION  2 (default; the released APIs are OData v2) or 4
+        PIC_ERP_SAP_S4_TRANSPORT      odata (default) | idoc (IDoc XML over HTTP, /sap/bc/idoc_xml) | idoc-file (XML into a directory)
+        PIC_ERP_SAP_S4_IDOC_DIR       directory of the file port (idoc-file); also PIC_ERP_SAP_S4_IDOC_PARTNER / _IDOC_PORT / _IDOC_RECEIVER
+        PIC_ERP_SAP_S4_COMPANY_MAP    PIC company code -> SAP company code, "1000=1710" (unmapped codes are sent unchanged)
+        PIC_ERP_SAP_S4_PURCH_ORG, _PURCH_GROUP, _PO_TYPE, _TAX_CODE, _GL_ACCOUNT (invoices without PO), _BANK_GL_ACCOUNT (IDoc payment),
+        PIC_ERP_SAP_S4_PAYMENT_SERVICE (custom OData service for outgoing payments), _BP_GROUPING, _PRODUCT_TYPE
+        PIC_ERP_SAP_S4_TIMEOUT / _RETRIES   seconds per call (20) and retries (2) on read errors and gateway overload
+
+    The field mappings and the assumed API shapes are documented in ``sap_mapping.py``; the inbound reads in ``sap_pull.py``.
+    """
+    name = "SAP S/4HANA"
+    credentials = "basic|token"
+    SETTINGS = ("SAP_CLIENT", "ODATA_VERSION", "TRANSPORT", "IDOC_DIR", "IDOC_PARTNER", "IDOC_PORT", "IDOC_RECEIVER", "PURCH_ORG", "PURCH_GROUP",
+                "PO_TYPE", "TAX_CODE", "GL_ACCOUNT", "BANK_GL_ACCOUNT", "PAYMENT_SERVICE", "BP_GROUPING", "PRODUCT_TYPE", "TERMS_MAP", "TIMEOUT", "RETRIES")
+
+    # ------------------------------------------------------------ mode and configuration
+    @property
+    def live(self) -> bool:
+        return bool(self.env("URL") or self.env("IDOC_DIR"))
+
+    @property
+    def simulator(self) -> bool:  # type: ignore[override]
+        return not self.live
+
+    @property
+    def protocol(self) -> str:  # type: ignore[override]
+        if not self.live:
+            return "OData v2 (simulated in erp_document)"
+        return {"odata": f"OData v{self.env('ODATA_VERSION') or 2} (released APIs) + CSRF + $batch", "idoc": "IDoc XML over HTTP (/sap/bc/idoc_xml)",
+                "idoc-file": "IDoc XML file port"}[self.transport()]
+
+    def transport(self) -> str:
+        value = (self.env("TRANSPORT") or ("idoc-file" if self.env("IDOC_DIR") and not self.env("URL") else "odata")).lower()
+        if value not in ("odata", "idoc", "idoc-file"):
+            raise ConnectorRejected(f"PIC_ERP_SAP_S4_TRANSPORT must be odata, idoc or idoc-file (got {value})")
+        return value
+
+    def transport_for(self, message_type: str) -> str:
+        value = self.transport()
+        if message_type == "PAYMENT" and value == "odata":
+            return "odata" if self.env("PAYMENT_SERVICE") else "idoc"
+        return value
+
+    @property
+    def message_types(self) -> tuple:  # type: ignore[override]
+        if not self.live:
+            return tuple(integration.DOC_TYPES)
+        return tuple(sap_mapping.IDOC_TYPES) if self.transport() != "odata" else sap_mapping.MESSAGE_TYPES
+
+    def requirements(self) -> list[dict]:
+        if not self.live:
+            return [{"name": f"PIC_ERP_SAP_S4_{k}", "present": self.env(k) is not None, "required": False, "secret": k in ("PASSWORD", "TOKEN")}
+                    for k in ("URL", "USER", "PASSWORD", "TOKEN", "COMPANY_MAP", *self.SETTINGS)]
+        out = [{"name": "PIC_ERP_SAP_S4_URL", "present": self.env("URL") is not None, "required": self.transport() != "idoc-file", "secret": False}]
+        out += [{"name": f"PIC_ERP_SAP_S4_{k}", "present": self.env(k) is not None, "required": False, "secret": k in ("PASSWORD", "TOKEN")}
+                for k in ("USER", "PASSWORD", "TOKEN", "COMPANY_MAP", *self.SETTINGS)]
+        return out
+
+    def missing(self) -> list[str]:
+        if not self.live:
+            return []
+        transport = self.transport()
+        if transport == "idoc-file":
+            return [] if self.env("IDOC_DIR") else ["PIC_ERP_SAP_S4_IDOC_DIR"]
+        gaps = [] if self.env("URL") else ["PIC_ERP_SAP_S4_URL"]
+        if not self.env("TOKEN") and not (self.env("USER") and self.env("PASSWORD")):
+            gaps.append("PIC_ERP_SAP_S4_USER/_PASSWORD or PIC_ERP_SAP_S4_TOKEN")
+        return gaps
+
+    def maps(self, message_type: str) -> bool:
+        return message_type in self.message_types
+
+    # ------------------------------------------------------------ clients
+    def client(self) -> "sap_odata.ODataClient":
+        return sap_odata.ODataClient(self.env("URL"), user=self.env("USER"), password=self.env("PASSWORD"), token=self.env("TOKEN"),
+                                     sap_client=self.env("SAP_CLIENT"), version=int(self.env("ODATA_VERSION") or 2),
+                                     timeout=float(self.env("TIMEOUT") or 20), retries=int(self.env("RETRIES") or 2))
+
+    def idoc_transport(self) -> "sap_odata.IdocTransport":
+        file_port = self.transport() == "idoc-file"
+        return sap_odata.IdocTransport(url=None if file_port else self.env("URL"), directory=self.env("IDOC_DIR") if file_port else None,
+                                       user=self.env("USER"), password=self.env("PASSWORD"), token=self.env("TOKEN"), sap_client=self.env("SAP_CLIENT"),
+                                       timeout=float(self.env("TIMEOUT") or 20), retries=int(self.env("RETRIES") or 2))
+
+    # ------------------------------------------------------------ database enrichment (the payload carries PIC keys only)
+    def _vendor_number(self, session: Session, code: Optional[str]) -> Optional[str]:
+        """SAP vendor / business partner number of a PIC supplier: the ERP number recorded when PIC created it, else its code
+        (vendors migrated from SAP keep their SAP number as code)."""
+        if not code:
+            return None
+        from app.pic.models import Supplier
+        supplier = session.execute(select(Supplier).where(Supplier.code == code)).scalar_one_or_none()
+        if supplier is not None and (supplier.twin_ref or "").startswith("ERP-VENDOR-"):
+            return supplier.twin_ref[len("ERP-VENDOR-"):]
+        return code
+
+    def _ctx(self, session: Session, message: IntegrationMessage) -> dict:
+        p = _payload(message)
+        return {"version": 4 if int(self.env("ODATA_VERSION") or 2) == 4 else 2, "company": self.company(p.get("companyCode")),
+                "vendor": self._vendor_number(session, p.get("supplier")), "reference": reference(message.idempotency_key, REF_LEN.get(message.message_type, 40)),
+                "today": clock.today(), "purch_org": self.env("PURCH_ORG"), "purch_group": self.env("PURCH_GROUP"), "po_type": self.env("PO_TYPE"),
+                "tax_code": self.env("TAX_CODE"), "bp_grouping": self.env("BP_GROUPING"), "product_type": self.env("PRODUCT_TYPE"),
+                "payment_service": self.env("PAYMENT_SERVICE"), "bank_gl_account": self.env("BANK_GL_ACCOUNT"), "idoc_partner": self.env("IDOC_PARTNER"),
+                "idoc_port": self.env("IDOC_PORT"), "idoc_receiver": self.env("IDOC_RECEIVER")}
+
+    def _po_lines(self, session: Session, p: dict) -> list[dict]:
+        from app.pic.models import Material, PoLine, PurchaseOrder
+        po = session.execute(select(PurchaseOrder).where(PurchaseOrder.number == p.get("po"))).scalar_one_or_none()
+        rows = {}
+        if po is not None:
+            for line in session.execute(select(PoLine).where(PoLine.po_id == po.id)).scalars():
+                material = session.get(Material, line.material_id) if line.material_id else None
+                rows[line.line_no] = (line, material.number if material else None)
+        out = []
+        for line in p.get("lines", []):
+            row, material = rows.get(int(line["line"]), (None, None))
+            item = {"line": line["line"], "qty": line["qty"], "priceMinor": line["priceMinor"], "material": material}
+            if row is not None:
+                item.update(uom=row.uom, plant=row.plant, storageLocation=row.storage_location, needDate=row.need_date.isoformat(),
+                            description=row.description, materialGroup=row.material_group)
+            out.append(item)
+        return out
+
+    def _gr_items(self, session: Session, p: dict) -> list[dict]:
+        from app.pic.models import Material, PoLine, PurchaseOrder
+        items = []
+        for line in p.get("lines", []):
+            po_line = session.get(PoLine, uuid.UUID(str(line["poLine"])))
+            if po_line is None:
+                raise ConnectorRejected(f"PO line {line['poLine']} of goods receipt {p.get('gr')} no longer exists")
+            po = session.get(PurchaseOrder, po_line.po_id)
+            if not po.erp_doc_no:
+                raise ConnectorRejected(f"{po.number} has no SAP purchase order number yet: the goods receipt follows once the PO is posted")
+            material = session.get(Material, po_line.material_id) if po_line.material_id else None
+            if material is None:
+                raise ConnectorRejected(f"{po.number} line {po_line.line_no} has no material: a goods movement needs one")
+            items.append({"material": material.number, "plant": po_line.plant, "storageLocation": po_line.storage_location, "po": po.erp_doc_no,
+                          "poItem": po_line.line_no, "qty": line["accepted"], "uom": po_line.uom})
+        return [i for i in items if Decimal(str(i["qty"])) > 0]
+
+    def _invoice_items(self, session: Session, message: IntegrationMessage, scale: Optional[Decimal] = None) -> list[dict]:
+        from app.pic.models import Invoice, InvoiceLine, PoLine, PurchaseOrder
+        invoice = session.get(Invoice, message.object_id)
+        if invoice is None:
+            raise ConnectorRejected(f"invoice {message.object_ref} not found")
+        out = []
+        for line in session.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id).order_by(InvoiceLine.line_no)).scalars():
+            net = int((Decimal(line.net_minor) * scale).to_integral_value()) if scale is not None else line.net_minor
+            po_line = session.get(PoLine, line.po_line_id) if line.po_line_id else None
+            po = session.get(PurchaseOrder, po_line.po_id) if po_line is not None else None
+            if po is not None and po.erp_doc_no:
+                out.append({"po": po.erp_doc_no, "poItem": po_line.line_no, "netMinor": net, "qty": line.qty, "uom": po_line.uom})
+            elif self.env("GL_ACCOUNT"):
+                out.append({"glAccount": self.env("GL_ACCOUNT"), "netMinor": net})
+            else:
+                raise ConnectorRejected(f"invoice line {line.line_no} has no SAP purchase order reference; set PIC_ERP_SAP_S4_GL_ACCOUNT "
+                                        "to post invoices without a PO")
+        if not out:
+            raise ConnectorRejected(f"invoice {invoice.number} has no lines to post")
+        return out
+
+    def _supplier_master(self, session: Session, message: IntegrationMessage) -> dict:
+        from app.pic.models import Supplier, SupplierBankAccount
+        from app.pic.platform import crypto
+        from app.pic.db import current_tenant
+        supplier = session.get(Supplier, message.object_id)
+        if supplier is None:
+            raise ConnectorRejected(f"supplier {message.object_ref} not found")
+        tid = current_tenant(session)
+        gstin = crypto.decrypt(tid, "gstin", supplier.gstin_enc) if supplier.gstin_enc else None
+        bank = session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == supplier.id)
+                               .order_by(SupplierBankAccount.active.desc(), SupplierBankAccount.created_at.desc())).scalars().first()
+        out = {"code": supplier.code, "name": supplier.legal_name, "gstin": gstin, "email": supplier.contact_email, "address": supplier.address or {}}
+        if bank is not None:
+            out["bank"] = {"account": crypto.decrypt(tid, "bank", bank.account_enc), "ifsc": bank.ifsc, "holder": bank.holder_name}
+        return out
+
+    # ------------------------------------------------------------ interface used by integration.process
+    def _spec(self, session: Session, message: IntegrationMessage, ctx: dict) -> "sap_mapping.Spec":
+        p, t = _payload(message), message.message_type
+        if t == "PURCHASE_REQUISITION":
+            return sap_mapping.purchase_requisition(p, ctx)
+        if t == "PURCHASE_ORDER":
+            return sap_mapping.purchase_order(p, ctx, self._po_lines(session, p))
+        if t == "GOODS_RECEIPT":
+            return sap_mapping.goods_receipt(p, ctx, self._gr_items(session, p))
+        if t == "SUPPLIER_INVOICE":
+            return sap_mapping.supplier_invoice(p, ctx, self._invoice_items(session, message))
+        if t == "SUPPLIER_CREDIT_MEMO":
+            from app.pic.models import Invoice
+            invoice = session.get(Invoice, message.object_id)
+            scale = Decimal(p.get("grossMinor") or 0) / Decimal(invoice.gross_minor) if invoice is not None and invoice.gross_minor else None
+            return sap_mapping.supplier_invoice(p, ctx, self._invoice_items(session, message, scale), credit=True)
+        if t == "SUPPLIER_MASTER":
+            return sap_mapping.business_partner(p, ctx, self._supplier_master(session, message))
+        if t == "MATERIAL_MASTER":
+            return sap_mapping.product(p, ctx)
+        if t == "PAYMENT":
+            return sap_mapping.vendor_payment(p, ctx)
+        raise ConnectorUnsupported(f"SAP_S4 connector does not map {t}")
+
+    def find(self, session, message):
+        """Query-before-retry (TD §12.2 step 3) by the PIC reference written into the SAP document."""
+        if not self.live:
+            return super().find(session, message)
+        if not self.configured() or message.message_type not in self.message_types:
+            return None
+        t, p = message.message_type, _payload(message)
+        transport = self.transport_for(t)
+        reference_value = reference(message.idempotency_key, REF_LEN.get(t, 40))
+        if transport == "idoc-file":
+            return RemoteDocument(reference_value) if self.idoc_transport().exists(reference_value) else None
+        if transport == "idoc":
+            return None            # the ICF IDoc port has no query by reference; the IDoc ARCKEY carries it for the SAP-side status report
+        if t == "MATERIAL_MASTER":
+            if p.get("change"):
+                return None
+            found = self.client().get(sap_mapping.SERVICES[t], f"A_Product({sap_odata.literal(str(p.get('material'))[:40])})", {"$select": "Product"})
+            return RemoteDocument(str(found.get("Product"))) if found else None
+        if t == "SUPPLIER_MASTER" and p.get("change"):
+            return None            # master changes are always applied (PATCH is idempotent)
+        if t == "PAYMENT":
+            return None
+        entity, field, number = SAP_FIND[t]
+        value = str(p.get("supplier")) if t == "SUPPLIER_MASTER" else reference_value
+        rows = self.client().query(sap_mapping.SERVICES[t], entity, filter=f"{field} eq {sap_odata.literal(value)}", select=number, top=1)
+        return RemoteDocument(str(rows[0][number])) if rows else None
+
+    def lookup(self, session, external_ref, message_type: Optional[str] = None):
+        """Find a document by its PIC reference without a message (reconciliation, support). Without ``message_type`` the reference-bearing
+        entity sets are searched in turn."""
+        if not self.live:
+            return super().lookup(session, external_ref)
+        types = [message_type] if message_type else list(SAP_FIND)
+        for t in types:
+            entity, field, number = SAP_FIND[t]
+            rows = self.client().query(sap_mapping.SERVICES[t], entity, filter=f"{field} eq {sap_odata.literal(external_ref)}", select=number, top=1)
+            if rows:
+                return RemoteDocument(str(rows[0][number]))
+        return None
+
+    def post(self, session, message):
+        if not self.live:
+            return super().post(session, message)
+        self._require(message)
+        t, p = message.message_type, _payload(message)
+        ctx = self._ctx(session, message)
+        transport = self.transport_for(t)
+        if transport != "odata":
+            return self._post_idoc(session, message, ctx)
+        client = self.client()
+        if t == "SUPPLIER_MASTER" and p.get("change"):
+            return self._change_vendor(session, client, message, ctx)
+        if t == "MATERIAL_MASTER" and p.get("change"):
+            body = sap_mapping.product(p, ctx).body
+            client.update(sap_mapping.SERVICES[t], f"A_Product({sap_odata.literal(str(p.get('material'))[:40])})",
+                          {k: v for k, v in body.items() if k not in ("Product", "to_Description")})
+            return str(p.get("material"))
+        spec = self._spec(session, message, ctx)
+        entity = client.create(spec.service, spec.entity_set, spec.body)
+        number = entity.get(spec.number_field)
+        if not number:
+            raise ConnectorRejected(f"SAP accepted the {t} but returned no {spec.number_field}: {str(entity)[:200]}")
+        return str(number)
+
+    def _post_idoc(self, session, message, ctx) -> str:
+        t, p = message.message_type, _payload(message)
+        data: dict = {}
+        if t == "PURCHASE_ORDER":
+            data["lines"] = self._po_lines(session, p)
+        elif t == "GOODS_RECEIPT":
+            data["lines"] = self._gr_items(session, p)
+        elif t == "SUPPLIER_INVOICE":
+            data["items"] = self._invoice_items(session, message)
+        elif t == "SUPPLIER_CREDIT_MEMO":
+            data["items"] = self._invoice_items(session, message)
+        elif t == "SUPPLIER_MASTER":
+            data["supplier"] = self._supplier_master(session, message)
+        xml = sap_mapping.idoc_xml(t, p, ctx, data)
+        return self.idoc_transport().send(ctx["reference"], xml)
+
+    def _change_vendor(self, session, client, message, ctx) -> str:
+        """Apply an approved MDM-04 change (tax number, address, e-mail) to the business partner found by supplier code."""
+        import json as _json
+        from app.pic.db import current_tenant
+        from app.pic.models import SupplierMasterChange
+        from app.pic.platform import crypto
+        p = _payload(message)
+        service = sap_mapping.SERVICES["SUPPLIER_MASTER"]
+        partners = client.query(service, "A_BusinessPartner", filter=f"SearchTerm1 eq {sap_odata.literal(p.get('supplier'))}", select="BusinessPartner", top=1)
+        if not partners:
+            raise ConnectorRejected(f"business partner for supplier {p.get('supplier')} not found in SAP; create it first")
+        bp = partners[0]["BusinessPartner"]
+        change = session.execute(select(SupplierMasterChange).where(SupplierMasterChange.number == p.get("change"))).scalar_one_or_none()
+        if change is None:
+            raise ConnectorRejected(f"master change {p.get('change')} not found")
+        values = _json.loads(crypto.decrypt(current_tenant(session), "supplier-master-change", change.after_enc))
+        group = (p.get("fieldGroup") or change.field_group or "").upper()
+        if group == "TAX":
+            if self._has_tax(client, service, bp):
+                client.update(service, f"A_BusinessPartnerTaxNumber(BusinessPartner={sap_odata.literal(bp)},BPTaxType='IN3')",
+                              {"BPTaxNumber": values["gstin"]})
+            else:
+                client.create(service, "A_BusinessPartnerTaxNumber", {"BusinessPartner": bp, "BPTaxType": "IN3", "BPTaxNumber": values["gstin"]})
+        else:
+            addresses = client.query(service, "A_BusinessPartnerAddress", filter=f"BusinessPartner eq {sap_odata.literal(bp)}", select="AddressID", top=1)
+            if not addresses:
+                raise ConnectorRejected(f"business partner {bp} has no address in SAP to change")
+            address_id = addresses[0]["AddressID"]
+            if group == "ADDRESS":
+                client.update(service, f"A_BusinessPartnerAddress(BusinessPartner={sap_odata.literal(bp)},AddressID={sap_odata.literal(address_id)})",
+                              {"StreetName": (values.get("line1") or "")[:60], "CityName": (values.get("city") or "")[:40], "PostalCode": (values.get("pin") or "")[:10]})
+            elif values.get("email"):
+                client.create(service, "A_AddressEmailAddress", {"AddressID": address_id, "Person": "", "OrdinalNumber": "1", "EmailAddress": values["email"][:241]})
+        return str(bp)
+
+    @staticmethod
+    def _has_tax(client, service, bp) -> bool:
+        return bool(client.query(service, "A_BusinessPartnerTaxNumber", filter=f"BusinessPartner eq {sap_odata.literal(bp)} and BPTaxType eq 'IN3'", top=1))
+
+    def after_post(self):
+        return super().after_post() if not self.live else None
+
+    # ------------------------------------------------------------ health, test and inbound pulls
+    def health(self) -> dict:
+        if not self.live:
+            return super().health()
+        if not self.configured():
+            return {"healthy": False, "detail": f"not configured: set {', '.join(self.missing())}"}
+        if self.transport() == "idoc-file":
+            import os
+            directory = self.env("IDOC_DIR")
+            ok = os.path.isdir(directory) and os.access(directory, os.W_OK)
+            return {"healthy": ok, "detail": f"file port {directory} " + ("is writable" if ok else "is missing or not writable")}
+        try:
+            report = self.client().test([sap_mapping.SERVICES[t] for t in ("SUPPLIER_MASTER", "PURCHASE_ORDER", "SUPPLIER_INVOICE", "GOODS_RECEIPT", "MATERIAL_MASTER")])
+        except ConnectorError as exc:
+            return {"healthy": False, "detail": str(exc)}
+        failed = [s for s, r in report["services"].items() if not r["ok"]]
+        detail = "all services reachable, CSRF token obtained" if report["ok"] else ("; ".join(f"{s}: {report['services'][s]['detail']}" for s in failed)
+                                                                                    or report.get("csrfDetail", "no CSRF token"))
+        return {"healthy": report["ok"], "detail": detail[:300], "services": report["services"], "csrf": report["csrf"]}
+
+    def test_connection(self) -> dict:
+        return {**self.health(), "system": self.system, "live": self.live, "transport": self.transport() if self.live else "simulator"}
+
+    def pull(self, kind: str, since: Optional[str] = None, company_code: Optional[str] = None):
+        if not self.live or self.transport() != "odata":
+            raise ConnectorNotConfigured("SAP_S4 inbound pulls need the OData transport: set PIC_ERP_SAP_S4_URL and credentials "
+                                         "(the sandbox simulator and IDoc ports have no read interface)")
+        if not self.configured():
+            raise ConnectorNotConfigured(f"SAP_S4 connector is not configured: set {', '.join(self.missing())}")
+        return sap_pull.pull(self.client(), kind, since, self.company(company_code), clock.today())
+
+
+def _payload(message: IntegrationMessage) -> dict:
+    """The payload the connector maps: the field-mapped outbound payload when the mapping layer produced one, else the PIC payload."""
+    return getattr(message, "outbound_payload", None) or message.payload
+
+
 # ---------------------------------------------------------------- Oracle Fusion Cloud ERP (REST)
 class OracleFusion(Connector):
     system = "ORACLE_FUSION"
@@ -237,6 +623,7 @@ class OracleFusion(Connector):
     # message type → (resource, PIC reference field, document number field)
     RESOURCES = {
         "SUPPLIER_INVOICE": ("invoices", "Description", "InvoiceId"),
+        "SUPPLIER_CREDIT_MEMO": ("invoices", "Description", "InvoiceId"),
         "PURCHASE_ORDER": ("draftPurchaseOrders", "Description", "OrderNumber"),
         "GOODS_RECEIPT": ("receivingReceiptRequests", "Comments", "HeaderInterfaceId"),
         "SUPPLIER_MASTER": ("suppliers", "AlternateName", "SupplierId"),
@@ -250,6 +637,10 @@ class OracleFusion(Connector):
         if t == "SUPPLIER_INVOICE":
             return {"InvoiceNumber": p.get("invoice"), "BusinessUnit": bu, "Supplier": p.get("supplier"), "InvoiceCurrency": "INR",
                     "InvoiceAmount": (p.get("grossMinor") or 0) / 100, "InvoiceType": "Standard", "Description": ref}
+        if t == "SUPPLIER_CREDIT_MEMO":   # Payables credit memo: type "Credit Memo", negative amount, tied to the invoice by its number
+            return {"InvoiceNumber": p.get("creditNote"), "BusinessUnit": bu, "Supplier": p.get("supplier"), "InvoiceCurrency": "INR",
+                    "InvoiceAmount": -(p.get("grossMinor") or 0) / 100, "InvoiceType": "Credit Memo", "Description": ref,
+                    "InvoiceReference": p.get("invoice")}
         if t == "PURCHASE_ORDER":
             return {"ProcurementBU": bu, "Supplier": p.get("supplier"), "Description": ref, "CurrencyCode": "INR",
                     "lines": [{"LineNumber": l.get("line"), "Quantity": float(l.get("qty") or 0), "Price": (l.get("priceMinor") or 0) / 100}
@@ -292,10 +683,13 @@ class Dynamics365(Connector):
     system = "DYNAMICS_365"
     name = "Microsoft Dynamics 365 Finance & Supply Chain"
     protocol = "OData v4 (/data entities)"
-    message_types = ("SUPPLIER_INVOICE", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_MASTER", "MATERIAL_MASTER")
+    message_types = ("SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
     credentials = "token"
+    # PAYMENT needs the vendor payment journal batch to post into: PIC_ERP_DYNAMICS_365_PAYMENT_JOURNAL (the batch number, optional setting).
     ENTITIES = {
         "SUPPLIER_INVOICE": ("VendorInvoiceHeaders", "InvoiceDescription", "HeaderReference"),
+        "SUPPLIER_CREDIT_MEMO": ("VendorInvoiceHeaders", "InvoiceDescription", "HeaderReference"),
+        "PAYMENT": ("VendorPaymentJournalLines", "PaymentReference", "JournalBatchNumber"),
         "PURCHASE_ORDER": ("PurchaseOrderHeadersV2", "VendorOrderReference", "PurchaseOrderNumber"),
         "GOODS_RECEIPT": ("ProductReceiptHeaders", "ProductReceiptNumber", "ProductReceiptNumber"),
         "SUPPLIER_MASTER": ("VendorsV2", "VendorAccountNumber", "VendorAccountNumber"),
@@ -312,6 +706,17 @@ class Dynamics365(Connector):
                     "PurchaseOrderName": f"PIC {p.get('po')} v{p.get('version')}", "CurrencyCode": "INR"}
         if t == "GOODS_RECEIPT":
             return {"dataAreaId": area, "PurchaseOrderNumber": p.get("po"), "ProductReceiptNumber": p.get("gr")}
+        if t == "SUPPLIER_CREDIT_MEMO":   # a vendor invoice with a negative amount is posted as a credit note
+            return {"dataAreaId": area, "InvoiceAccount": p.get("supplier"), "InvoiceNumber": p.get("creditNote"),
+                    "InvoiceDescription": reference(message.idempotency_key, 60), "Currency": "INR",
+                    "InvoiceAmount": -(p.get("grossMinor") or 0) / 100, "OriginalInvoiceNumber": p.get("invoice")}
+        if t == "PAYMENT":
+            journal = self.env("PAYMENT_JOURNAL")
+            if not journal:
+                raise ConnectorRejected("set PIC_ERP_DYNAMICS_365_PAYMENT_JOURNAL to the vendor payment journal batch payments are posted into")
+            return {"dataAreaId": area, "JournalBatchNumber": journal, "AccountDisplayValue": p.get("supplier"),
+                    "DebitAmount": (p.get("amountMinor") or 0) / 100, "CurrencyCode": "INR", "PaymentReference": reference(message.idempotency_key, 20),
+                    "Description": f"PIC {p.get('payment')}"}
         if t == "SUPPLIER_MASTER":
             return {"dataAreaId": area, "VendorAccountNumber": p.get("supplier"), "VendorOrganizationName": p.get("name") or p.get("supplier"),
                     "VendorGroupId": "DOM"}
@@ -364,7 +769,8 @@ class TallyPrime(Connector):
     protocol = "XML over HTTP (Tally gateway, port 9000)"
     message_types = MESSAGE_TYPES
     credentials = "none"
-    VOUCHERS = {"SUPPLIER_INVOICE": "Purchase", "PURCHASE_ORDER": "Purchase Order", "GOODS_RECEIPT": "Receipt Note", "PAYMENT": "Payment"}
+    VOUCHERS = {"SUPPLIER_INVOICE": "Purchase", "SUPPLIER_CREDIT_MEMO": "Debit Note", "PURCHASE_ORDER": "Purchase Order",
+                "GOODS_RECEIPT": "Receipt Note", "PAYMENT": "Payment"}
 
     def envelope(self, message: IntegrationMessage) -> str:
         p, t = message.payload, message.message_type
@@ -460,11 +866,12 @@ class Odoo(Connector):
     system = "ODOO"
     name = "Odoo"
     protocol = "JSON-RPC (/jsonrpc external API)"
-    message_types = ("SUPPLIER_INVOICE", "PURCHASE_ORDER", "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
+    message_types = ("SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
     credentials = "basic"
     extra_settings = ("DB",)
     needs_company_map = False
-    MODELS = {"SUPPLIER_INVOICE": ("account.move", "payment_reference"), "PURCHASE_ORDER": ("purchase.order", "origin"),
+    MODELS = {"SUPPLIER_INVOICE": ("account.move", "payment_reference"), "SUPPLIER_CREDIT_MEMO": ("account.move", "payment_reference"),
+              "GOODS_RECEIPT": ("stock.picking", "origin"), "PURCHASE_ORDER": ("purchase.order", "origin"),
               "SUPPLIER_MASTER": ("res.partner", "ref"), "MATERIAL_MASTER": ("product.product", "default_code"),
               "PAYMENT": ("account.payment", "memo")}
 
@@ -510,6 +917,16 @@ class Odoo(Connector):
         p, t = message.payload, message.message_type
         if t == "SUPPLIER_INVOICE":
             vals = {"move_type": "in_invoice", "ref": p.get("invoice"), field: self._value(message), "partner_id": self._partner(p.get("supplier"))}
+        elif t == "SUPPLIER_CREDIT_MEMO":   # vendor refund (credit note) against the original bill
+            vals = {"move_type": "in_refund", "ref": p.get("creditNote"), field: self._value(message), "partner_id": self._partner(p.get("supplier")),
+                    "invoice_origin": p.get("invoice")}
+        elif t == "GOODS_RECEIPT":          # incoming picking (receipt) of the PO; validating it books the stock in Odoo
+            types = self._execute("stock.picking.type", "search_read", [[["code", "=", "incoming"]]], {"fields": ["default_location_dest_id"], "limit": 1})
+            sources = self._execute("stock.location", "search", [[["usage", "=", "supplier"]]], {"limit": 1})
+            if not types or not sources:
+                raise ConnectorRejected("Odoo has no incoming picking type or supplier location to receive into")
+            vals = {"picking_type_id": types[0]["id"], "location_id": sources[0], "location_dest_id": (types[0].get("default_location_dest_id") or [None])[0],
+                    "origin": self._value(message), "note": f"PIC goods receipt {p.get('gr')} for {p.get('po')}"}
         elif t == "PURCHASE_ORDER":
             vals = {"partner_id": self._partner(p.get("supplier")), "partner_ref": p.get("po"), field: self._value(message)}
         elif t == "SUPPLIER_MASTER":
@@ -554,9 +971,7 @@ def maps(system: str, message_type: str) -> bool:
     connector = REGISTRY.get((system or "").upper())
     if connector is None:
         return False
-    if isinstance(connector, SapS4):
-        return message_type in integration.DOC_TYPES
-    return message_type in connector.message_types
+    return message_type in connector.message_types      # SAP_S4: the simulator's document types, or the live connector's mapping
 
 
 def require_mapped(system: str, message_type: str) -> None:

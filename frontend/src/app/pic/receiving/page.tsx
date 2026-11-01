@@ -11,6 +11,7 @@ import { hasRole, PoRow, useSessionUser } from '../invoices/_components';
 import { SETTLE_ROLES } from '../invoices/_ops';
 import { EwayCell, GoodsReceiptDialog, InspectionLot, UsageDecisionDialog } from './_components';
 import { ConsignmentTab, LotSearch, WITHDRAW_ROLES } from './_special';
+import { ToleranceTab } from './_tolerances';
 
 type Asn = { id: string; number: string; po: string; supplier_code: string; status: string; ship_date: string; expected_date: string;
   eway_bill_no: string | null; eway_bill_valid_until: string | null; vehicle_no: string | null; documents: string[] };
@@ -25,7 +26,7 @@ export default function Receiving() {
   const user = useSessionUser();
   return (
     <div>
-      <PageHeader eyebrow="RCV-01 · Receiving & quality" title="Receiving"
+      <PageHeader kpis="M09" eyebrow="RCV-01 · Receiving & quality" title="Receiving"
         subtitle="Post goods receipts against ASNs or confirmed orders, record quality usage decisions, and approve service entry sheets. Every receipt updates stock, GR/IR and the supplier scorecard." />
       <Card>
         <Tabs tabs={[
@@ -35,6 +36,7 @@ export default function Receiving() {
           { id: 'receipts', label: 'Goods receipts', content: <GoodsReceipts /> },
           { id: 'consignment', label: 'Consignment', content: <ConsignmentTab canWithdraw={hasRole(user, ...WITHDRAW_ROLES)} canSettle={hasRole(user, ...SETTLE_ROLES)} /> },
           { id: 'lots', label: 'Lot trace', content: <LotSearch /> },
+          { id: 'tolerances', label: 'Tolerances', content: <ToleranceTab canManage={hasRole(user, 'TENANT_ADMIN', 'BUYER')} /> },
         ]} />
       </Card>
     </div>

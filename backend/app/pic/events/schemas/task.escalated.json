@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:task.escalated",
+  "title": "task.escalated",
+  "description": "Payload (outbox_event.payload) of task.escalated on TASK. Produced by platform/workflow.py.",
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": "string"
+    },
+    "kind": {},
+    "name": {},
+    "role": {},
+    "level": {},
+    "objectType": {},
+    "objectId": {
+      "type": "string"
+    },
+    "objectRef": {},
+    "due": {
+      "type": "string"
+    },
+    "escalatedTo": {},
+    "candidates": {},
+    "mode": {},
+    "reassignedFrom": {}
+  },
+  "required": [
+    "taskId",
+    "kind",
+    "name",
+    "role",
+    "level",
+    "objectType",
+    "objectId",
+    "objectRef",
+    "due",
+    "escalatedTo",
+    "candidates",
+    "mode",
+    "reassignedFrom"
+  ],
+  "additionalProperties": true
+}

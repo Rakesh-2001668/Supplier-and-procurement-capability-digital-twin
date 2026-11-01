@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:invoice.paid_in_erp",
+  "title": "invoice.paid_in_erp",
+  "description": "Payload (outbox_event.payload) of invoice.paid_in_erp on INVOICE. Produced by services/erp_sync.py.",
+  "type": "object",
+  "properties": {
+    "erpDocument": {},
+    "clearingDocument": {},
+    "clearingDate": {}
+  },
+  "required": [
+    "erpDocument",
+    "clearingDocument",
+    "clearingDate"
+  ],
+  "additionalProperties": true
+}

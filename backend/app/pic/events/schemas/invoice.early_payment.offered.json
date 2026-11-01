@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:invoice.early_payment.offered",
+  "title": "invoice.early_payment.offered",
+  "description": "Payload (outbox_event.payload) of invoice.early_payment.offered on INVOICE. Produced by services/early_payment.py.",
+  "type": "object",
+  "properties": {
+    "offer": {
+      "type": "string"
+    },
+    "source": {},
+    "discountMinor": {},
+    "payOn": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "offer",
+    "source",
+    "discountMinor",
+    "payOn"
+  ],
+  "additionalProperties": true
+}

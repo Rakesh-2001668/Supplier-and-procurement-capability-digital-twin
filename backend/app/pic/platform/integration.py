@@ -14,10 +14,12 @@ import hashlib
 import json
 import logging
 import uuid
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import Callable, Optional
 
 from sqlalchemy import func, select, text
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant, current_user, tenant_tx
@@ -44,6 +46,10 @@ DOC_TYPES = {
     "PAYMENT": ("ZP", 1500002210),
     # Vendor credit memo for a credit note received after its invoice was posted (reduces the posted liability).
     "SUPPLIER_CREDIT_MEMO": ("KG", 5105000001),
+    # Vendor debit memo for a supplier debit note (upward price correction / additional charge) received after its invoice was posted.
+    "SUPPLIER_DEBIT_MEMO": ("KD", 5106000001),
+    # Supply-chain-finance election on a posted invoice (payment assigned to the financing programme; no external provider).
+    "SCF_FINANCING": ("ZF", 5200000001),
 }
 
 
@@ -137,9 +143,39 @@ def connector_for(system: str):
     return connectors.get(system)
 
 
+class MappingFailed(ConnectorError):
+    """The tenant's field mapping cannot be applied to this payload (a configuration error: the message retries, then parks
+    in the dead-letter list where ADM-05 shows the rule that failed)."""
+
+
+@contextmanager
+def _as_sent(session: Session, message: IntegrationMessage):
+    """Show the connector the payload the tenant's ACTIVE field mapping produces (platform/field_mapping.py); the canonical
+    ``payload`` the services wrote is restored afterwards and never flushed. What was sent is kept on the message. Without a
+    mapping the connector sees the canonical payload (today's behaviour)."""
+    from app.pic.platform import field_mapping  # local import: keeps integration importable without the mapping tables
+    try:
+        outbound, version = field_mapping.outbound_for(session, message.target_system, message.message_type, message.payload)
+    except field_mapping.MappingError as exc:
+        raise MappingFailed(f"field mapping failed: {exc}")
+    message.outbound_payload, message.mapping_version = outbound, version
+    if outbound is None:
+        yield
+        return
+    original = message.payload
+    set_committed_value(message, "payload", outbound)
+    try:
+        yield
+    finally:
+        set_committed_value(message, "payload", original)
+
+
 def _find_quietly(connector, session: Session, message: IntegrationMessage):
     try:
-        return connector.find(session, message) if connector is not None else None
+        if connector is None:
+            return None
+        with _as_sent(session, message):
+            return connector.find(session, message)
     except ConnectorError:
         return None
 
@@ -151,14 +187,15 @@ def process(session: Session, message: IntegrationMessage) -> IntegrationMessage
     connector = None
     try:
         connector = connector_for(message.target_system)
-        # Query-before-retry: if the ERP already has the document, acknowledge without reposting.
-        existing = connector.find(session, message)
-        if existing is not None:
-            doc_no = existing.doc_no
-        else:
-            with session.begin_nested():
-                doc_no = connector.post(session, message)
-            connector.after_post()
+        with _as_sent(session, message):
+            # Query-before-retry: if the ERP already has the document, acknowledge without reposting.
+            existing = connector.find(session, message)
+            if existing is not None:
+                doc_no = existing.doc_no
+            else:
+                with session.begin_nested():
+                    doc_no = connector.post(session, message)
+                connector.after_post()
     except ConnectorError as exc:
         existing = _find_quietly(connector, session, message)
         if existing is None:

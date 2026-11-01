@@ -7,9 +7,10 @@ import { dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { docHref, TYPE_LABEL } from '@/lib/pic/links';
 import { Button, Card, Empty, Loading, ProblemBox, StatusChip, Tabs, Textarea } from './ui';
+import { ProcessDiagram } from './bpmn-viewer';
 
 type Step = { step: string; name: string; lane: string; type: string; status: string; actor: string | null; outcome: string | null; at: string };
-type ProcessHistory = { id: string; process: string; flow: string; name: string; status: string; currentStep: string; path: Step[];
+type ProcessHistory = { id: string; process: string; version: number; flow: string; name: string; status: string; currentStep: string; path: Step[];
   tasks: { id: string; name: string; role: string; status: string; decision: string | null; comment: string | null; completedAt: string | null }[] };
 type Task = { id: string; name: string; kind: string; object_type: string; object_ref: string; candidate_role: string; due_at: string | null;
   escalation_level: number; evidence: Record<string, unknown> };
@@ -28,6 +29,11 @@ export function ProcessPath({ type, objectRef }: { type: string; objectRef: stri
             <span className="rounded bg-[#0B1020] px-2 py-0.5 font-mono text-xs text-white">{p.flow}</span>
             <span className="text-sm font-semibold">{p.name}</span>
             <StatusChip status={p.status} />
+          </div>
+          <div className="mb-4">
+            <ProcessDiagram processKey={p.process} version={p.version} height={340}
+              done={p.path.filter((s) => s.status !== 'ACTIVE').map((s) => s.step)}
+              active={p.status === 'RUNNING' ? (p.path.find((s) => s.status === 'ACTIVE')?.step ?? p.currentStep) : null} />
           </div>
           <ol className="relative ml-3 border-l-2 border-slate-200">
             {p.path.map((s, i) => (
@@ -153,6 +159,73 @@ export function TaskDecision({ task, compact = false }: { task: Task; compact?: 
   );
 }
 
+// ---------------------------------------------------------------- approvals tab (tasks and decisions of the document)
+type ApprovalTask = { id: string; name: string; kind: string; role: string; sequence: number; status: string; decision: string | null; comment: string | null;
+  decidedBy: string | null; decidedAt: string | null; dueAt: string | null; escalationLevel: number; createdAt: string };
+
+export function ApprovalsTab({ type, objectRef }: { type: string; objectRef: string }) {
+  const { data, isLoading, error } = useApi<{ chain: string[]; tasks: ApprovalTask[] }>(`/documents/${type}/${encodeURIComponent(objectRef)}/approvals`);
+  if (isLoading) return <Loading />;
+  if (error) return <ProblemBox error={error} />;
+  if (!data?.tasks.length) return <Empty title="No approvals on this document" hint="Approval tasks appear here when a rule routes the document to an approver." />;
+  return (
+    <div className="space-y-3">
+      {data.chain.length > 0 && <p className="text-sm text-slate-600">Approval chain: {data.chain.map(label).join(' → ')}</p>}
+      <ol className="space-y-2" aria-label="Approval tasks">
+        {data.tasks.map((t) => (
+          <li key={t.id} className="rounded-lg border border-slate-200 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold">{t.name}</p>
+              <StatusChip status={t.decision ?? t.status} />
+            </div>
+            <p className="text-xs text-slate-600">
+              Role {label(t.role)}{t.decidedBy ? ` · ${t.decidedBy}` : ''}{t.decidedAt ? ` · ${dateTime(t.decidedAt)}` : t.dueAt ? ` · due ${dateTime(t.dueAt)}` : ''}
+              {t.escalationLevel ? ` · escalated ×${t.escalationLevel}` : ''}
+            </p>
+            {t.comment && <p className="mt-1 text-sm text-slate-700">“{t.comment}”</p>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- documents tab (printouts, EDI / ERP documents, signatures, linked documents)
+type DocItem = { kind: string; title: string; status: string | null; at: string; hash?: string; href?: string; recipient?: string; source?: string; direction?: string;
+  linkedType?: string; linkedRef?: string; linkedId?: string };
+
+export function DocumentsTab({ type, objectRef }: { type: string; objectRef: string }) {
+  const { data, isLoading, error } = useApi<{ items: DocItem[]; counts: Record<string, number> }>(`/documents/${type}/${encodeURIComponent(objectRef)}/files`);
+  if (isLoading) return <Loading />;
+  if (error) return <ProblemBox error={error} />;
+  if (!data?.items.length) return <Empty title="No documents yet" hint="Printouts, EDI and ERP documents, signatures and linked documents are listed here." />;
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-slate-600">{Object.entries(data.counts).map(([k, n]) => `${n} ${label(k).toLowerCase()}`).join(' · ')}</p>
+      <ul className="divide-y divide-slate-100" aria-label="Documents">
+        {data.items.map((d, i) => {
+          const link = d.linkedType && d.linkedRef ? docHref(d.linkedType, d.linkedRef, d.linkedId) : null;
+          return (
+            <li key={`${d.kind}-${i}`} className="flex flex-wrap items-start justify-between gap-2 py-2 text-sm">
+              <div>
+                <p className="font-medium">
+                  <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] uppercase text-slate-600">{label(d.kind)}</span>
+                  {link ? <Link href={link} className="text-[#1A56DB] hover:underline">{d.title}</Link> : d.title}
+                </p>
+                <p className="text-xs text-slate-500">{dateTime(d.at)}{d.recipient ? ` · to ${d.recipient}` : ''}{d.source ? ` · ${d.source}` : ''}{d.hash ? ` · sha256 ${d.hash.slice(0, 12)}…` : ''}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {d.status && <StatusChip status={d.status} />}
+                {d.href && <a href={`/api/pic/v1${d.href}`} target="_blank" rel="noreferrer" className="text-[#1A56DB] hover:underline">Open<span className="sr-only"> {d.title} in a new tab</span></a>}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- object page pattern (§16)
 export function ObjectPage({ type, docRef, eyebrow, title, status, facts, actions, lines, extraTabs = [], loading, error }: {
   type: string; docRef: string; eyebrow: string; title: ReactNode; status?: string; facts?: ReactNode; actions?: ReactNode;
@@ -179,6 +252,10 @@ export function ObjectPage({ type, docRef, eyebrow, title, status, facts, action
       <Card>
         <Tabs tabs={[
           { id: 'lines', label: 'Lines', content: lines },
+          ...(internal ? [
+            { id: 'approvals', label: 'Approvals', content: <ApprovalsTab type={type} objectRef={docRef} /> },
+            { id: 'documents', label: 'Documents', content: <DocumentsTab type={type} objectRef={docRef} /> },
+          ] : []),
           ...extraTabs,
           ...(internal ? [
             { id: 'process', label: 'Process', content: <ProcessPath type={type} objectRef={docRef} /> },

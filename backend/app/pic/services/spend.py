@@ -13,16 +13,17 @@ from decimal import Decimal
 from difflib import SequenceMatcher
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, exists, func, select, text
 from sqlalchemy.orm import Session
 
 from app.pic.models import (
-    AppUser, CatalogueItem, CategoryPlan, ClassificationReview, MaverickHit, MaverickRule, PoLine, PurchaseOrder, SpendLine, Supplier,
-    SupplierCategoryStatus, TaxonomyNode, TwinSnapshot,
+    AppUser, CatalogueItem, CategoryPlan, ClassificationReview, MaverickHit, MaverickRule, PoLine, PurchaseOrder, SpendCommitmentSummary,
+    SpendCubeSummary, SpendLine, SpendViewState, Supplier, SupplierCategoryStatus, TaxonomyNode, TwinSnapshot,
 )
 from app.pic.platform import agents, audit, clock, rules
 from app.pic.platform.core import next_number
 from app.pic.platform.errors import Problem, not_found
+from app.pic.services import spend_cube
 from app.pic.services.common import principal
 
 # Default manufacturing taxonomy (segment → family → category); tenants extend it in ADM-02.
@@ -157,7 +158,7 @@ def classify_text(session: Session, description: str, supplier_id: Optional[uuid
         if score:
             scored.append((score, node.code, hits))
     if not scored:
-        return "UNCLASSIFIED", Decimal("0.300"), []
+        return "UNCLASSIFIED", Decimal("0.300"), _second_opinion(session, description, [], nodes)
     qualifier = _QUALIFIER.search(text)
     cut = qualifier.start() if qualifier else len(text)
     head = {k for _, _, hits in scored for k in hits if _keyword_pattern(k).search(text[:cut])}
@@ -168,7 +169,20 @@ def classify_text(session: Session, description: str, supplier_id: Optional[uuid
     confidence = min(Decimal("0.97"), Decimal("0.45") + Decimal(str(round(0.12 * best[0] + 0.05 * margin, 3))))
     if not best[2]:  # supplier prior only, no textual evidence
         confidence = min(confidence, Decimal("0.650"))
-    return best[1], confidence.quantize(Decimal("0.001")), [{"category": c, "score": s, "evidence": h} for s, c, h in scored[:3]]
+    alternatives = [{"category": c, "score": s, "evidence": h} for s, c, h in scored[:3]]
+    if confidence < Decimal("0.65"):
+        alternatives = _second_opinion(session, description, alternatives, nodes)
+    return best[1], confidence.quantize(Decimal("0.001")), alternatives
+
+
+def _second_opinion(session: Session, description: str, alternatives: list, nodes: Optional[list]) -> list:
+    """TD 13.3: when the keyword classifier is unsure and the LLM gateway is configured, the model's choice among the taxonomy
+    categories is appended to the steward's alternatives as ``source: LLM``. It never changes the proposed category or the auto-apply
+    decision; with no gateway this returns ``alternatives`` untouched."""
+    from app.pic.services import ai_assist
+
+    suggestion = ai_assist.classification_second_opinion(session, description, nodes if nodes is not None else _nodes(session))
+    return alternatives + [suggestion] if suggestion else alternatives
 
 
 def classify_line(session: Session, line: SpendLine, nodes: Optional[list] = None) -> Optional[str]:
@@ -320,7 +334,7 @@ def _months_back(today: date, n: int) -> list[str]:
 
 def _window(session: Session, months: int = 12) -> list[str]:
     """The last `months` complete months before today (or ending at the latest posted period if that is earlier)."""
-    latest = session.execute(select(func.max(SpendLine.period))).scalar()
+    latest = spend_cube.latest_period(session)
     first_of_month = clock.today().replace(day=1)
     previous = first_of_month - timedelta(days=1)
     anchor = f"{previous.year:04d}-{previous.month:02d}"
@@ -333,60 +347,105 @@ def _pct(num, den) -> str:
     return str((Decimal(num) * 100 / den).quantize(Decimal("0.1"))) if den else "0"
 
 
-def overview(session: Session) -> dict:
-    """SPD-01: trailing-12-month totals, shares, top movers and the opportunity list."""
-    periods = _window(session, 12)
-    lines = session.execute(select(SpendLine).where(SpendLine.period.in_(periods))).scalars().all()
-    total = sum(l.amount_minor for l in lines)
-    addressable = [l for l in lines if l.addressable]
-    addr_total = sum(l.amount_minor for l in addressable)
-    qualified = {(s, c) for s, c in session.execute(select(SupplierCategoryStatus.supplier_id, SupplierCategoryStatus.category).where(
-        SupplierCategoryStatus.status.in_(("QUALIFIED", "PREFERRED", "CONDITIONAL"))))}
+# The cube engine (summary tables, refresh, filters) lives in services/spend_cube.py; these are its public entry points.
+refresh_spend_views = spend_cube.refresh_spend_views
+cube = spend_cube.cube
+commitments = spend_cube.commitments
+CubeFilter = spend_cube.CubeFilter
+CUBE_DIMENSIONS = spend_cube.ALL_DIMENSIONS
+
+
+def _in_window(periods: list[str]):
+    return SpendCubeSummary.period.between(periods[0], periods[-1])
+
+
+def portfolio(session: Session, period_from: str, period_to: str) -> dict:
+    """Spend totals and shares between two periods (inclusive) from the cube summary: total, addressable, under management,
+    contracted, maverick, auto-classified lines, counts and price variance (group currency)."""
+    C = SpendCubeSummary
+    group = C.amount_group_minor
+    qualified = exists().where(SupplierCategoryStatus.supplier_id == C.supplier_id, SupplierCategoryStatus.category == C.category,
+                               SupplierCategoryStatus.status.in_(("QUALIFIED", "PREFERRED", "CONDITIONAL")))
     # Under management: contract or catalogue price, or bought without maverick flags from a qualified supplier
     # in a category that has an approved category plan.
-    managed_categories = set(session.execute(select(CategoryPlan.category).where(CategoryPlan.status == "APPROVED")).scalars())
-    managed = sum(l.amount_minor for l in addressable if l.contracted or (
-        not l.maverick_flags and l.category in managed_categories and (l.supplier_id, l.category) in qualified))
-    contracted = sum(l.amount_minor for l in addressable if l.contracted)
-    maverick = sum(l.amount_minor for l in addressable if l.maverick_flags)
-    reviews = session.execute(select(ClassificationReview.status, func.count()).group_by(ClassificationReview.status)).all()
-    decided = {k: v for k, v in reviews}
-    auto = sum(1 for l in lines if l.classification_confidence is not None and Decimal("0.80") <= l.classification_confidence < 1)
+    managed_categories = list(session.execute(select(CategoryPlan.category).where(CategoryPlan.status == "APPROVED")).scalars())
+    managed_clause = C.contracted.is_(True) | (C.maverick.is_(False) & C.category.in_(managed_categories or [""]) & qualified)
+    addr = C.addressable.is_(True)
+    t = session.execute(select(
+        func.coalesce(func.sum(group), 0), func.coalesce(func.sum(case((addr, group), else_=0)), 0),
+        func.coalesce(func.sum(case((addr & managed_clause, group), else_=0)), 0),
+        func.coalesce(func.sum(case((addr & C.contracted.is_(True), group), else_=0)), 0),
+        func.coalesce(func.sum(case((addr & C.maverick.is_(True), group), else_=0)), 0),
+        func.coalesce(func.sum(C.auto_classified_lines), 0), func.coalesce(func.sum(C.invoices), 0), func.coalesce(func.sum(C.pos), 0),
+        func.coalesce(func.sum(C.price_variance_group_minor), 0), func.coalesce(func.sum(C.price_variance_last_group_minor), 0),
+        func.coalesce(func.sum(C.fx_missing_lines), 0), func.coalesce(func.sum(C.lines), 0),
+    ).where(C.period.between(period_from, period_to))).one()
+    keys = ("totalMinor", "addressableMinor", "managedMinor", "contractedMinor", "maverickMinor", "autoClassifiedLines", "invoices", "pos",
+            "priceVarianceMinor", "priceVarianceLastMinor", "fxMissingLines", "lines")
+    return {k: int(v) for k, v in zip(keys, t)}
+
+
+def overview(session: Session) -> dict:
+    """SPD-01: trailing-12-month totals, shares, top movers and the opportunity list, from the cube summary (SQL aggregates)."""
+    freshness = spend_cube.ensure_fresh(session)
+    periods = _window(session, 12)
+    C = SpendCubeSummary
+    group = C.amount_group_minor
+    p = portfolio(session, periods[0], periods[-1])
+    total, addr_total, auto = p["totalMinor"], p["addressableMinor"], p["autoClassifiedLines"]
+    decided = {k: v for k, v in session.execute(select(ClassificationReview.status, func.count()).group_by(ClassificationReview.status)).all()}
     accuracy_den = auto + decided.get("ACCEPTED", 0) + decided.get("RECLASSIFIED", 0)
-    recent, prior = set(periods[-3:]), set(periods[-6:-3])
-    movers = defaultdict(lambda: [0, 0])
-    for l in lines:
-        if l.period in recent:
-            movers[l.category][0] += l.amount_minor
-        elif l.period in prior:
-            movers[l.category][1] += l.amount_minor
-    top_movers = sorted(({"category": c, "last3Minor": a, "prior3Minor": b, "changePct": _pct(a - b, b) if b else None}
-                         for c, (a, b) in movers.items() if a or b), key=lambda x: -abs(x["last3Minor"] - x["prior3Minor"]))[:6]
+    recent, prior = periods[-3:], periods[-6:-3]
+    moved = session.execute(select(
+        C.category, func.coalesce(func.sum(case((C.period.in_(recent), group), else_=0)), 0),
+        func.coalesce(func.sum(case((C.period.in_(prior), group), else_=0)), 0)).where(C.period.in_(recent + prior)).group_by(C.category)).all()
+    top_movers = sorted(({"category": c, "last3Minor": int(a), "prior3Minor": int(b), "changePct": _pct(a - b, b) if b else None}
+                         for c, a, b in moved if a or b), key=lambda x: -abs(x["last3Minor"] - x["prior3Minor"]))[:6]
+    spend_cube.ensure_commitments_fresh(session)
+    committed = session.execute(select(func.coalesce(func.sum(SpendCommitmentSummary.committed_group_minor), 0))).scalar() if session.execute(
+        select(SpendViewState.id).where(SpendViewState.view_name == "spend_commitment_summary")).first() else None
+    opps = opportunities(session, periods)
     return {"periods": [periods[0], periods[-1]], "totalMinor": total, "addressableMinor": addr_total, "addressablePct": _pct(addr_total, total),
-            "underManagementPct": _pct(managed, addr_total), "contractedPct": _pct(contracted, addr_total), "maverickPct": _pct(maverick, addr_total),
+            "underManagementPct": _pct(p["managedMinor"], addr_total), "contractedPct": _pct(p["contractedMinor"], addr_total),
+            "maverickPct": _pct(p["maverickMinor"], addr_total),
             "classificationAccuracyPct": _pct(auto + decided.get("ACCEPTED", 0), accuracy_den) if accuracy_den else None,
             "openReviews": decided.get("OPEN", 0),
             "openMaverickHits": session.execute(select(func.count()).select_from(MaverickHit).where(MaverickHit.status == "OPEN")).scalar(),
-            "topMovers": top_movers, "opportunities": opportunities(session, lines)}
+            "topMovers": top_movers, "opportunities": opps,
+            "priceVarianceMinor": p["priceVarianceMinor"], "priceVarianceLastMinor": p["priceVarianceLastMinor"], "invoices": p["invoices"],
+            "pos": p["pos"], "lines": p["lines"], "openCommitmentsMinor": int(committed) if committed is not None else None,
+            "aggregationOpportunityMinor": sum(o.get("indicativeSavingMinor", 0) for o in opps if o["kind"] == "CONSOLIDATION"),
+            "fxMissingLines": p["fxMissingLines"], "groupCurrency": spend_cube._group_currency(session), "freshness": freshness}
 
 
-def opportunities(session: Session, lines: list[SpendLine]) -> list[dict]:
-    by_cat = defaultdict(list)
-    for l in lines:
-        if l.addressable and l.category != "UNCLASSIFIED":
-            by_cat[l.category].append(l)
+def opportunities(session: Session, periods: list[str]) -> list[dict]:
+    """Contract-coverage, aggregation (many suppliers / plants for one category) and price-variance opportunities, from the cube."""
+    C = SpendCubeSummary
+    group = C.amount_group_minor
+    body = _rule(session).body
+    min_suppliers, saving_pct = int(body.get("aggregationMinSuppliers", 4)), Decimal(str(body.get("aggregationSavingPct", "3")))
+    rows = session.execute(select(
+        C.category, func.sum(group), func.coalesce(func.sum(case((C.contracted.is_(False), group), else_=0)), 0),
+        func.count(func.distinct(C.supplier_id)), func.count(func.distinct(C.plant)), func.coalesce(func.sum(C.price_variance_group_minor), 0))
+        .where(_in_window(periods), C.addressable.is_(True), C.category != "UNCLASSIFIED").group_by(C.category)).all()
+    by_supplier: dict[str, list[int]] = defaultdict(list)
+    for category, amount in session.execute(select(C.category, func.sum(group)).where(
+            _in_window(periods), C.addressable.is_(True), C.category != "UNCLASSIFIED").group_by(C.category, C.supplier_id)):
+        by_supplier[category].append(int(amount or 0))
     out = []
-    for category, items in by_cat.items():
-        spend = sum(l.amount_minor for l in items)
-        off = sum(l.amount_minor for l in items if not l.contracted)
-        suppliers = {l.supplier_id for l in items}
-        variance = sum(l.price_variance_minor or 0 for l in items)
-        if off > spend * 0.4 and spend > 50 * 100_000 * 100:
+    for category, spend_, off, suppliers, plants, variance in rows:
+        spend_, off, variance = int(spend_ or 0), int(off or 0), int(variance or 0)
+        if off > spend_ * 0.4 and spend_ > 50 * 100_000 * 100:
             out.append({"category": category, "kind": "CONTRACT_COVERAGE", "valueMinor": off,
-                        "text": f"{_pct(off, spend)}% of spend is not on contract; run a sourcing event", "deepLink": "/pic/sourcing/new"})
-        if len(suppliers) >= 4:
-            out.append({"category": category, "kind": "CONSOLIDATION", "valueMinor": spend,
-                        "text": f"{len(suppliers)} suppliers share this category; consolidate volume", "deepLink": "/pic/spend?tab=suppliers"})
+                        "text": f"{_pct(off, spend_)}% of spend is not on contract; run a sourcing event", "deepLink": "/pic/sourcing/new"})
+        if suppliers >= min_suppliers or (plants >= 2 and suppliers >= 2):
+            ranked = sorted(by_supplier[category], reverse=True)
+            tail = sum(ranked[3:]) if len(ranked) > 3 else sum(ranked[1:])
+            where = f"{suppliers} suppliers" + (f" across {plants} plants" if plants > 1 else "")
+            out.append({"category": category, "kind": "CONSOLIDATION", "valueMinor": spend_,
+                        "indicativeSavingMinor": int(Decimal(tail) * saving_pct / 100), "suppliers": suppliers, "plants": plants,
+                        "text": f"{where} share this category; consolidate volume (tail spend {_pct(tail, spend_)}%)",
+                        "deepLink": "/pic/spend?tab=suppliers"})
         if variance > 0:
             out.append({"category": category, "kind": "PRICE_VARIANCE", "valueMinor": variance,
                         "text": "Invoiced above contract or standard price; recover or renegotiate", "deepLink": "/pic/spend?tab=compliance"})
@@ -396,10 +455,11 @@ def opportunities(session: Session, lines: list[SpendLine]) -> list[dict]:
 def treemap(session: Session) -> dict:
     """SPD-02: segment → family → category with spend and drill to supplier."""
     periods = _window(session, 12)
+    C = SpendCubeSummary
     nodes = {n.code: n for n in session.execute(select(TaxonomyNode)).scalars()}
     suppliers = {s.id: (s.code, s.legal_name) for s in session.execute(select(Supplier)).scalars()}
-    rows = session.execute(select(SpendLine.category, SpendLine.supplier_id, func.sum(SpendLine.amount_minor), func.count())
-                           .where(SpendLine.period.in_(periods)).group_by(SpendLine.category, SpendLine.supplier_id)).all()
+    rows = session.execute(select(C.category, C.supplier_id, func.sum(C.amount_group_minor), func.sum(C.lines))
+                           .where(_in_window(periods)).group_by(C.category, C.supplier_id)).all()
     tree: dict = {}
     for category, supplier_id, amount, count in rows:
         node = nodes.get(category)
@@ -411,7 +471,7 @@ def treemap(session: Session) -> dict:
         fam = seg["children"].setdefault(fam_key, {"code": fam_key, "name": nodes[fam_key].name if fam_key in nodes else fam_key, "valueMinor": 0, "children": {}})
         cat = fam["children"].setdefault(category, {"code": category, "name": node.name if node else category, "valueMinor": 0, "suppliers": []})
         code, name = suppliers.get(supplier_id, ("?", "Unknown supplier"))
-        cat["suppliers"].append({"supplier": code, "name": name, "valueMinor": int(amount), "lines": count})
+        cat["suppliers"].append({"supplier": code, "name": name, "valueMinor": int(amount), "lines": int(count)})
         for level in (seg, fam, cat):
             level["valueMinor"] += int(amount)
 
@@ -429,21 +489,63 @@ def _norm_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", name).strip()
 
 
-def suppliers_view(session: Session) -> dict:
-    """SPD-03: supplier ranking, HHI per category and duplicate-supplier clusters."""
+def _duplicate_clusters(master: dict, spend_by_supplier: dict) -> list[dict]:
+    """Same PAN, or similar legal names: names are compared in sorted order inside a sliding window (similar names sort next to
+    each other), so the scan stays linear in the number of suppliers instead of comparing every pair."""
+    items = sorted(((s, _norm_name(s.legal_name)) for s in master.values()), key=lambda x: (x[1], x[0].code))
+    parent: dict = {s.id: s.id for s, _ in items}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    by_pan: dict = defaultdict(list)
+    for s, _ in items:
+        if s.pan_hash:
+            by_pan[s.pan_hash].append(s)
+    for group in by_pan.values():
+        for other in group[1:]:
+            parent[find(other.id)] = find(group[0].id)
+    window = 25
+    for i, (a, na) in enumerate(items):
+        for b, nb in items[i + 1:i + 1 + window]:
+            if na and nb and find(a.id) != find(b.id) and SequenceMatcher(None, na, nb).ratio() >= 0.86:
+                parent[find(b.id)] = find(a.id)
+    groups: dict = defaultdict(list)
+    for s, _ in items:
+        groups[find(s.id)].append(s)
+    clusters = []
+    for group in groups.values():
+        if len(group) > 1:
+            first = group[0]
+            clusters.append({"suppliers": [{"code": g.code, "name": g.legal_name, "spendMinor": spend_by_supplier.get(g.id, 0)} for g in group],
+                             "reason": "same PAN" if any(g.pan_hash and g.pan_hash == first.pan_hash for g in group[1:]) else "similar legal name"})
+    return sorted(clusters, key=lambda c: c["suppliers"][0]["code"])
+
+
+def suppliers_view(session: Session, limit: int = 200) -> dict:
+    """SPD-03: supplier ranking, HHI per category and duplicate-supplier clusters (parent roll-up and currency normalisation:
+    amounts are in the group currency; ``parent`` is the corporate parent when the supplier has one)."""
     periods = _window(session, 12)
+    C = SpendCubeSummary
     master = {s.id: s for s in session.execute(select(Supplier)).scalars()}
-    rows = session.execute(select(SpendLine.supplier_id, SpendLine.category, func.sum(SpendLine.amount_minor))
-                           .where(SpendLine.period.in_(periods), SpendLine.addressable.is_(True))
-                           .group_by(SpendLine.supplier_id, SpendLine.category)).all()
+    rows = session.execute(select(C.supplier_id, C.category, func.sum(C.amount_group_minor))
+                           .where(_in_window(periods), C.addressable.is_(True)).group_by(C.supplier_id, C.category)).all()
     total = sum(int(r[2]) for r in rows) or 1
     by_supplier, by_cat = defaultdict(int), defaultdict(dict)
     for supplier_id, category, amount in rows:
         by_supplier[supplier_id] += int(amount)
         by_cat[category][supplier_id] = by_cat[category].get(supplier_id, 0) + int(amount)
+    categories_of = defaultdict(list)
+    for category, m in by_cat.items():
+        for sid in m:
+            categories_of[sid].append(category)
+    ranked = sorted(by_supplier.items(), key=lambda x: -x[1])
     ranking = [{"supplier": master[s].code if s in master else "?", "name": master[s].legal_name if s in master else "Unknown",
                 "riskTier": master[s].risk_tier if s in master else None, "spendMinor": v, "sharePct": _pct(v, total),
-                "categories": sorted(c for c, m in by_cat.items() if s in m)} for s, v in sorted(by_supplier.items(), key=lambda x: -x[1])]
+                "parent": master[master[s].parent_supplier_id].code if s in master and master[s].parent_supplier_id in master else None,
+                "categories": sorted(categories_of[s])} for s, v in ranked[:limit]]
     concentration = []
     for category, shares in by_cat.items():
         cat_total = sum(shares.values())
@@ -452,55 +554,48 @@ def suppliers_view(session: Session) -> dict:
         concentration.append({"category": category, "spendMinor": cat_total, "suppliers": len(shares), "hhi": int(hhi),
                               "level": "HIGH" if hhi > 2500 else "MODERATE" if hhi > 1500 else "LOW",
                               "topSupplier": master[top[0]].code if top[0] in master else "?", "topSharePct": _pct(top[1], cat_total)})
-    clusters, seen = [], set()
-    items = [(s, _norm_name(s.legal_name)) for s in master.values()]
-    for i, (a, na) in enumerate(items):
-        if a.id in seen:
-            continue
-        group = [a]
-        for b, nb in items[i + 1:]:
-            same_tax = a.pan_hash and a.pan_hash == b.pan_hash
-            if b.id not in seen and (same_tax or (na and nb and SequenceMatcher(None, na, nb).ratio() >= 0.86)):
-                group.append(b)
-        if len(group) > 1:
-            seen.update(g.id for g in group)
-            clusters.append({"suppliers": [{"code": g.code, "name": g.legal_name, "spendMinor": by_supplier.get(g.id, 0)} for g in group],
-                             "reason": "same PAN" if any(g.pan_hash and g.pan_hash == a.pan_hash for g in group[1:]) else "similar legal name"})
-    return {"periods": [periods[0], periods[-1]], "totalMinor": total, "ranking": ranking,
-            "concentration": sorted(concentration, key=lambda c: -c["spendMinor"]), "duplicateClusters": clusters}
+    return {"periods": [periods[0], periods[-1]], "totalMinor": total, "ranking": ranking, "suppliersRanked": len(ranked),
+            "concentration": sorted(concentration, key=lambda c: -c["spendMinor"]),
+            "duplicateClusters": _duplicate_clusters(master, by_supplier)}
 
 
 def compliance(session: Session) -> dict:
     """SPD-05: contracted vs non-contracted by category, off-contract lines and price delta vs contract."""
     periods = _window(session, 12)
-    lines = session.execute(select(SpendLine).where(SpendLine.period.in_(periods), SpendLine.addressable.is_(True))).scalars().all()
+    C = SpendCubeSummary
+    group = C.amount_group_minor
+    rows = session.execute(select(
+        C.category, func.coalesce(func.sum(case((C.contracted.is_(True), group), else_=0)), 0),
+        func.coalesce(func.sum(case((C.contracted.is_(False), group), else_=0)), 0), func.coalesce(func.sum(C.price_variance_group_minor), 0),
+        func.coalesce(func.sum(C.price_variance_last_group_minor), 0))
+        .where(_in_window(periods), C.addressable.is_(True)).group_by(C.category)).all()
     master = {s.id: s.code for s in session.execute(select(Supplier)).scalars()}
-    by_cat = defaultdict(lambda: {"contractedMinor": 0, "nonContractedMinor": 0, "priceVarianceMinor": 0, "offContractLines": 0})
-    off = []
-    for l in lines:
-        c = by_cat[l.category]
-        c["contractedMinor" if l.contracted else "nonContractedMinor"] += l.amount_minor
-        c["priceVarianceMinor"] += l.price_variance_minor or 0
-        if {"OFF_CONTRACT", "OFF_CONTRACT_PRICE"} & set(l.maverick_flags or []):
-            c["offContractLines"] += 1
-            off.append({"invoice": l.invoice_ref, "po": l.po_ref, "supplier": master.get(l.supplier_id), "category": l.category, "period": l.period,
-                        "amountMinor": l.amount_minor, "priceVarianceMinor": l.price_variance_minor or 0, "flags": l.maverick_flags})
-    rows = [{"category": k, **v, "coveragePct": _pct(v["contractedMinor"], v["contractedMinor"] + v["nonContractedMinor"])} for k, v in by_cat.items()]
-    return {"periods": [periods[0], periods[-1]], "categories": sorted(rows, key=lambda r: -(r["contractedMinor"] + r["nonContractedMinor"])),
-            "offContract": sorted(off, key=lambda o: -o["amountMinor"])[:100],
-            "leakageMinor": sum(o["priceVarianceMinor"] for o in off)}
+    off_lines = session.execute(select(SpendLine).where(
+        SpendLine.period.between(periods[0], periods[-1]), SpendLine.addressable.is_(True),
+        text("spend_line.maverick_flags ?| array['OFF_CONTRACT','OFF_CONTRACT_PRICE']")).order_by(SpendLine.amount_minor.desc()).limit(100)).scalars().all()
+    off_agg = {c: (n, int(v or 0)) for c, n, v in session.execute(select(
+        SpendLine.category, func.count(), func.sum(SpendLine.price_variance_minor)).where(
+        SpendLine.period.between(periods[0], periods[-1]), SpendLine.addressable.is_(True),
+        text("spend_line.maverick_flags ?| array['OFF_CONTRACT','OFF_CONTRACT_PRICE']")).group_by(SpendLine.category)).all()}
+    categories = [{"category": c, "contractedMinor": int(a), "nonContractedMinor": int(b), "priceVarianceMinor": int(v), "priceVarianceLastMinor": int(vl),
+                   "offContractLines": off_agg.get(c, (0, 0))[0], "coveragePct": _pct(int(a), int(a) + int(b))} for c, a, b, v, vl in rows]
+    off = [{"invoice": l.invoice_ref, "po": l.po_ref, "supplier": master.get(l.supplier_id), "category": l.category, "period": l.period,
+            "amountMinor": l.amount_minor, "priceVarianceMinor": l.price_variance_minor or 0, "flags": l.maverick_flags} for l in off_lines]
+    return {"periods": [periods[0], periods[-1]], "categories": sorted(categories, key=lambda r: -(r["contractedMinor"] + r["nonContractedMinor"])),
+            "offContract": off, "leakageMinor": sum(v for _, v in off_agg.values())}
 
 
 def forecast(session: Session, category: Optional[str] = None, plant: Optional[str] = None, horizon: int = 6) -> dict:
     """SPD-09: Holt linear smoothing on monthly spend with an 80% band that widens with the horizon."""
     periods = _window(session, 24)
-    query = select(SpendLine.category, SpendLine.period, func.sum(SpendLine.amount_minor)).where(SpendLine.period.in_(periods))
+    C = SpendCubeSummary
+    query = select(C.category, C.period, func.sum(C.amount_group_minor)).where(C.period.in_(periods))
     if category:
-        query = query.where(SpendLine.category == category)
+        query = query.where(C.category == category)
     if plant:
-        query = query.where(SpendLine.plant == plant)
+        query = query.where(C.plant == plant)
     series = defaultdict(lambda: {p: 0 for p in periods})
-    for cat, period, amount in session.execute(query.group_by(SpendLine.category, SpendLine.period)).all():
+    for cat, period, amount in session.execute(query.group_by(C.category, C.period)).all():
         series[cat][period] = int(amount)
     last = date(int(periods[-1][:4]), int(periods[-1][5:]), 1)
     future = _months_back(date(last.year + (last.month + horizon - 1) // 12, (last.month + horizon - 1) % 12 + 1, 1), horizon)
@@ -557,9 +652,9 @@ def _supply_risk(session: Session, category: str, shares: dict) -> tuple[Decimal
 
 def generate_plans(session: Session, fiscal_year: str, owner_id: uuid.UUID) -> list[CategoryPlan]:
     periods = _window(session, 12)
-    rows = session.execute(select(SpendLine.category, SpendLine.supplier_id, func.sum(SpendLine.amount_minor)).where(
-        SpendLine.period.in_(periods), SpendLine.addressable.is_(True), SpendLine.category != "UNCLASSIFIED")
-        .group_by(SpendLine.category, SpendLine.supplier_id)).all()
+    rows = session.execute(select(SpendCubeSummary.category, SpendCubeSummary.supplier_id, func.sum(SpendCubeSummary.amount_group_minor)).where(
+        SpendCubeSummary.period.in_(periods), SpendCubeSummary.addressable.is_(True), SpendCubeSummary.category != "UNCLASSIFIED")
+        .group_by(SpendCubeSummary.category, SpendCubeSummary.supplier_id)).all()
     by_cat = defaultdict(dict)
     for category, supplier_id, amount in rows:
         by_cat[category][supplier_id] = int(amount)

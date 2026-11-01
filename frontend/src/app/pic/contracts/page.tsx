@@ -16,7 +16,7 @@ export default function Contracts() {
   const list = useList<Contract>(`/contracts${status ? `?status=${status}` : ''}`);
   return (
     <div>
-      <PageHeader eyebrow="CLM-03 · Contract lifecycle" title="Contracts"
+      <PageHeader kpis="M07" eyebrow="CLM-03 · Contract lifecycle" title="Contracts"
         subtitle="Contracts are drafted from awards with playbook clauses, AI-reviewed, approved, e-signed by both parties and then publish their price validity periods to source determination."
         actions={<>
           <LinkButton href="/pic/contracts/obligations">Obligations & renewals</LinkButton>

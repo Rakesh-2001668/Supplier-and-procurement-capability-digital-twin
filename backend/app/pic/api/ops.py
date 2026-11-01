@@ -50,10 +50,11 @@ class SimScope(BaseModel):
     plant: Optional[str] = None
     category: Optional[str] = None
     purchaseType: Optional[str] = None  # noqa: N815
+    supplierGroup: Optional[str] = None  # noqa: N815
 
 
 class SimulateIn(BaseModel):
-    key: Literal["DMN-01", "PO-APPROVAL", "AWARD-APPROVAL", "CONTRACT-APPROVAL", "CONTRACT-AMENDMENT", "DMN-02", "DMN-03"]
+    key: Literal["DMN-01", "PO-APPROVAL", "AWARD-APPROVAL", "CONTRACT-APPROVAL", "CONTRACT-AMENDMENT", "DMN-02", "DMN-03", "ABAC", "MANDATORY-FIELDS"]
     inputs: dict = Field(default_factory=dict)
     on: Optional[date] = Field(default=None, description="Business date the rule version is resolved for (default today)")
     scope: Optional[SimScope] = None

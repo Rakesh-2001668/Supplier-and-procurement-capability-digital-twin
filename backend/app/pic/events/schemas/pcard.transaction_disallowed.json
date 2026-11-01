@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:pcard.transaction_disallowed",
+  "title": "pcard.transaction_disallowed",
+  "description": "Payload (outbox_event.payload) of pcard.transaction_disallowed on PCARD_TRANSACTION. Produced by services/ind_general.py.",
+  "type": "object",
+  "properties": {
+    "card": {},
+    "amountMinor": {},
+    "reasons": {}
+  },
+  "required": [
+    "card",
+    "amountMinor",
+    "reasons"
+  ],
+  "additionalProperties": true
+}

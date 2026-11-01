@@ -14,6 +14,11 @@ residential project in Whitefield. Timeline Oct 2026 – Mar 2027, every documen
             retention withheld; RMC by goods receipt and 3-way match
   M07       variation order VO-01 (+15 MT podium transfer-girder reinforcement) as a contract amendment, then PO version 2
   F7        payment runs pay net of retention; at completion the retention is released and paid
+  wave 1    performance bank guarantee (5% of the order, SBIN/PBG/2027/0318) and advance bank guarantee recorded and verified by a
+            second person; mobilisation advance of 10% requested, approved by finance against the guarantee, posted as a
+            down-payment request and paid; every running bill withholds the advance's share (the final bills recover the rest);
+            retention release and the final payment need the valid performance guarantee; the advance guarantee is released once
+            the advance is fully recovered
 """
 import uuid
 from datetime import date
@@ -22,9 +27,10 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.pic.db import tenant_tx
-from app.pic.models import Contract, ContractAmendment, Invoice, Material, PurchaseOrder
+from app.pic.models import BankGuarantee, Contract, ContractAmendment, Invoice, Material, PurchaseOrder
 from app.pic.seed.axion import at
 from app.pic.seed.datasets import _tenant_kit as kit
+from app.pic.services import ind_construction
 
 KEY = "industry-construction"
 VERSION = "1"
@@ -236,6 +242,9 @@ def apply(tenant_code: str, password: str) -> dict:
                  f"{kit.fmt(budget['availableMinor'])} available), route {' → '.join(submitted['chain'])} → F5 {po_no} subcontract order, "
                  "retention 5%, approved and confirmed")
 
+    # ------------------------------------------------------------ bank guarantees and mobilisation advance (pending workflows 38/39)
+    guarantees = _advance_and_guarantees(sc, po_id, po_no, notes)
+
     # ------------------------------------------------------------ RMC: F5 PO → F6 goods receipt → F7 3-way match
     with sc.act("site.engineer", at(date(2026, 11, 2), 10)) as s:
         rmc_pr = requisition.create(s, origin="MANUAL", purpose_code="PROJECT_EXECUTION", purpose_text="Tower B podium slab pour",
@@ -313,6 +322,9 @@ def apply(tenant_code: str, password: str) -> dict:
             reason="Tower B structure complete; retention released against the performance bank guarantee for the defect-liability period",
             release_date=date(2027, 3, 20))
         release_no, release_minor = release.number, release.gross_minor
+    with sc.act("finance.controller", at(date(2027, 3, 21), 10)) as s:
+        abg = ind_construction.release_guarantee(s, s.get(BankGuarantee, guarantees["abg"]), "Mobilisation advance fully recovered from RA-01..03")
+        notes.append(f"Advance guarantee {abg.number} released: the advance is fully recovered")
     notes.append(f"Completion: {release_no} releases {kit.fmt(release_minor)} retention withheld on RA-01..03 ({before['withheldMinor']} paise)")
     _pay(sc, payables, at(date(2027, 3, 31), 10), notes)
 
@@ -320,8 +332,45 @@ def apply(tenant_code: str, password: str) -> dict:
         refreshed = spend.refresh(s, sc.tenant_id)
     kit.relay(sc, at(date(2027, 3, 31), 16))
     counts.update({"suppliers": len(SUPPLIERS), "masters": len(masters), "contracts": 1, "purchaseOrders": 2, "serviceEntries": len(PROGRESS),
-                   "invoices": len(bills) + 1, "retentionReleases": 1, "spendRefresh": refreshed})
+                   "invoices": len(bills) + 1, "retentionReleases": 1, "spendRefresh": refreshed, "advances": 1, "bankGuarantees": 2})
     return {"notes": notes, "counts": counts, "subcontract": sc118, "po": po_no, "bills": bills, "retentionRelease": release_no}
+
+
+def _advance_and_guarantees(sc, po_id, po_no, notes) -> dict:
+    """Guarantees received with the mobilisation: performance (5% of the order, valid to the end of the defect-liability period)
+    and advance (covers the 10% advance with GST); the advance is requested, approved against the advance guarantee, posted to the
+    ERP as a down-payment request and paid straight away (the AP document is due on approval, not in 30 days)."""
+    from app.pic.services import ind_construction, payables
+
+    with sc.act("contract.manager", at(date(2026, 10, 30), 10)) as s:
+        po = s.get(PurchaseOrder, po_id)
+        pbg = ind_construction.record_guarantee(s, po, kind="PERFORMANCE", bank_name="State Bank of India, Commercial Branch Bengaluru",
+                                                bank_ref="SBIN/PBG/2027/0318", amount_minor=7 * L, issue_date=date(2026, 10, 29),
+                                                expiry_date=date(2028, 3, 14))
+        abg = ind_construction.record_guarantee(s, po, kind="ADVANCE", bank_name="State Bank of India, Commercial Branch Bengaluru",
+                                                bank_ref="SBIN/ABG/2026/1102", amount_minor=15 * L, issue_date=date(2026, 10, 29),
+                                                expiry_date=date(2027, 6, 30))
+        pbg_id, pbg_no, abg_id, abg_no = pbg.id, pbg.number, abg.id, abg.number
+    with sc.act("finance.controller", at(date(2026, 10, 30), 12)) as s:
+        for guarantee_id in (pbg_id, abg_id):
+            ind_construction.verify_guarantee(s, s.get(BankGuarantee, guarantee_id), "Genuineness confirmed with the issuing branch by SFMS/e-mail")
+    with sc.act("contract.manager", at(date(2026, 10, 30), 14)) as s:
+        advance = ind_construction.request_advance(s, s.get(PurchaseOrder, po_id), net_minor=125_100_000, reference="SRF/ADV/2026-27/01",
+                                                    reason="Mobilisation advance, 10% of the subcontract value, against advance guarantee " + abg_no)
+        adv_id, adv_no = advance.id, advance.number
+    sc.approve_all(adv_id, at(date(2026, 10, 30), 16), "Within the 15% limit; advance bank guarantee on file")
+    with tenant_tx(sc.tenant_id) as s:
+        from app.pic.models import AdvancePayment
+        document_id = s.get(AdvancePayment, adv_id).invoice_id
+        document_no = s.get(Invoice, document_id).number
+    _approve_post(sc, payables, document_id, at(date(2026, 10, 31), 10))
+    with sc.act("finance.controller", at(date(2026, 10, 31), 12)) as s:
+        run = payables.payment_run(s, date(2026, 10, 31), include_not_due=True, invoice_numbers=[document_no])
+    kit.relay(sc, at(date(2026, 10, 31), 13))
+    notes.append(f"Guarantees {pbg_no} (performance, ₹7 L to 14-03-2028) and {abg_no} (advance, ₹15 L to 30-06-2027) recorded and verified by finance; "
+                 f"advance {adv_no} ({kit.fmt(125_100_000 * 118 // 100)} incl. GST, 10% of the order) approved, posted as down-payment request "
+                 f"{document_no} and paid ({run['run']})")
+    return {"pbg": pbg_id, "abg": abg_id, "advance": adv_id}
 
 
 def _approve_post(sc, payables, invoice_id, when) -> None:

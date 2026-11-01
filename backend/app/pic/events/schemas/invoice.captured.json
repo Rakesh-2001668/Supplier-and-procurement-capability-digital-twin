@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:invoice.captured",
+  "title": "invoice.captured",
+  "description": "Payload (outbox_event.payload) of invoice.captured on INVOICE. Produced by services/ind_manufacturing.py, services/payables.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "grossMinor": {},
+    "channel": {}
+  },
+  "required": [
+    "supplier",
+    "grossMinor",
+    "channel"
+  ],
+  "additionalProperties": true
+}

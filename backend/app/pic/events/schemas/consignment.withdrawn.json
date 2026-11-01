@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:consignment.withdrawn",
+  "title": "consignment.withdrawn",
+  "description": "Payload (outbox_event.payload) of consignment.withdrawn on MATERIAL. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "plant": {},
+    "qty": {
+      "type": "string"
+    },
+    "purpose": {},
+    "usageRef": {},
+    "costObject": {},
+    "liabilityMinor": {},
+    "lots": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "material",
+    "plant",
+    "qty",
+    "purpose",
+    "usageRef",
+    "costObject",
+    "liabilityMinor",
+    "lots"
+  ],
+  "additionalProperties": true
+}

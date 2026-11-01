@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:ml.model.suspended",
+  "title": "ml.model.suspended",
+  "description": "Payload (outbox_event.payload) of ml.model.suspended on ML_MODEL. Produced by services/ml_registry.py.",
+  "type": "object",
+  "properties": {
+    "code": {},
+    "version": {},
+    "reason": {},
+    "fallbackTo": {}
+  },
+  "required": [
+    "code",
+    "version",
+    "reason",
+    "fallbackTo"
+  ],
+  "additionalProperties": true
+}

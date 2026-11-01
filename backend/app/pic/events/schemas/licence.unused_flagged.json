@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:licence.unused_flagged",
+  "title": "licence.unused_flagged",
+  "description": "Payload (outbox_event.payload) of licence.unused_flagged on LICENCE. Produced by services/ind_it.py.",
+  "type": "object",
+  "properties": {
+    "utilisationPct": {
+      "type": "string"
+    },
+    "unusedQty": {
+      "type": "string"
+    },
+    "potentialSavingMinor": {},
+    "termEnd": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "utilisationPct",
+    "unusedQty",
+    "potentialSavingMinor",
+    "termEnd"
+  ],
+  "additionalProperties": true
+}

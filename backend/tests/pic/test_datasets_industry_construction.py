@@ -7,8 +7,8 @@ from sqlalchemy import select
 
 from app.pic.db import system_tx, tenant_tx
 from app.pic.models import (
-    AuditEvent, Budget, CompanyCode, Contract, ContractAmendment, ContractLine, IntegrationMessage, Invoice, Material, Payment, PoLine,
-    PurchaseOrder, RuleSet, ServiceEntry, Supplier, SupplierCategoryStatus, Tenant,
+    AdvancePayment, AdvanceRecovery, AuditEvent, BankGuarantee, Budget, CompanyCode, Contract, ContractAmendment, ContractLine, IntegrationMessage,
+    Invoice, Material, Payment, PoLine, PurchaseOrder, RuleSet, ServiceEntry, Supplier, SupplierCategoryStatus, Tenant,
 )
 from app.pic.platform import clock, rules
 from app.pic.seed import datasets
@@ -16,7 +16,7 @@ from app.pic.seed.axion import Scenario, at
 from app.pic.seed.datasets import _tenant_kit as kit
 from app.pic.seed.datasets import industry_construction as pack
 from app.pic.seed.datasets._tenant_kit import gstin_valid
-from app.pic.services import order, payables, receiving, requisition
+from app.pic.services import ind_construction, order, payables, receiving, requisition
 from tests.pic.conftest import PASSWORD
 
 @pytest.fixture(scope="module")
@@ -88,7 +88,9 @@ def test_running_bills_withhold_retention_and_pay_net(con):
             assert bill.retention_minor == round(bill.net_minor * Decimal("0.05")) and bill.retention_minor > 0
             assert bill.status == "PAID" and bill.first_pass_matched is True
             payment = s.execute(select(Payment).where(Payment.invoice_id == bill.id)).scalar_one()
-            assert payment.amount_minor == bill.gross_minor - bill.retention_minor
+            recovered = sum(r.amount_minor for r in s.execute(select(AdvanceRecovery).where(AdvanceRecovery.invoice_id == bill.id)).scalars())
+            assert recovered > 0  # the mobilisation advance is recovered from every running bill
+            assert payment.amount_minor == bill.gross_minor - bill.retention_minor - recovered
         assert bills[0].retention_minor == 2_18_925_00
         message = s.execute(select(IntegrationMessage).where(IntegrationMessage.message_type == "SUPPLIER_INVOICE",
                                                              IntegrationMessage.object_id == bills[0].id)).scalar_one()
@@ -168,6 +170,17 @@ def test_project_controls_default_and_partial_release_api(con, client, login):
         inv_id = inv.id
     clock.set_pinned(at(date(2027, 3, 31), 18))
     ap = login(f"ap.clerk@{pack.DOMAIN}", "CON")
+    # Wave 1 (item 39): the template's PERFORMANCE-GUARANTEE rule holds the release until a verified, valid guarantee is on file.
+    blocked = client.post(f"/v1/purchase-orders/{po_no}/retention-release", headers=ap, json={"reference": "CC-02", "reason": "early"})
+    assert blocked.status_code == 409 and blocked.json()["code"] == "GUARANTEE_REQUIRED"
+    with sc.act("contract.manager", at(date(2027, 3, 31), 17, 55)) as s:
+        guarantee = ind_construction.record_guarantee(s, s.get(PurchaseOrder, po_id), kind="PERFORMANCE", bank_name="State Bank of India",
+                                                      bank_ref="SBIN/PBG/2027/0402", amount_minor=4_000_00, issue_date=date(2027, 3, 30),
+                                                      expiry_date=date(2028, 3, 31))
+        guarantee_id = guarantee.id
+    with sc.act("finance.controller", at(date(2027, 3, 31), 17, 58)) as s:
+        ind_construction.verify_guarantee(s, s.get(BankGuarantee, guarantee_id))
+    clock.set_pinned(at(date(2027, 3, 31), 18))
     # Not posted yet: retention is pending and cannot be released.
     pending = client.post(f"/v1/purchase-orders/{po_no}/retention-release", headers=ap, json={"reference": "CC-02", "reason": "early"})
     assert pending.status_code == 422 and "still being matched" in pending.json()["detail"]
@@ -198,6 +211,29 @@ def test_project_controls_default_and_partial_release_api(con, client, login):
     none = client.post(f"/v1/purchase-orders/{rmc_no}/retention-release", headers=ap, json={"reference": "x-1", "reason": "none"})
     assert none.status_code == 422 and "carries no retention" in none.json()["detail"]
     clock.set_pinned(None)
+
+
+def test_mobilisation_advance_is_recovered_and_guarantees_are_tracked(con, client, login):
+    with tenant_tx(con["tenant_id"]) as s:
+        po = _po(s, "SC-118")
+        advance = s.execute(select(AdvancePayment).where(AdvancePayment.po_id == po.id)).scalar_one()
+        # 10% of the original order value (rebar + formwork = 12,51,00,000.00 paise), 18% GST on the advance
+        assert advance.net_minor == 125_100_000 and advance.gross_minor == 147_618_000 and advance.recovery_pct == Decimal("10.000000")
+        assert advance.status == "RECOVERED" and advance.recovered_minor == advance.gross_minor
+        document = s.get(Invoice, advance.invoice_id)
+        assert (document.match_type, document.status, document.gross_minor) == ("ADVANCE", "PAID", advance.gross_minor)
+        message = s.execute(select(IntegrationMessage).where(IntegrationMessage.object_id == document.id, IntegrationMessage.message_type == "SUPPLIER_INVOICE")).scalar_one()
+        assert message.payload["downPayment"] is True and message.payload["specialGl"] == "A"
+        recoveries = s.execute(select(AdvanceRecovery).where(AdvanceRecovery.advance_id == advance.id)).scalars().all()
+        assert len(recoveries) == 3 and all(r.status == "APPLIED" for r in recoveries) and sum(r.amount_minor for r in recoveries) == advance.gross_minor
+        bills = s.execute(select(Invoice).where(Invoice.po_id == po.id, Invoice.match_type == "SES").order_by(Invoice.invoice_date)).scalars().all()
+        assert [r.invoice_id for r in sorted(recoveries, key=lambda r: r.created_at)] == [b.id for b in bills]
+        guarantees = {g.kind: g for g in s.execute(select(BankGuarantee).where(BankGuarantee.po_id == po.id)).scalars()}
+        assert guarantees["PERFORMANCE"].status == "ACTIVE" and guarantees["PERFORMANCE"].verified_by != guarantees["PERFORMANCE"].recorded_by
+        assert guarantees["ADVANCE"].status == "RELEASED" and guarantees["PERFORMANCE"].bank_ref == "SBIN/PBG/2027/0318"
+        assert guarantees["PERFORMANCE"].amount_minor == 7 * pack.L
+    summary = con["summary"]["counts"]
+    assert summary["advances"] == 1 and summary["bankGuarantees"] == 2
 
 
 def test_pack_is_idempotent(con):

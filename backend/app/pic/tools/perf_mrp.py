@@ -154,7 +154,7 @@ def migrate() -> None:
 
     config = Config(str(BACKEND_DIR / "alembic_pic.ini"))
     config.set_main_option("script_location", str(BACKEND_DIR / "pic_migrations"))
-    command.upgrade(config, "head")
+    command.upgrade(config, "heads")  # wave 1: parallel migration branches until re-chained
 
 
 def drop_schema(url) -> None:
@@ -477,6 +477,7 @@ def timed_run(principal, plant: str, run_date: date, profile: bool) -> dict:
         "commit_and_serialise_seconds": round(total - phases.get("service_seconds", 0) - phases.get("view_seconds", 0), 3),
         "materials_planned": run.materials_planned, "planned_orders": run.planned_orders_created,
         "exceptions": run.exceptions_raised, "response_planned_orders": len(response.get("plannedOrders", [])),
+        "response_detail": response.get("detail"), "response_bytes": len(json.dumps(response, default=str)),
     }
     if profiler:
         import io

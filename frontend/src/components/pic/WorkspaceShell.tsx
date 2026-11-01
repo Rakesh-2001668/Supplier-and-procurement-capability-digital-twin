@@ -5,6 +5,8 @@ import { usePathname } from 'next/navigation';
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { readSessionUser, SessionUser, signOut } from '@/lib/pic/api';
+import { useApi } from '@/lib/pic/hooks';
+import { LifecycleStrip } from './ui';
 import { legacyDemoEnabled } from '@/lib/pic/deployment';
 import { dateTime } from '@/lib/pic/format';
 import { NotificationBell } from '@/app/pic/notifications/_notifications';
@@ -22,6 +24,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/copilot', label: 'Copilot' },
     { href: '/pic/spend', label: 'Spend', roles: ['CATEGORY_MANAGER', 'FINANCE_CONTROLLER', 'PROCUREMENT_HEAD', 'CPO'] },
     { href: '/pic/savings', label: 'Savings' },
+    { href: '/pic/kpis', label: 'KPI explorer' },
   ] },
   { group: 'My work', items: [{ href: '/pic/tasks', label: 'Task inbox' }, { href: '/pic/notifications', label: 'Notifications' }, { href: '/pic/account', label: 'My account & security' }] },
   { group: 'Plan & request', items: [
@@ -47,6 +50,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/invoices', label: 'Invoices & payments' },
     { href: '/pic/invoices/reconciliation', label: 'Posting & reconciliation', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
     { href: '/pic/invoices/insights', label: 'Payables insights', roles: ['AP_CLERK', 'FINANCE_CONTROLLER', 'CPO', 'PROCUREMENT_HEAD'] },
+    { href: '/pic/industry', label: 'Industry controls' },
   ] },
   { group: 'Govern', items: [
     { href: '/pic/processes', label: 'Process monitor' },
@@ -123,6 +127,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
   // Sign-in and the public supplier registration page render without the workspace chrome.
   const isLogin = pathname === '/pic/login' || pathname === '/pic/register' || pathname.startsWith('/pic/register/');
   const live = useLiveStream(!isLogin && !!user);
+  const tenant = useApi<{ name: string; templateLabel: string }>(!isLogin && user ? '/tenant' : null);
 
   if (isLogin) return <ToastProvider>{children}</ToastProvider>;
 
@@ -136,7 +141,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
       <ToastProvider>
         <div className="min-h-screen bg-[#F4F6FB] text-slate-900 md:flex">
           <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2">Skip to content</a>
-          <aside className={`${menuOpen ? 'block' : 'hidden'} w-full shrink-0 bg-[#0B1020] text-slate-300 md:sticky md:top-0 md:block md:h-screen md:w-60 md:overflow-y-auto`}>
+          <aside id="workspace-nav" aria-label="Navigation" className={`${menuOpen ? 'block' : 'hidden'} w-full shrink-0 bg-[#0B1020] text-slate-300 md:sticky md:top-0 md:block md:h-screen md:w-60 md:overflow-y-auto`}>
             <div className="flex items-center gap-2 px-5 py-4">
               <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#1A56DB] font-bold text-white">α</span>
               <div>
@@ -178,9 +183,9 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
           <div className="min-w-0 flex-1">
             <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur md:px-8">
               <div className="flex items-center gap-3">
-                <button className="rounded p-1.5 text-slate-600 hover:bg-slate-100 md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu">☰</button>
+                <button type="button" className="rounded p-1.5 text-slate-600 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu" aria-expanded={menuOpen} aria-controls="workspace-nav">☰</button>
                 <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">{user?.tenant ?? '…'}</span>
-                <span className="hidden text-xs text-slate-500 sm:inline">Manufacturing template</span>
+                <span className="hidden text-xs text-slate-500 sm:inline" title={tenant.data?.name}>{tenant.data ? `${tenant.data.templateLabel} template` : ""}</span>
               </div>
               <div className="flex items-center gap-4">
                 <span className="flex items-center gap-1.5 text-xs text-slate-600" title={live.connected ? 'Receiving live updates' : 'Reconnecting…'}>
@@ -201,6 +206,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
               </div>
             </header>
             <main id="main" className="mx-auto max-w-[1400px] px-4 py-6 md:px-8">{children}</main>
+            {!supplier && <footer><LifecycleStrip pathname={pathname} /></footer>}
           </div>
         </div>
       </ToastProvider>

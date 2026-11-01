@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:erp.sync.finished",
+  "title": "erp.sync.finished",
+  "description": "Payload (outbox_event.payload) of erp.sync.finished on ERP_SYNC. Produced by services/erp_sync.py.",
+  "type": "object",
+  "properties": {
+    "kind": {},
+    "status": {},
+    "counts": {}
+  },
+  "required": [
+    "kind",
+    "status",
+    "counts"
+  ],
+  "additionalProperties": true
+}

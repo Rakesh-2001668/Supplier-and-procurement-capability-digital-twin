@@ -105,5 +105,26 @@ def test_licence_renewal_alert_decision_and_extension(its):
                                          "extension": its["summary"]["renewal"]["extension"], "alertFired": 1}
 
 
+def test_licence_entitlements_flag_the_underused_licence_before_renewal(its):
+    """Wave 1 (item 40): usage reports are imported; the endpoint suite (60% used) is flagged unused with the saving and a rightsizing task,
+    the observability licence (95% used) is not, and its scheduled review ran before the F4-10 renewal alert."""
+    from app.pic.models import AuditEvent, LicenceEntitlement, Tenant, Timer
+    with system_tx() as s:
+        tenant_id = s.execute(select(Tenant.id).where(Tenant.code == "ITS")).scalar_one()
+    with tenant_tx(tenant_id) as s:
+        licences = {e.product.split(" – ")[0]: e for e in s.execute(select(LicenceEntitlement)).scalars()}
+        observability, endpoint = licences["Observability platform"], licences["Endpoint security suite"]
+        assert observability.flag is None and observability.utilisation_pct == Decimal("94.67") and observability.peak_used_qty == Decimal(142)
+        assert endpoint.flag == "UNUSED" and endpoint.utilisation_pct == Decimal("60.50") and endpoint.unused_qty == Decimal(79)
+        assert endpoint.potential_saving_minor == 79 * 1_800_00
+        assert observability.contract_id is not None and observability.term_end == date(2027, 3, 31)
+        task = s.execute(select(Task).where(Task.object_id == endpoint.id, Task.kind == "LICENCE_RIGHTSIZE")).scalar_one()
+        assert task.candidate_role == "CATEGORY_MANAGER" and task.evidence["unusedQty"] == "79"
+        review = s.execute(select(Timer).where(Timer.object_id == observability.id, Timer.kind == "LICENCE_REVIEW")).scalar_one()
+        assert review.fired_at is not None and review.due_at.astimezone(clock.IST).date() == date(2026, 12, 1)  # 90 + 30 days before 31 Mar
+        assert s.execute(select(AuditEvent).where(AuditEvent.object_id == observability.id, AuditEvent.action == "RENEWAL_REVIEW")).scalar_one()
+        assert s.execute(select(AuditEvent).where(AuditEvent.object_id == endpoint.id, AuditEvent.action == "FLAGGED_UNUSED")).scalar_one()
+    assert its["summary"]["counts"]["licences"] == 2 and its["summary"]["counts"]["licenceFlags"] == 1
+
 def test_pack_is_idempotent(its):
     assert datasets.apply_pack("industry_it", PASSWORD)[0]["status"] == "ALREADY_LOADED"

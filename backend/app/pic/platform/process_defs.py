@@ -156,3 +156,58 @@ PROCESS_DEFINITIONS = [
         "branches": "High duplicate scores redirect the requester to the existing material. Domain stewards approve their fields in parallel.",
     },
 ]
+
+
+# ---------------------------------------------------------------- database form (item 49)
+# The definitions above are version 1 of each flow. They are loaded into ``process_definition`` by migration 0013 and by
+# ``seed.reference.deploy_process_definitions``; from then on the database is the source of truth and tenants publish new
+# versions through /v1/process-definitions. A definition body is JSON:
+#   steps  [{id, type event|user|system|gateway, lane, name, screen, taskKind?, roles?, slaBusinessDays?}]
+#   flows  [{from, to, label?}]   sequence flows; every gateway needs a "yes" and a "no" outgoing flow
+#   lanes  [lane name]            swimlane order
+#   branches  free text           narrative of the branches (Blueprint §21)
+# Everything not stated in FLOW_OVERRIDES / GATEWAY_FLOWS follows the order of the rows in the Blueprint.
+
+# Gateway -> {"yes": step, "no": step}. The "main path" in the Blueprint row is the labelled branch that follows the next row.
+GATEWAY_FLOWS = {
+    "F1-05": {"no": "F1-06", "yes": "F1-10"},        # simulation run -> report only, no documents
+    "F2-03": {"no": "F2-04", "yes": "F2-07"},        # contract / catalogue item found -> skip free text
+    "F2-05": {"yes": "F2-06", "no": "F2-07"},        # reusable item -> parallel MDM request
+    "F3-05": {"no": "F3-06", "yes": "F3-03"},        # another round / auction -> back to bids
+    "F3-07": {"yes": "F3-08", "no": "F3-09"},        # award > 50 L or not lowest -> approval
+    "F4-05": {"yes": "F4-06", "no": "F4-07"},        # non-standard or >= 1 Cr -> legal & finance approval
+    "F5-04": {"no": "F5-05", "yes": "F5-06"},        # touchless -> straight to transmission
+    "F5-08": {"yes": "F5-09", "no": "F5-02"},        # outside tolerance -> new PO version back to the buyer
+    "F6-02": {"yes": "F6-03", "no": "F6-04"},        # goods (yes) or service (no)
+    "F6-05": {"yes": "F6-06", "no": "F6-08"},        # quality-managed
+    "F7-04": {"no": "F7-05", "yes": "F7-06"},        # within tolerance -> post
+    "F8-06": {"yes": "F8-07", "no": "F8-09"},        # qualified
+    "F9-04": {"no": "F9-05", "yes": "F9-08"},        # duplicate >= 0.92 -> redirect to the existing material
+}
+# Non-gateway steps whose successor is not the next row.
+FLOW_OVERRIDES = {"F6-03": ["F6-05"], "F6-04": ["F6-05"]}
+# The approval task kind a user step opens (workflow.on_task handlers in the services).
+TASK_KINDS = {"F2-08": "REQ_APPROVAL", "F3-08": "AWARD_APPROVAL", "F4-06": "CONTRACT_APPROVAL", "F5-05": "PO_APPROVAL",
+              "F6-04": "SES_APPROVAL", "F9-05": "MDM_STEWARD"}
+
+
+def definition_body(d: dict) -> dict:
+    """The JSON stored in process_definition.definition for a baseline definition."""
+    steps = [dict(s, **({"taskKind": TASK_KINDS[s["id"]]} if s["id"] in TASK_KINDS else {})) for s in d["steps"]]
+    ids = [s["id"] for s in steps]
+    flows = []
+    for index, s in enumerate(steps):
+        if s["type"] == "gateway":
+            flows += [{"from": s["id"], "to": target, "label": label} for label, target in GATEWAY_FLOWS[s["id"]].items()]
+        elif s["id"] in FLOW_OVERRIDES:
+            flows += [{"from": s["id"], "to": target} for target in FLOW_OVERRIDES[s["id"]]]
+        elif index + 1 < len(ids):
+            flows.append({"from": s["id"], "to": ids[index + 1]})
+    lanes = list(dict.fromkeys(s["lane"] for s in steps))
+    return {"steps": steps, "flows": flows, "lanes": lanes, "branches": d["branches"]}
+
+
+def baseline() -> list[dict]:
+    """[{key, flow_id, version, name, definition}] for the nine shipped flows."""
+    return [{"key": d["key"], "flow_id": d["flow_id"], "version": d["version"], "name": d["name"], "definition": definition_body(d)}
+            for d in PROCESS_DEFINITIONS]

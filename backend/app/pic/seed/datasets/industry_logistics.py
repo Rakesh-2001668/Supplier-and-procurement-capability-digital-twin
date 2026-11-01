@@ -21,6 +21,10 @@ carriers. Everything below runs through the domain services, on the tenant's own
                invoice KRW/26-27/0436 bills 1,240 km against a POD of 1,177 km → FREIGHT_AUDIT + SERVICE exceptions →
                credit note → re-match → posted; monthly payment runs
   spot buy     one urgent backhaul trip PNQ→CHE from a second carrier (free text, one quote, PO approval, POD, SES match)
+  wave 1       detention rate rule per carrier and lane (4 free hours, ₹600/h); the spot carrier's 11-hour detention at the consignee is
+               claimed against an accessorial allowance order with the trip's approved POD as evidence (a claim without POD is
+               blocked), becomes a service entry and is approved; every contract trip is recorded as a freight movement (km, tonnes) for
+               the cost-per-tonne-km KPI; the demonstration fuel index values are fed into the index table the contract resets read
 
 Helpers at the top of this module (GSTIN, tenant set-up, users, onboarding, tenant-scoped relay) are shared with the
 industry_general pack.
@@ -525,6 +529,80 @@ def _spot_trip(sc: Scenario, state: dict):
     sc.note(f"Spot {pr_no} → {po_no} (buyer-lead approval, not touchless) → POD → WGC/2026-27/1184 SES match ({status}) → posted")
 
 
+def _detention(sc: Scenario, state: dict):
+    """Detention at the consignee on the spot trip: an accessorial allowance order, the rate rule, a claim blocked without proof of delivery
+    and then filed with the trip's approved POD, the service entry and its approval."""
+    from app.pic.services import ind_logistics, order, receiving, requisition
+    t = at(date(2026, 12, 22), 10)
+    yield t
+    with sc.act("lane.planner", t) as s:
+        pr = requisition.create(s, origin="MANUAL", purpose_code="ACCESSORIAL", plant="PNQ1",
+                                purpose_text="Accessorial allowance (detention, demurrage) with the spot carrier for December returnable-rack moves",
+                                lines=[{"item_type": "FREE_TEXT", "purchase_type": "SERVICE",
+                                        "description": "Accessorial allowance – detention and demurrage at consignee, per hour",
+                                        "material_group": "LOG-SPOT", "category": "LOGISTICS", "qty": "40", "uom": "HR", "price_est_minor": 60_000,
+                                        "account_assignment_type": "COST_CENTER", "account_assignment_code": "5200", "need_date": "2026-12-23",
+                                        "plant": "PNQ1"}])
+        requisition.submit(s, pr)
+        pr_id, pr_no = pr.id, pr.number
+    t = at(date(2026, 12, 22), 12)
+    yield t
+    sc.approve_all(pr_id, t, "Allowance for detention beyond the free time; ₹24,000 cap")
+    t = at(date(2026, 12, 22), 15)
+    yield t
+    with sc.act("freight.buyer", t) as s:
+        po = order.create_from_requisition(s, requisition=pr_no, lines=[10], supplier_code="WGC02", unit_price_minor=60_000)[0]
+        po_id, po_no = po.id, po.number
+    t = at(date(2026, 12, 22), 16)
+    yield t
+    sc.approve_all(po_id, t, "Hourly allowance as per the spot carrier's rate sheet")
+    relay(sc, at(date(2026, 12, 22), 16, 30))
+    t = at(date(2026, 12, 23), 9)
+    yield t
+    with sc.act(WGC["user"], t) as s:
+        order.confirm(s, s.get(PurchaseOrder, po_id), "CONFIRMED", note="Accessorial allowance accepted")
+    t = at(date(2026, 12, 23), 10)
+    yield t
+    with sc.act("contract.manager", t) as s:
+        ind_logistics.add_rate(s, charge_type="DETENTION", rate_minor=60_000, unit="HOUR", free_units=4, supplier="WGC02", lane="PNQ1-CHE1",
+                               valid_from=date(2026, 12, 1))
+    t = at(date(2026, 12, 23), 11)
+    yield t
+    with tenant_tx(sc.tenant_id) as s:
+        spot_po = (state["spot"] or {})["po"]
+        pod_no = s.execute(select(ServiceEntry.number).join(PurchaseOrder, PurchaseOrder.id == ServiceEntry.po_id)
+                           .where(PurchaseOrder.number == spot_po)).scalar_one()
+    with sc.act(WGC["user"], t) as s:
+        blocked = ind_logistics.claim_charge(s, s.get(PurchaseOrder, po_id), line=10, charge_type="DETENTION", units=11, occurred_on=date(2026, 12, 18),
+                                             lane="PNQ1-CHE1", note="consignee gate pass delayed")
+        claim = ind_logistics.claim_charge(s, s.get(PurchaseOrder, po_id), line=10, charge_type="DETENTION", units=11, occurred_on=date(2026, 12, 18),
+                                           lane="PNQ1-CHE1", pod_ses=pod_no, note="consignee gate pass delayed; vehicle released 18 Dec 21:40")
+        blocked_status, claim_no, claim_status, amount, ses_id = blocked.status, claim.number, claim.status, claim.amount_minor, claim.ses_id
+    t = at(date(2026, 12, 23), 15)
+    yield t
+    sc.approve_all(ses_id, t, "Detention confirmed against the gate log of the consignee")
+    relay(sc, at(date(2026, 12, 23), 15, 30))
+    state["detention"] = {"po": po_no, "claim": claim_no, "blockedWithoutPod": blocked_status, "status": claim_status, "amountMinor": amount}
+    sc.note(f"Accessorial {pr_no} → {po_no}; detention claim without POD {blocked_status}; with POD {pod_no} {claim_no} "
+            f"7 billable hours = {fmt_inr(amount)} → service entry approved")
+
+
+def _movements_and_index_feed(sc: Scenario, state: dict) -> None:
+    """Freight movements of the contract trips (the cost-per-tonne-km KPI) and the demonstration fuel index values in the index table."""
+    from app.pic.services import ind_logistics
+    t = at(date(2027, 3, 2), 10)
+    with sc.act("contract.manager", t) as s:
+        for trip in state["trips"]:
+            po = s.execute(select(PurchaseOrder).where(PurchaseOrder.number == trip["po"])).scalar_one()
+            ind_logistics.record_movement(s, po, line=10, reference=trip["lr"], distance_km=trip["km"], payload_tonnes=trip["tonnes"],
+                                          moved_on=trip["loaded"], lane="CHE1-PNQ1", ses=trip["ses"])
+        fed = ind_logistics.put_index_values(
+            s, INDEX["index"], [{"as_of": effective, "value": value, "unit": "INDEX"} for _, effective, value in INDEX_RESETS], "IMPORT",
+            "demo-feed: illustrative values, not published diesel prices")
+    state["indexFeed"] = fed
+    sc.note(f"{len(state['trips'])} freight movements recorded (km × tonnes); {fed['inserted']} demonstration index values fed for {INDEX['index']}")
+
+
 def apply(tenant_code: str, password: str) -> dict:
     if tenant_code != TENANT[0]:
         raise ValueError(f"{KEY} creates tenant {TENANT[0]} only")
@@ -563,7 +641,9 @@ def apply(tenant_code: str, password: str) -> dict:
     processes += [_index_reset(sc, state, *reset) for reset in INDEX_RESETS]
     processes += [_payment_run(sc, state, run_day) for run_day in PAYMENT_RUNS]
     processes.append(_spot_trip(sc, state))
+    processes.append(_detention(sc, state))
     run_timeline(processes)
+    _movements_and_index_feed(sc, state)
     relay(sc, at(date(2027, 3, 31), 18))
 
     # ------------------------------------------------------------ summary and KPIs (BP §23: cost per tonne-km, audit recoveries)

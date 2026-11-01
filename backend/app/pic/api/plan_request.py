@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.pic import views
 from app.pic.api.deps import idempotency_key, idempotent, uow
@@ -18,7 +18,7 @@ from app.pic.platform import workflow
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
-from app.pic.services import mdm, planning, requisition, supplier
+from app.pic.services import guided_buying, mandatory, mdm, planning, request_templates, requisition, supplier
 from app.pic.services.common import by_ref, material_by_number, supplier_ref
 
 router = APIRouter(prefix="/v1")
@@ -43,16 +43,24 @@ def start_mrp_run(body: MrpRunIn, p: Principal = Depends(require("mrp:run")), ke
 
 
 @router.get("/mrp/runs/{ref}", tags=["F1 MRP"])
-def get_mrp_run(ref: str, p: Principal = Depends(require(READ))):
+def get_mrp_run(ref: str, detail: str = Query(default="auto", pattern="^(auto|full|summary)$"), p: Principal = Depends(require(READ))):
+    """``detail=summary`` (the default for large runs) returns the header, counts and the URLs of the paged detail reads."""
     with uow(p) as s:
-        return views.mrp_run(s, by_ref(s, MrpRun, ref))
+        return views.mrp_run(s, by_ref(s, MrpRun, ref), detail)
 
 
 @router.get("/mrp/runs/{ref}/exceptions", tags=["F1 MRP"])
-def mrp_exceptions(ref: str, p: Principal = Depends(require(READ))):
+def mrp_exceptions(ref: str, limit: Optional[int] = Query(default=None, ge=1, le=500), offset: int = Query(default=0, ge=0),
+                   p: Principal = Depends(require(READ))):
+    """Exceptions by value at risk. Without ``limit`` the whole list; with it a page ``{items, total, nextOffset}``."""
     with uow(p) as s:
         run = by_ref(s, MrpRun, ref)
-        return rows(s.execute(select(MrpException).where(MrpException.mrp_run_id == run.id).order_by(MrpException.value_at_risk_minor.desc())).scalars())
+        query = select(MrpException).where(MrpException.mrp_run_id == run.id).order_by(MrpException.value_at_risk_minor.desc(), MrpException.id)
+        if limit is None:
+            return rows(s.execute(query).scalars())
+        total = s.execute(select(func.count()).select_from(MrpException).where(MrpException.mrp_run_id == run.id)).scalar_one()
+        items = rows(s.execute(query.limit(limit).offset(offset)).scalars())
+        return {"items": items, "total": total, "nextOffset": offset + limit if offset + limit < total else None}
 
 
 @router.post("/planned-orders/{ref}/firm", tags=["F1 MRP"])
@@ -75,7 +83,9 @@ def convert_planned_order(ref: str, p: Principal = Depends(require("mrp:plan")),
 @router.get("/guided-buying/search", tags=["F2 Requisition"])
 def guided_search(q: str, plant: Optional[str] = None, p: Principal = Depends(require("req:create"))):
     with uow(p) as s:
-        return requisition.search(s, q, plant)
+        result = requisition.search(s, q, plant)
+        agent = guided_buying.assist_search(s, q, plant, result)  # Guided Buying Agent (AG-03), when it may act
+        return {**result, "agent": agent} if agent else result
 
 
 class QuoteRefIn(BaseModel):
@@ -106,6 +116,8 @@ class PrLineIn(BaseModel):
     reusable: bool = False
     mpn: Optional[str] = None
     attributes: Optional[dict] = None
+    guided_run: Optional[str] = Field(default=None, max_length=80, description="aiRef of the guided-buying search this line came from")
+    template: Optional[str] = Field(default=None, max_length=40)   # BP M04 request template code (GET /v1/request-templates)
 
 
 class RequisitionIn(BaseModel):
@@ -114,6 +126,7 @@ class RequisitionIn(BaseModel):
     purpose_text: Optional[str] = None
     plant: str
     company_code: str = "1000"
+    template: Optional[str] = Field(default=None, max_length=40)   # default template for lines that name none
     lines: list[PrLineIn] = Field(min_length=1)
 
 
@@ -124,8 +137,16 @@ def create_requisition(body: RequisitionIn, p: Principal = Depends(require("req:
         if idem.replay:
             return idem.replay
         pr = requisition.create(s, origin=body.origin, purpose_code=body.purpose_code, purpose_text=body.purpose_text, plant=body.plant,
-                                company_code=body.company_code, lines=[l.model_dump() for l in body.lines])
+                                company_code=body.company_code,
+                                lines=[{**l.model_dump(), "template": l.template or body.template} for l in body.lines])
         return idem.store(views.requisition(s, pr), 201)
+
+
+@router.get("/request-templates", tags=["F2 Requisition"])
+def list_request_templates(p: Principal = Depends(require("req:create"))):
+    """BP M04 template picker: services, IT, marketing and facilities templates (rule REQUEST-TEMPLATES) with the requester's default cost object."""
+    with uow(p) as s:
+        return request_templates.listing(s, p)
 
 
 class SubmitIn(BaseModel):
@@ -277,7 +298,9 @@ class SupplierIn(BaseModel):
 @router.post("/suppliers", status_code=201, tags=["F8 Supplier"])
 def register_supplier(body: SupplierIn, p: Principal = Depends(require("supplier:manage"))):
     with uow(p) as s:
-        return row(supplier.register(s, **body.model_dump()))
+        data = body.model_dump()
+        mandatory.check(s, "SUPPLIER_REGISTER", data, [])  # TD §6 / P14 rule MANDATORY-FIELDS (SUPPLIER_REGISTER)
+        return row(supplier.register(s, **data))
 
 
 IFSC_PATTERN = r"^[A-Z]{4}0[A-Z0-9]{6}$"

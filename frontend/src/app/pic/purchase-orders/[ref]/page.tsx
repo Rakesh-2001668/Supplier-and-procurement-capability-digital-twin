@@ -24,7 +24,7 @@ type Po = {
   id: string; number: string; status: string; version: number; row_version?: number; supplier: { code: string; name: string }; total_minor: number;
   payment_terms: string; incoterms: string | null; tolerance: { over_pct?: string; under_pct?: string; price_pct?: string };
   purpose_code: string; plant: string; released_by: string | null; erp_doc_no: string | null; rule_set_version: string;
-  retention_pct?: string | null; lineageChain: string[]; lines: PoLine[];
+  retention_pct?: string | null; one_time_vendor?: { reason: string; requestedBy?: string; approvedBy?: string[]; status?: string } | null; lineageChain: string[]; lines: PoLine[];
   validation: { riskScore: number | null; touchless: boolean | null; factors: { code: string; points: number; evidence: string }[]; reasons: string[] };
   awaitingConfirmation?: boolean;
   pendingChangeApproval?: { role: string; evidence: { fromVersion?: number; toTotalMinor?: number; triggers?: string[]; reason?: string } } | null;
@@ -77,6 +77,7 @@ export default function PurchaseOrderPage() {
               ['Tolerance', `+${po.tolerance.over_pct ?? 0}% / −${po.tolerance.under_pct ?? 0}%`], ['Purpose', po.purpose_code], ['Plant', po.plant],
               ['Released by', po.released_by ?? '–'], ['ERP document', po.erp_doc_no ?? 'not posted yet'],
               ['Retention', Number(po.retention_pct ?? 0) > 0 ? `${Number(po.retention_pct)}% withheld per invoice` : 'none'],
+              ...(po.one_time_vendor && !supplier ? [['One-time vendor', `${po.one_time_vendor.reason}${po.one_time_vendor.approvedBy?.length ? ' (approved)' : ' (approval pending)'}`] as [string, string]] : []),
             ]} />
             <div className="rounded-lg bg-slate-50 p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI validation (explainable)</p>

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:kanban.signalled",
+  "title": "kanban.signalled",
+  "description": "Payload (outbox_event.payload) of kanban.signalled on KANBAN_CARD. Produced by services/ind_manufacturing.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "plant": {},
+    "binQty": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "material",
+    "plant",
+    "binQty"
+  ],
+  "additionalProperties": true
+}

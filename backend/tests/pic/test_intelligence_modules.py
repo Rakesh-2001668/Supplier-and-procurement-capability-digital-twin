@@ -128,7 +128,7 @@ def test_reconciliation_and_payables_insights(client, login):
     assert run["platformCount"] == run["erpCount"] > 0 and run["differences"] == 0 and run["platformMinor"] == run["erpMinor"]
     assert client.post("/v1/reconciliation/runs", json={}, headers=login("buyer")).status_code == 403
     k = client.get("/v1/payables/insights", headers=login("finance.controller")).json()
-    assert k["dpoDays"] is not None and k["firstPassMatchPct"] == "60.0" and k["duplicatesPrevented"] >= 1
+    assert k["dpoDays"] is not None and k["firstPassMatchPct"] == "85.7" and k["duplicatesPrevented"] >= 1  # 12 of 14: 3 of the original 5 + the 9 SA-5520 call-off invoices (Blueprint 86%)
     assert k["discountCapturePct"] is None and k["discountNote"]
 
 

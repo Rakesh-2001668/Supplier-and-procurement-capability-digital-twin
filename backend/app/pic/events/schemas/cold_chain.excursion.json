@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:cold_chain.excursion",
+  "title": "cold_chain.excursion",
+  "description": "Payload (outbox_event.payload) of cold_chain.excursion on COLD_CHAIN_READING. Produced by services/ind_healthcare.py.",
+  "type": "object",
+  "properties": {
+    "material": {},
+    "object": {},
+    "minutes": {},
+    "minSeen": {
+      "type": "string"
+    },
+    "maxSeen": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "material",
+    "object",
+    "minutes",
+    "minSeen",
+    "maxSeen"
+  ],
+  "additionalProperties": true
+}
