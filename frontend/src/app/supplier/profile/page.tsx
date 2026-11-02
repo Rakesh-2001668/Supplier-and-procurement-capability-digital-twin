@@ -28,7 +28,7 @@ export default function SupplierDigitalTwinProfile() {
   const [machineForm, setMachineForm] = useState({ name: '', type: '5-Axis CNC Milling', count: 1, tolerance: '±0.003 mm', envelope: '600 x 600 x 500 mm', status: 'Operational', capacity: '85%' });
   const [productForm, setProductForm] = useState({ partNumber: '', name: '', category: 'Precision CNC Machined Parts', material: 'Aluminum 7075-T6', unitPriceUsd: 250, moq: 25, leadTimeDays: 14, stockAvailable: 100, tolerances: '±0.005 mm', description: '' });
   const [certForm, setCertForm] = useState({ name: 'ISO 9001:2015', authority: 'TUV Rheinland', certificateNo: 'CERT-2026-99', expiry: '2028-12-31' });
-  const [iotForm, setIotForm] = useState({ gatewayUrl: 'https://iot.abc-manufacturing.com/v1/telemetry', apiKey: 'sec_live_99a812' });
+  const [iotForm, setIotForm] = useState({ gatewayUrl: 'https://iot.abc-manufacturing.com/v1/telemetry', apiKey: '' });
 
   // Fetch full Digital Twin from backend
   const { data: twinData, isLoading, refetch } = useQuery({

@@ -1,0 +1,5 @@
+{
+  "_comment": "Floors set 2 Nov 2026 from a measured full run (total 89.0%; root 85.4, api 84.7, events 76.1, models 100, platform 86.3, seed 95.5, services 89.0) with a few points of margin. Raise as coverage grows, never lower.",
+  "total": 85.0,
+  "packages": {"(root)": 80.0, "api": 80.0, "events": 70.0, "models": 95.0, "platform": 82.0, "seed": 90.0, "services": 85.0}
+}

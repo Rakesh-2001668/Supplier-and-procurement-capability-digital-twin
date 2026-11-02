@@ -3,8 +3,11 @@ from typing import Any, Union
 import bcrypt
 import jwt
 import os
+import secrets
 
-SECRET_KEY = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
+# Signing key of the prototype (legacy demo) routers. No built-in default: without SECRET_KEY a random key is generated per process
+# (demo sign-ins then end when the API restarts). The PIC platform uses PIC_JWT_SECRET and ignores this value.
+SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days
 

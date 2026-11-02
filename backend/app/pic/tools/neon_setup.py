@@ -208,6 +208,11 @@ def main() -> int:
             for result in datasets.apply_all(password):
                 counts = result.get("summary", {}).get("counts")
                 print(f"   {result['pack']:24} {result['tenant']:5} {result['status']}" + (f"  {counts}" if counts else ""))
+    if not args.verify_only:
+        # No worker runs while this job does: publish what the migration and the dataset packs queued, as the worker would,
+        # so verification can tell a stuck outbox from one that simply has not been drained yet.
+        from app.pic import worker
+        print("   Outbox drain …", worker.drain(budget_seconds=240.0, max_rounds=200))
     print("4/4 Verification …")
     report = verify()
     print(f"   pic tables: {report['pic_tables']} (forced RLS on {report['pic_tables_with_forced_rls']})")

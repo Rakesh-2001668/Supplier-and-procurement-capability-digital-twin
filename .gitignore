@@ -13,3 +13,7 @@ backend/app.db
 *.log
 frontend/next-env.d.ts
 backend/data/erp_load_reports/
+
+# test coverage output
+backend/.coverage
+backend/coverage.json
