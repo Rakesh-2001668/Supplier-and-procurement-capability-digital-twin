@@ -254,6 +254,9 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
     _mandatory_fields(session, po, lines, asn, delivery_note, posting_date)
     # ADM-01: a deactivated plant or storage location is refused on a new receipt (the order may predate the deactivation)
     org_guard.ensure_active(session, "goods receipt", company_code=po.company_code)
+    from app.pic.services import finance_controls
+    for when in {posting_date or clock.today(), clock.today()}:  # cut-off: neither the posting date nor today may lie in a closed period
+        finance_controls.assert_open(session, po.company_code, when, f"goods receipt for {po.number}")
     for data in lines:
         line = po_lines[int(data["line"])]
         org_guard.ensure_active(session, "goods receipt", plant=line.plant,

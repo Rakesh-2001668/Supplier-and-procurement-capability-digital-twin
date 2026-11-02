@@ -1,7 +1,7 @@
 """Rule bodies of the wave 1 scheduler, retention, delegation and AI-control rules (seeded for every tenant by seed/reference.py
 RULE_SETS and used as the defaults of the code paths when a tenant has no version).
 
-PAYMENT-RUN    daily payment-due job: horizonDays, autoRun (false: propose to the approverRole; true: run what is due today)
+PAYMENT-RUN    daily payment-due job: horizonDays, approverRole (autoRun is ignored: humans decide)
 MRP-SCHEDULE   scheduled MRP: plants (codes or {plant, mode, materials}), mode, overlapMinutes (a plant with a RUNNING run is skipped)
 PRIVACY-RETENTION  categories.<key>.days, purge.dryRun (the purge and archive jobs only report until it is false), audit_archive
 DELEGATION     maxDays of one delegation of authority
@@ -10,8 +10,8 @@ AI-CONTROL     automatic agent suspension: minFeedback (default 20), window (mos
 
 BODIES = {
     "PAYMENT-RUN": ({"horizonDays": 3, "autoRun": False, "approverRole": "FINANCE_CONTROLLER", "slaBusinessDays": 1},
-                    "Payment-due job (F7-07): invoices due within horizonDays are proposed to the finance controller; autoRun=true pays "
-                    "what is due today through the normal payment run"),
+                    "Payment-due job (F7-07): invoices due within horizonDays (MSME invoices 45 days after acceptance) and invoices whose early-payment "
+                    "discount closes within it are proposed to the finance controller, who decides. autoRun is ignored: the job never pays by itself"),
     "MRP-SCHEDULE": ({"plants": [], "mode": "NET_CHANGE", "overlapMinutes": 120},
                      "Scheduled MRP runs (F1): list the plants (or {plant, mode, materials}); empty = no scheduled run"),
     "PRIVACY-RETENTION": ({"categories": {"notification": {"days": 180}, "outbox_event": {"days": 90}, "processed_event": {"days": 90},

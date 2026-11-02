@@ -7,6 +7,7 @@ import { api, Paged } from '@/lib/pic/api';
 import { dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, useSessionUser } from '../_components';
+import { PostingPeriodsCard, TdsExportCard } from '../_close';
 
 type Item = { id: string; kind: string; ref: string; erpDocNo: string | null; platformMinor: number | null; erpMinor: number | null; status: string;
   resolution: string | null };
@@ -24,6 +25,9 @@ const KIND_TEXT: Record<string, string> = {
   PAYMENT_NOT_IN_PLATFORM: 'ERP payment with no matching platform payment',
   MEMO_MISSING_IN_ERP: 'Credit note received after posting, no ERP credit memo yet',
   MEMO_AMOUNT_MISMATCH: 'Credit memo amount differs from the credit note',
+  PAYMENT_RETURN_OPEN: 'Payment returned by the bank; reverse its ERP clearing document, then resolve',
+  DEBIT_MISSING_IN_ERP: 'Debit note posted, no ERP debit memo found',
+  DEBIT_AMOUNT_MISMATCH: 'Debit memo amount differs from the debit note',
 };
 
 export default function Reconciliation() {
@@ -98,6 +102,10 @@ export default function Reconciliation() {
           </Card>
         </>
       )}
+
+      <PostingPeriodsCard />
+
+      <TdsExportCard />
 
       <IntegrationStatus admin={hasRole(user, 'TENANT_ADMIN')} />
 

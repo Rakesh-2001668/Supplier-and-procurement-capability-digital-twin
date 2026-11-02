@@ -48,6 +48,8 @@ DOC_TYPES = {
     "SUPPLIER_CREDIT_MEMO": ("KG", 5105000001),
     # Vendor debit memo for a supplier debit note (upward price correction / additional charge) received after its invoice was posted.
     "SUPPLIER_DEBIT_MEMO": ("KD", 5106000001),
+    # Reversal of the clearing document of a payment the bank returned (simulator only, like the debit memo; live connectors report it unmapped).
+    "PAYMENT_REVERSAL": ("ZR", 1500009000),
     # Supply-chain-finance election on a posted invoice (payment assigned to the financing programme; no external provider).
     "SCF_FINANCING": ("ZF", 5200000001),
 }

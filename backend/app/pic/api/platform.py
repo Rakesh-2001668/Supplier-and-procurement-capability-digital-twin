@@ -129,7 +129,7 @@ def process(instance_id: uuid.UUID, p: Principal = Depends(require(READ))):
         return workflow.history(s, instance)
 
 
-@router.get("/documents/{object_type}/{ref}/process", tags=["Workflow"])
+@router.get("/documents/{object_type}/{ref:path}/process", tags=["Workflow"])
 def document_process(object_type: str, ref: str, p: Principal = Depends(require(READ))):
     with uow(p) as s:
         obj = resolve_document(s, object_type, ref)
@@ -138,7 +138,7 @@ def document_process(object_type: str, ref: str, p: Principal = Depends(require(
 
 
 # ---------------------------------------------------------------- lineage and audit (P10, ADM-06)
-@router.get("/lineage/{object_type}/{ref}", tags=["Lineage & Audit"])
+@router.get("/lineage/{object_type}/{ref:path}", tags=["Lineage & Audit"])
 def get_lineage(object_type: str, ref: str, p: Principal = Depends(require(READ))):
     with uow(p) as s:
         obj = resolve_document(s, object_type, ref)
@@ -151,7 +151,7 @@ def verify_audit(p: Principal = Depends(require("admin:audit"))):
         return audit.verify_chain(s)
 
 
-@router.get("/audit/{object_type}/{ref}", tags=["Lineage & Audit"])
+@router.get("/audit/{object_type}/{ref:path}", tags=["Lineage & Audit"])
 def audit_trail(object_type: str, ref: str, p: Principal = Depends(require(READ))):
     with uow(p) as s:
         obj = resolve_document(s, object_type, ref)

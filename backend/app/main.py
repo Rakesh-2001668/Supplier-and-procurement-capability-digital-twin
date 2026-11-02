@@ -80,10 +80,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     app.state.settings = settings
 
     origins = settings.cors_origin_list
-    if origins:
+    # Outside production a developer may open the web app by its LAN address (the one Next.js prints as "Network"); the old
+    # prototype screens call the API from the browser, so loopback and private-network origins are accepted on any port.
+    dev_origin_regex = None if settings.is_production else r"https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?"
+    if origins or dev_origin_regex:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=origins,
+            allow_origin_regex=dev_origin_regex,
             allow_credentials=True,
             allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
             allow_headers=["authorization", "content-type", "idempotency-key", "if-match", "x-request-id", "traceparent", "tracestate"],

@@ -9,6 +9,7 @@ import { date, dateTime, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { useCertificateVerifier, useSupplierManager } from '../roles';
 import { AssessmentsCard } from './_assessments';
+import { SupplierFinanceCard } from './_finance';
 import { PlansCard } from './_plans';
 import { SegmentCard, SegmentChip } from './_segment';
 import { Address, MasterDataCard, PunchoutCard, PunchoutConfig } from './master-data';
@@ -137,6 +138,7 @@ export default function Supplier360Page() {
       </Card>
 
       <MasterDataCard supplier={s} manager={manager} />
+      <SupplierFinanceCard code={s.code} />
 
       <PunchoutCard supplier={s} manager={manager} />
 

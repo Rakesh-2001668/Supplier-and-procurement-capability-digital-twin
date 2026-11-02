@@ -223,8 +223,11 @@ def test_open_po_is_received_and_invoiced_through_the_services(loaded):
         invoice = payables.capture(s, supplier=supplier, supplier_invoice_no=f"KAC-TEST/{erp}", invoice_date=date(2026, 11, 3), channel="PDF_OCR",
                                    lines=[{"po": po_number, "po_line": line_no, "qty": str(qty), "unit_price": str(Decimal(price) / 100)}])
         assert invoice.status == "MATCHED", invoice.status
-        payables.approve(s, invoice)
-        result = payables.post(s, invoice, None)
+        invoice_id = invoice.id
+    with sc.act("finance.controller", at(date(2026, 11, 4), 11)) as s:  # SOD-08: whoever captured the invoice may not approve it
+        payables.approve(s, s.get(Invoice, invoice_id))
+    with sc.act("ap.clerk", at(date(2026, 11, 4), 12)) as s:
+        result = payables.post(s, s.get(Invoice, invoice_id), None)
         assert result["status"] == "POSTED" and result["erpDocument"]
     with tenant_tx(loaded["tenant_id"]) as db:
         assert db.get(PurchaseOrder, po_id).status in ("RECEIVED", "INVOICED", "PARTIALLY_RECEIVED")

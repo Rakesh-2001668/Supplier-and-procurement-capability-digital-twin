@@ -38,6 +38,10 @@ STREAM_ONLY = {
     "payment_file.sent": "Status echo of the bank file; the audit trail holds the transition.",
     "payment_file.acknowledged": "Status echo of the bank file; the audit trail holds the transition.",
     "payment_file.rejected": "Status echo of the bank file; the audit trail holds the transition.",
+    "payment_file.results_recorded": "The bank's per-payment answer (credited / returned); the audit trail holds each payment's result.",
+    "payment.returned": "A payment returned by the beneficiary bank; finance reverses the ERP clearing document (reconciliation lists it).",
+    "finance.period.closed": "Cut-off of a posting period; subscribers (ERP, controlling) freeze their own period.",
+    "finance.period.reopened": "A closed posting period was reopened with a reason; the audit trail holds who and why.",
 }
 
 

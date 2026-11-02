@@ -430,6 +430,15 @@ flowchart LR
 | F7-06 | `POST …/post` with `Idempotency-Key: tenant\|company code\|supplier\|invoice no` | Key format enforced (P13). `integration_message` is unique per key. A retry returns `replayed: true` and the same ERP document. A lost ERP response is resolved by query-before-retry (tested). |
 | F7-08 | consumers of `invoice.posted` | Realised savings (only from posted invoices, P12); spend line with maverick flags; scorecard invoice accuracy; budget commitment → consumption. |
 | F7-07/09 | `POST /v1/payments/runs` | Pays POSTED, unblocked, due invoices, net of credit notes. Skips suppliers still in the bank-change cooling-off period; alerts when bank details changed within 30 days; **SOD-02**. A partial unique index allows one live payment per invoice, so double payment is impossible (tested). |
+| F7-02 (variants) | `POST /v1/invoices` | An OCR or formatting variant of an earlier number from the same supplier (INV-0012 / inv 12 / INVO12) is held as DUPLICATE (`variant: NUMBER_NORMALISED`). |
+| four-eyes | `POST …/approve`, `POST /v1/payments/runs` | **SOD-08**: whoever captured an invoice cannot approve it. **SOD-09**: whoever approved it cannot release its payment (the run skips it with the rule in the reason). |
+| F7-06 (retry) | `POST …/post` | A post parked for retry (ERP did not answer) is not stored under the Idempotency-Key: the retry with the same key runs again and returns the final state; `If-Match` (ETag of the invoice GET) refuses a stale write with 412. |
+| F7-07 (due date) | posting | Micro / small suppliers (MSME class on the supplier) fall due 45 days after acceptance (latest goods receipt / approved service entry), never later than the contractual terms (rule set MSME). |
+| F7-07 (TDS) | posting, payment | TDS from the supplier's section (rule set TDS: rate, single and annual thresholds, higher no-PAN rate, catch-up on crossing) is fixed at posting and kept back at payment (`payment.tds_minor`, `GET /v1/finance/tds-register`). |
+| F7-07 (proposal) | `GET /v1/payments/proposal` | Dry run of the payment run (same rules, nothing written): items with discount, TDS and MSME flag, skipped with reasons. |
+| F7-09 (bank) | `POST /v1/payment-files/{n}/bank-results` | Per payment: CREDITED with the bank UTR, or RETURNED with the reason (payment cancelled, invoice payable again, ERP clearing document listed in the reconciliation until reversed). |
+| cut-off | `POST /v1/finance/periods/{YYYY-MM}/close` | A closed posting period takes no invoice posting and no payment dated into it; closing stores the in-flight invoices and GR/IR accrual; reopening needs a reason. |
+| foreign currency | capture, posting | Invoice currency is the PO currency (one currency per invoice); the rate on the invoice date is fixed at posting (409 FX_RATE_MISSING without one); the payment is made in the invoice currency. |
 
 **Recorded path, INV-TF-8812:**
 

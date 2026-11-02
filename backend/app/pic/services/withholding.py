@@ -1,4 +1,7 @@
-"""TDS / withholding tax on supplier invoices (India: income-tax Act TDS, deducted when the supplier is paid).
+"""Superseded by services/finance_controls.py (TDS sections, thresholds, no-PAN rate, determination at posting, ``at_payment`` at payment):
+the payment run no longer calls this module. The helpers below stay for callers that only hold an invoice row (no session).
+
+TDS / withholding tax on supplier invoices (India: income-tax Act TDS, deducted when the supplier is paid).
 
 ``Invoice.withholding_tax_minor`` holds the tax a payment must keep back for the tax authority. Open items migrated from SAP with a
 withholding amount (BSIK-QBSHB) carry it; the payment run pays ``gross - credit notes - retention - withholding``. This module

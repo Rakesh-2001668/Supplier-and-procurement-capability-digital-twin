@@ -16,7 +16,7 @@ Size: S ≤ 1 day, M 2–5 days, L 1–3 weeks.
 
 | # | Workflow | Spec | Status | Size |
 |---:|---|---|---|---|
-| 1 | Payment-due trigger that starts or proposes the payment run | TD §8 F7 | Not built; runs are manual | S |
+| 1 | Payment-due trigger that starts or proposes the payment run | TD §8 F7 | Built: the payment-due job proposes, a finance approver decides (see PIC_Finance_Module_Analysis.md) | S |
 | 2 | Nightly ERP reconciliation per company code | TD §12.2, P13 | Partial: manual run only | S |
 | 3 | Scheduled MRP runs | TD §8 F1 | Partial: started by hand or API | S |
 | 4 | Monthly supplier scorecard recalculation | BP M06 | Partial: event-driven only | S |

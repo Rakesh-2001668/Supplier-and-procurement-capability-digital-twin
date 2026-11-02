@@ -19,12 +19,15 @@ type InvException = { id: string; invoice_line_id: string | null; type: string; 
   suggested_action: string; status: string; resolution: string | null; resolution_note: string | null; ai_ref: string | null; created_at: string };
 type CreditNote = { id: string; number: string; supplier_credit_note_no: string; note_date: string; reason: string; net_minor: number; tax_minor: number;
   gross_minor: number; lines: { invoice_line: number; qty: string; unitCreditMinor?: number }[] };
-type Payment = { id: string; number: string; amount_minor: number; value_date: string; status: string; run_ref: string | null };
+type Payment = { id: string; number: string; amount_minor: number; value_date: string; status: string; run_ref: string | null; currency?: string;
+  bank_status?: string; bank_utr?: string | null; return_reason?: string | null; tds_minor?: number };
 type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal_year: string; company_code: string; invoice_date: string; channel: string;
   irn: string | null; irn_valid: boolean | null; net_minor: number; tax_minor: number; gross_minor: number; status: string; match_type: string | null;
   first_pass_matched: boolean | null; payment_block: boolean | null; due_date: string | null; erp_doc_no: string | null; posting_key: string | null;
   posted_at: string | null; payment_status: string | null; rule_set_version: string | null; duplicate_of: string | null;
-  retention_minor?: number; payment_option?: string; discount_minor?: number;
+  retention_minor?: number; payment_option?: string; discount_minor?: number; currency?: string; msme_capped?: boolean; acceptance_date?: string | null;
+  tds_section?: string | null; tds_rate?: string | number | null; tds_base_minor?: number; withholding_tax_minor?: number; fx_rate?: string | number | null;
+  gross_group_minor?: number | null; posting_date?: string | null;
   supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[]; debitNotes?: { id: string }[] };
 type PostResult = { status: string; erpDocument?: string | null; replayed?: boolean; integrationStatus?: string; attempts?: number; error?: string | null };
 
@@ -137,6 +140,10 @@ export default function InvoicePage() {
               ['Company code / FY', `${inv.company_code} · ${inv.fiscal_year}`], ['Rules', inv.rule_set_version ?? '–'],
               ['Payment option', <ScfBadge key="po" option={inv.payment_option} />],
               ...(inv.discount_minor ? [['Early-payment discount', inr(inv.discount_minor)] as [string, string]] : []),
+              ...(inv.msme_capped ? [['MSME due date', `45 days from acceptance on ${date(inv.acceptance_date)} (MSMED Act s.15)`] as [string, string]] : []),
+              ...(inv.tds_section ? [['TDS', `${inv.tds_section} · ${inv.tds_rate}% on ${inr(inv.tds_base_minor ?? 0)} = ${inr(inv.withholding_tax_minor ?? 0)}`] as [string, string]] : []),
+              ...(inv.currency && inv.currency !== 'INR' ? [['Currency', `${inv.currency}${inv.fx_rate ? ` · rate ${inv.fx_rate} · ${inr(inv.gross_group_minor ?? 0)} in company currency` : ' · rate fixed at posting'}`] as [string, string]] : []),
+              ...(inv.posting_date ? [['Posting date', date(inv.posting_date)] as [string, string]] : []),
             ]} />
             {inv.irn && <p className="break-all font-mono text-[11px] text-slate-500">IRN {inv.irn}</p>}
             {inv.duplicate_of && <p className="text-sm text-amber-800">Suspected duplicate of {inv.duplicate_of}</p>}
@@ -220,7 +227,9 @@ export default function InvoicePage() {
               { key: 'run_ref', header: 'Run', render: (p) => p.run_ref ?? '–' },
               { key: 'value_date', header: 'Value date', render: (p) => date(p.value_date) },
               { key: 'status', header: 'Status', render: (p) => <StatusChip status={p.status} /> },
-              { key: 'amount_minor', header: 'Amount (net of credit notes)', align: 'right', render: (p) => inr(p.amount_minor) },
+              { key: 'bank_status', header: 'Bank', render: (p) => p.bank_status ? <span><StatusChip status={p.bank_status} />{p.bank_utr ? <span className="ml-1 font-mono text-xs text-slate-500">{p.bank_utr}</span> : null}{p.return_reason ? <span className="ml-1 text-xs text-slate-500">{p.return_reason}</span> : null}</span> : '–' },
+              { key: 'tds_minor', header: 'TDS', align: 'right', render: (p) => p.tds_minor ? inr(p.tds_minor) : '–' },
+              { key: 'amount_minor', header: 'Amount (net of credit notes and TDS)', align: 'right', render: (p) => inr(p.amount_minor) },
             ]} />
           ) },
         ] : []}

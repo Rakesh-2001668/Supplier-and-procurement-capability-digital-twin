@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:payment.returned",
+  "title": "payment.returned",
+  "description": "Payload (outbox_event.payload) of payment.returned on INVOICE. Produced by services/payables.py.",
+  "type": "object",
+  "properties": {
+    "payment": {},
+    "amountMinor": {},
+    "reason": {},
+    "clearingDocument": {}
+  },
+  "required": [
+    "payment",
+    "amountMinor",
+    "reason",
+    "clearingDocument"
+  ],
+  "additionalProperties": true
+}

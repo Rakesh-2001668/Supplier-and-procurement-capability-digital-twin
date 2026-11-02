@@ -37,7 +37,7 @@ ROLE_SCOPES: dict[str, set[str]] = {
     "QUALITY_INSPECTOR": {READ, TASKS, "quality:decide", "sourcing:evaluate"},
     "SERVICE_OWNER": {READ, TASKS, "ses:approve"},
     "AP_CLERK": {READ, TASKS, "invoice:capture", "invoice:resolve", "invoice:approve", "invoice:post"},
-    "FINANCE_CONTROLLER": {READ, TASKS, "payment:run", "savings:validate", "invoice:approve", "spend:read"},
+    "FINANCE_CONTROLLER": {READ, TASKS, "payment:run", "savings:validate", "invoice:approve", "spend:read", "period:close"},
     "PROCUREMENT_HEAD": {READ, TASKS, "spend:read"},
     "CPO": {READ, TASKS, "spend:read", "agents:manage"},
     "CAPEX_COMMITTEE": {READ, TASKS},

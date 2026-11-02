@@ -229,6 +229,14 @@ def set_status(session: Session, pf: PaymentFile, status: str, bank_ref: Optiona
         pf.bank_ref = bank_ref
     if status == "SENT":
         pf.sent_at = clock.now()
+        for payment, _ in _payments(session, pf.run_ref):
+            if payment.bank_status == "NOT_SENT":
+                payment.bank_status = "SENT"
+    elif status == "REJECTED":
+        # The bank refused the whole file (format, debtor account): nothing was paid, the payments go out again in a replacement file.
+        for payment, _ in _payments(session, pf.run_ref):
+            if payment.bank_status in ("SENT", "NOT_SENT"):
+                payment.bank_status = "NOT_SENT"
     outbox.emit(session, f"payment_file.{status.lower()}", "PAYMENT_FILE", pf.id, pf.number,
                 {"run": pf.run_ref, "status": status, "bankRef": pf.bank_ref, "totalMinor": pf.total_minor})
     return pf
@@ -259,3 +267,72 @@ def listing(session: Session) -> dict:
     return {"items": [view(pf) for pf in files], "nextCursor": None, "bankConnector": bank_connector()}
 
 
+
+
+# ---------------------------------------------------------------- bank acknowledgement per payment (F7-09)
+RESULTS = ("CREDITED", "RETURNED")
+
+
+def record_bank_results(session: Session, pf: PaymentFile, items: list[dict]) -> dict:
+    """The bank's statement of what happened to each payment of a SENT / ACKNOWLEDGED file: CREDITED with the bank's UTR, or RETURNED
+    with the reason (the payment is cancelled and the invoice becomes payable again, see payables.return_payment). Re-sending the same
+    result is accepted, a different one is refused; the whole call is atomic."""
+    from app.pic.services import payables
+    if pf.status not in ("SENT", "ACKNOWLEDGED"):
+        raise Problem(409, "ILLEGAL_TRANSITION", f"{pf.number} is {pf.status.lower()}: bank results are recorded once the file was sent")
+    if not items:
+        raise Problem(422, "VALIDATION_FAILED", "Give at least one payment result")
+    in_run = {payment.number: payment for payment, _ in _payments(session, pf.run_ref)}
+    cancelled = {p.number: p for p in session.execute(select(Payment).where(Payment.run_ref == pf.run_ref, Payment.status == "CANCELLED")).scalars()}
+    outcome = {"credited": [], "returned": [], "unchanged": []}
+    for item in items:
+        number, result = str(item.get("payment") or ""), str(item.get("status") or "").upper()
+        if result not in RESULTS:
+            raise Problem(422, "INVALID_STATUS", f"{number or 'item'}: status must be one of {list(RESULTS)}")
+        payment = in_run.get(number) or cancelled.get(number)
+        if payment is None:
+            raise Problem(404, "NOT_FOUND", f"Payment {number or '?'} is not part of {pf.run_ref}")
+        if result == "CREDITED":
+            utr = (item.get("utr") or "").strip()
+            if not utr:
+                raise Problem(422, "UTR_REQUIRED", f"{number}: give the bank's UTR / reference for a credited payment")
+            if payment.bank_status == "CREDITED":
+                if payment.bank_utr != utr:
+                    raise Problem(409, "BANK_RESULT_CONFLICT", f"{number} was already credited under UTR {payment.bank_utr}")
+                outcome["unchanged"].append(number)
+                continue
+            if payment.bank_status == "RETURNED":
+                raise Problem(409, "BANK_RESULT_CONFLICT", f"{number} was already returned by the bank")
+            payment.bank_status, payment.bank_utr, payment.bank_confirmed_at = "CREDITED", utr[:40], clock.now()
+            audit.record(session, "PAYMENT", payment.id, "BANK_CREDITED", object_ref=payment.number, after={"utr": payment.bank_utr, "file": pf.number})
+            outcome["credited"].append(number)
+        else:
+            reason = (item.get("reason") or "").strip()
+            if not reason:
+                raise Problem(422, "REASON_REQUIRED", f"{number}: give the bank's return reason")
+            if payment.bank_status == "RETURNED":
+                outcome["unchanged"].append(number)
+                continue
+            if payment.bank_status == "CREDITED":
+                raise Problem(409, "BANK_RESULT_CONFLICT", f"{number} was already credited under UTR {payment.bank_utr}")
+            payables.return_payment(session, payment, reason)
+            outcome["returned"].append(number)
+    outbox.emit(session, "payment_file.results_recorded", "PAYMENT_FILE", pf.id, pf.number,
+                {"run": pf.run_ref, "credited": len(outcome["credited"]), "returned": len(outcome["returned"])})
+    return {**outcome, **file_reconciliation(session, pf)}
+
+
+def file_reconciliation(session: Session, pf: PaymentFile) -> dict:
+    """The file against the bank's answers: every payment CREDITED (with its UTR) or RETURNED, the amounts that agree, what is still open."""
+    payments = session.execute(select(Payment).where(Payment.run_ref == pf.run_ref).order_by(Payment.number)).scalars().all()
+    live = [p for p in payments if p.status == "COMPLETED"]
+    credited = [p for p in live if p.bank_status == "CREDITED"]
+    returned = [p for p in payments if p.bank_status == "RETURNED"]
+    pending = [p for p in live if p.bank_status in ("NOT_SENT", "SENT")]
+    return {"file": pf.number, "run": pf.run_ref, "fileStatus": pf.status, "fileTotalMinor": pf.total_minor, "filePayments": pf.payments,
+            "creditedMinor": sum(p.amount_minor for p in credited), "returnedMinor": sum(p.amount_minor for p in returned),
+            "pendingMinor": sum(p.amount_minor for p in pending),
+            "reconciled": not pending and sum(p.amount_minor for p in credited + returned) == pf.total_minor,
+            "payments": [{"payment": p.number, "amountMinor": p.amount_minor, "status": p.status, "bankStatus": p.bank_status, "utr": p.bank_utr,
+                          "returnReason": p.return_reason,
+                          "confirmedAt": p.bank_confirmed_at.isoformat() if p.bank_confirmed_at else None} for p in payments]}

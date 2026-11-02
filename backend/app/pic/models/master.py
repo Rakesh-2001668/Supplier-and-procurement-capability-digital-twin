@@ -37,6 +37,11 @@ class Supplier(TenantScoped, Base):
     risk_tier: Mapped[Optional[str]] = mapped_column(String(10))
     payment_terms: Mapped[str] = mapped_column(String(10), default="N60")
     incoterms: Mapped[Optional[str]] = mapped_column(String(40))
+    # Finance (M10): MSME class (MICRO | SMALL | MEDIUM, Udyam registered) drives the 45-day payment rule of the MSMED Act s.15; the TDS
+    # section key (rule set TDS, e.g. 194C-OTH) tells the payables engine what to withhold when the supplier is paid.
+    msme_class: Mapped[Optional[str]] = mapped_column(String(10))
+    udyam_no: Mapped[Optional[str]] = mapped_column(String(30))
+    tds_section: Mapped[Optional[str]] = mapped_column(String(20))
     twin_ref: Mapped[Optional[str]] = mapped_column(String(40))
     screening: Mapped[dict] = mapped_column(JSONB, default=dict)
     contact_email: Mapped[Optional[str]] = mapped_column(String(200))

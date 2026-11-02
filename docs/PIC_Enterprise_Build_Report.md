@@ -4,7 +4,7 @@ Date: 2 November 2026. Written for: the product owner, as the record of what was
 
 ## 1. What was built
 
-Migrations 0008 to 0016 are chained in one line on top of 0007, with a single head. Upgrade, downgrade to 0007 and upgrade again, and `alembic check`, all passed on a scratch database (through 0014; 0015 and 0016 were each checked by their own engineers and applied to the local database).
+Migrations 0008 to 0017 are chained in one line on top of 0007, with a single head. Upgrade, downgrade to 0007 and upgrade again, and `alembic check`, all passed on a scratch database (through 0014; 0015 and 0016 were each checked by their own engineers and applied to the local database).
 
 | Area | Built | Migration |
 |---|---|---|
@@ -18,6 +18,7 @@ Migrations 0008 to 0016 are chained in one line on top of 0007, with a single he
 | Enterprise Admin: organisation management, purchasing org/group, user lifecycle, custom roles and permission matrix, template apply, tenant provisioning tool, approval-matrix editor | Admin engineer | 0015 |
 | Contracts completion: direct terminate, RATE_CARD and SOW, quantity and plant checks on POs, per-line alerts, obligation on-time KPI, clause review, compliance view | Contracts engineer | 0016 |
 | Mock stand-ins: clause library (37 base clauses, 85 fallbacks, 7 jurisdictions), mock e-signature provider, KAC contract portfolio (60 contracts) | Mock-data engineer | none |
+| Finance (M10 / F7): SOD-08 and SOD-09, MSME 45-day rule, TDS with s.197 certificates and 26Q/16A export, multi-currency invoices, bank acknowledgements and camt.053/MT940 import, ERP reversal of returned payments, period close with GR/IR snapshots, scheduled payment-due proposal (never pays by itself), supplier finance screen; analysis in `PIC_Finance_Module_Analysis.md` (70 rows, 67 verified) | Finance engineer | 0017 |
 
 ## 2. Test evidence
 
@@ -26,6 +27,8 @@ Migrations 0008 to 0016 are chained in one line on top of 0007, with a single he
 - Admin: the new journey test (12 steps through the real HTTP API) and the enterprise tests passed (26 tests). Browser: all 18 admin tabs open with no console errors or failed API calls; creating a company code, a plant and an invitation worked; a template preview dialog opened.
 - Contracts: 58-row traceability table (49 verified by the new journey test, 5 by existing tests, 4 partly verified); the contract workspace tabs for four contracts opened with no errors in the browser.
 - Frontend: `tsc --noEmit` exit 0; ESLint on the CI scope (PIC files) 0 errors and 2 warnings.
+- Finance (3 November): final full backend run 798 passed, 1 failed. The failure was an older KAC test that captured and approved an invoice as the same user, which the new SOD-08 rightly refuses; the test now approves as a second user and the KAC test files pass (23). The finance journey (21 steps, own tenant) and 30 unit tests pass. A browser pass found one defect the tests missed: invoice numbers containing slashes (`THT/27-28/0311`, i.e. 587 of 587 KAC invoices) returned 404 on the Documents, Exceptions, Lineage and Audit tabs because the generic document, lineage and audit routes did not accept a slash in the reference. Fixed with a path-style parameter and a regression test; after the fix all 11 invoice tabs load with no errors or failed calls.
+- Migration 0017 and the 3 November code have not been pushed or applied to production.
 
 ## 3. Open items and risks
 

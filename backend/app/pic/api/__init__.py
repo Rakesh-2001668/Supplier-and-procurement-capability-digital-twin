@@ -12,6 +12,7 @@ from app.pic.api import wave1_c  # noqa: E402  (wave 1 engineer C1: materials, s
 from app.pic.api import enterprise  # noqa: E402  (wave 1 engineer E: workflow designer, field mappings, SoD mitigation, password)
 from app.pic.api import erp_ai_ops  # noqa: E402  (wave 1 engineer F: ERP sync, twin, risk feeds, AI registry and gateway)
 from app.pic.api import admin_enterprise  # noqa: E402  (M13 enterprise administration: organisation, users, roles, templates)
+from app.pic.api import finance  # noqa: E402  (M10 finance completion: periods, TDS, bank results, payment proposal)
 from app.pic.platform import errors, http
 
 
@@ -27,3 +28,4 @@ def install(app: FastAPI) -> None:
     app.include_router(enterprise.router)
     app.include_router(erp_ai_ops.router)
     app.include_router(admin_enterprise.router)
+    app.include_router(finance.router)

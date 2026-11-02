@@ -54,6 +54,18 @@ class Invoice(TenantScoped, Base):
     # M10 early-payment / supply-chain finance: STANDARD | EARLY_DISCOUNT | SCF; the accepted discount reduces the payment.
     payment_option: Mapped[str] = mapped_column(String(15), nullable=False, default="STANDARD", server_default="STANDARD")
     discount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # Finance completion (migration 0017). MSMED Act s.15: the day goods / services were accepted starts the 45-day clock; ``msme_capped``
+    # says the due date was pulled forward to it. TDS: section key, rate and the base (net of credit notes) it applies to.
+    acceptance_date: Mapped[Optional[date]] = mapped_column(Date)
+    msme_capped: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    tds_section: Mapped[Optional[str]] = mapped_column(String(20))
+    tds_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 3))
+    tds_base_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # Foreign-currency invoices: rate to the company-code currency on the invoice date, and the gross in that currency.
+    fx_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 8))
+    fx_date: Mapped[Optional[date]] = mapped_column(Date)
+    gross_group_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    posting_date: Mapped[Optional[date]] = mapped_column(Date)  # the accounting date the ERP document was posted on (open posting period)
 
 
 class InvoiceLine(TenantScoped, Base):
@@ -117,7 +129,18 @@ class Payment(TenantScoped, Base):
     approved_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     # A debit note posted after its invoice was paid is paid on its own (payment_run); null for the invoice payment itself.
     debit_note_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    # Bank confirmation (migration 0017): NOT_SENT -> SENT (file sent) -> CREDITED (bank UTR) | RETURNED (bank returned the credit).
+    bank_status: Mapped[str] = mapped_column(String(10), nullable=False, default="NOT_SENT", server_default="NOT_SENT")
+    bank_utr: Mapped[Optional[str]] = mapped_column(String(40))
+    bank_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    return_reason: Mapped[Optional[str]] = mapped_column(Text)
+    tds_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # withheld from this payment (Form 26Q)
+    tds_base_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # the amount the TDS was deducted on
+    tds_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 3))        # rate applied at payment (certificate rate when s.197 applied)
+    tds_certificate: Mapped[Optional[str]] = mapped_column(String(40))         # s.197 certificate number used, if any
+    reversal_doc: Mapped[Optional[str]] = mapped_column(String(40))            # ERP reversal document of a returned payment
     __table_args__ = (
+        CheckConstraint("bank_status IN ('NOT_SENT','SENT','CREDITED','RETURNED')", name="bank_status"),
         # One live payment per invoice: blocks double payment at the database level.
         Index("uq_payment_invoice_live", "tenant_id", "invoice_id", unique=True,
               postgresql_where=text("status <> 'CANCELLED' AND debit_note_id IS NULL")),

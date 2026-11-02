@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:finance.period.closed",
+  "title": "finance.period.closed",
+  "description": "Payload (outbox_event.payload) of finance.period.closed on POSTING_PERIOD. Produced by services/finance_controls.py.",
+  "type": "object",
+  "properties": {
+    "companyCode": {},
+    "period": {},
+    "unpostedInvoices": {},
+    "grirAccrualMinor": {}
+  },
+  "required": [
+    "companyCode",
+    "period",
+    "unpostedInvoices",
+    "grirAccrualMinor"
+  ],
+  "additionalProperties": true
+}

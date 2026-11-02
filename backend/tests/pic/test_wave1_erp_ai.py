@@ -762,7 +762,10 @@ def test_payment_amount_keeps_back_the_withholding_tax():
     assert withholding.deduction_minor(NoTds) == 0
     import inspect
     from app.pic.services import payables
-    assert "withholding.deduction_minor(invoice)" in inspect.getsource(payables.run_payments if hasattr(payables, "run_payments") else payables)
+    # the payment run takes the tax from finance_controls.at_payment, which keeps the withholding migrated from the ERP (no TDS section) as it is
+    from app.pic.services import finance_controls
+    assert "finance_controls.at_payment_detail(session, invoice, run_date)" in inspect.getsource(payables)
+    assert finance_controls.at_payment(None, type("Migrated", (), {"tds_section": None, "tds_rate": None, "withholding_tax_minor": 2000})) == 2000
 
 
 # ================================================================ 56: Supplier Capability Twin connector

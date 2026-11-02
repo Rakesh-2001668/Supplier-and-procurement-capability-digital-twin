@@ -15,7 +15,7 @@ from app.pic.models import (
 )
 from app.pic.platform import agents as agent_catalogue
 from app.pic.platform import clock
-from app.pic.platform import job_defaults, p2p_defaults
+from app.pic.platform import finance_defaults, job_defaults, p2p_defaults
 from app.pic.platform.process_defs import baseline
 from app.pic.seed import clause_library, templates
 
@@ -89,6 +89,8 @@ RULE_SETS = {
                     "PO approval strategy (buyer lead = second buyer)"),
     "DMN-03": ({"pricePct": 1, "priceAbsMinor": 500 * 100, "qtyPct": 0, "sesPct": 0, "dupAmountMinor": 100, "dupDays": 3},
                "Invoice tolerances"),
+    "MSME": (finance_defaults.MSME_DEFAULT, "MSME payment rule: micro / small suppliers are paid within 45 days of acceptance (MSMED Act s.15-16)"),
+    "TDS": (finance_defaults.TDS_DEFAULT, "TDS sections, rates and thresholds withheld when a supplier is paid (illustrative until the tax team confirms)"),
     "RCV-TOLERANCE": ({"over_pct": "0", "under_pct": "0", "price_pct": "0"}, "Default receipt tolerance without contract"),
     "PURCHASE-TYPE-MATRIX": ({
         "STOCK": {"gr": True, "ir": True, "ses": False}, "NON_STOCK": {"gr": True, "ir": True, "ses": False},
@@ -234,6 +236,8 @@ SOD_RULES = [
     ("SOD-05", "SOURCING_AWARD", "BID_SCORE", "event_id", "SOLE_EVALUATOR", "Medium", "The sole evaluator of an event may not award it"),
     ("SOD-06", "MATERIAL_REQUEST", "MATERIAL_STEWARD_APPROVE", "material_request_id", None, "Medium", "Requester may not approve the same material as steward"),
     ("SOD-07", "SAVINGS_INITIATE", "SAVINGS_VALIDATE", "initiative_id", None, "High", "Savings owner may not validate the same savings"),
+    ("SOD-08", "INVOICE_CAPTURE", "INVOICE_APPROVE", "invoice_id", None, "High", "Whoever captured an invoice may not approve it (four-eyes)"),
+    ("SOD-09", "INVOICE_APPROVE", "PAYMENT_APPROVE", "invoice_id", None, "High", "Whoever approved an invoice may not release its payment"),
 ]
 
 

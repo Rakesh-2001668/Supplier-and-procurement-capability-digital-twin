@@ -491,25 +491,23 @@ def test_payment_due_proposes_the_run_to_the_finance_controller(wja, monkeypatch
         assert s.execute(select(AuditEvent).where(AuditEvent.action == "PAYMENT_RUN_EXECUTED")).first()
 
 
-def test_payment_due_auto_run_pays_only_what_is_due_today(wja, monkeypatch):
+def test_payment_due_never_pays_by_itself_even_when_the_rule_says_autorun(wja, monkeypatch):
     today = clock.today()
     add_rule(wja, "PAYMENT-RUN", "t-auto", {"horizonDays": 3, "autoRun": True, "approverRole": "FINANCE_CONTROLLER", "slaBusinessDays": 1},
              from_=today)
     invoice(wja, "AR-DUE", due=today)
     invoice(wja, "AR-LATER", due=today + timedelta(days=2))
-    seen = {}
     from app.pic.services import payables
 
-    def fake_run(session, run_date, include_not_due=False, supplier_codes=None, invoice_numbers=None):
-        seen.update(include_not_due=include_not_due, invoices=sorted(invoice_numbers or []))
-        return {"run": "PRUN-AUTO", "paid": [{"invoice": n} for n in invoice_numbers or []], "skipped": []}
+    def forbidden(*args, **kwargs):
+        raise AssertionError("the scheduled job must not run the payment run")
 
-    monkeypatch.setattr(payables, "payment_run", fake_run)
+    monkeypatch.setattr(payables, "payment_run", forbidden)
     result = jobs.run_now(wja, "payment-due", requested_by="u:test", params={})
-    assert result["result"]["action"] == "AUTO_RUN" and seen["include_not_due"] is False
-    assert "AR-LATER" not in seen["invoices"] and "AR-DUE" in seen["invoices"]
+    assert result["result"]["action"] in ("PROPOSED", "PROPOSAL_EXISTS") and result["result"]["autoRunIgnored"] is True   # one proposal per day
     with tenant_tx(wja) as s:
-        assert s.execute(select(AuditEvent).where(AuditEvent.action == "AUTO_RUN_BY_SCHEDULE")).first()
+        assert not s.execute(select(AuditEvent).where(AuditEvent.action == "AUTO_RUN_BY_SCHEDULE")).first()
+        assert s.execute(select(Task).where(Task.kind == job_handlers.PROPOSAL_KIND)).first() is not None
 
 
 # ================================================================ nightly reconciliation (2)

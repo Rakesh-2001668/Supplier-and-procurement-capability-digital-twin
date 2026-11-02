@@ -123,22 +123,25 @@ def record_avoidance(session: Session, *, source_event_id: uuid.UUID, requested_
 
 @outbox.consumer("invoice.posted", "savings-realised")
 def _realised(session: Session, event) -> None:
+    from app.pic.services import payables
     invoice = session.get(Invoice, uuid.UUID(event.payload["invoiceId"]))
-    credited: dict[int, Decimal] = {}
-    for note in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars():
-        for entry in note.lines:
-            credited[int(entry["invoice_line"])] = credited.get(int(entry["invoice_line"]), Decimal(0)) + D(entry["qty"])
+    # Quantity credit notes reduce the quantity realised; a value (price-difference) credit note leaves the quantity and lowers the
+    # price actually paid, so the realised saving is measured on the net value (same netting as the match, payables._credited_*).
+    credited = payables._credited_qty(session, invoice)
+    value_credited = payables._credited_value(session, invoice)
     booked = []
     for line in session.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)).scalars():
         po_line = session.get(PoLine, line.po_line_id)
         if po_line.material_id is None:
             continue
         initiative = session.execute(select(SavingsInitiative).where(SavingsInitiative.material_id == po_line.material_id,
-                                                                     SavingsInitiative.stage.in_(("NEGOTIATED", "CONTRACTED", "REALISING", "VALIDATED")))).scalar_one_or_none()
+                                                                     SavingsInitiative.stage.in_(("NEGOTIATED", "CONTRACTED", "REALISING", "VALIDATED")))
+                                     .order_by(SavingsInitiative.created_at).limit(1)).scalar_one_or_none()
         if initiative is None or str(invoice.supplier_id) not in (initiative.supplier_prices or {}):
             continue
         qty = line.qty - credited.get(line.line_no, Decimal(0))
-        amount = int(((Decimal(initiative.baseline_price_minor) - line.unit_price_minor) * qty).quantize(Decimal("1"), ROUND_HALF_UP))
+        paid_value = line_amount(qty, line.unit_price_minor) - value_credited.get(line.line_no, 0)
+        amount = int((Decimal(initiative.baseline_price_minor) * qty - Decimal(paid_value)).quantize(Decimal("1"), ROUND_HALF_UP))
         entry = _ledger(session, initiative, "REALISED", amount, True,
                         f"({initiative.baseline_price_minor/100:.2f} − {line.unit_price_minor/100:.2f}) × {qty} invoiced", "INVOICE",
                         f"{invoice.number}/{line.line_no}")

@@ -2,11 +2,11 @@
 
 Supplier-portal users only ever see documents of their own company.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func, or_, select
 
 from app.pic.api.deps import uow
 from app.pic.api.pagination import Page, paginate
@@ -194,19 +194,59 @@ def service_entries(status: Optional[str] = None, page: Page = Depends(), p: Pri
 
 
 @router.get("/invoices")
-def invoices(status: Optional[str] = None, page: Page = Depends(), p: Principal = Depends(PORTAL)):
+def invoices(status: Optional[str] = None, supplier: Optional[str] = None, company_code: Optional[str] = None, q: Optional[str] = None,
+             date_from: Optional[date] = None, date_to: Optional[date] = None, due_from: Optional[date] = None, due_to: Optional[date] = None,
+             payment_status: Optional[str] = None, payment_block: Optional[bool] = None, match_type: Optional[str] = None,
+             exception_type: Optional[str] = None, has_open_exceptions: Optional[bool] = None, msme: Optional[bool] = None,
+             min_gross_minor: Optional[int] = Query(None, ge=0), max_gross_minor: Optional[int] = Query(None, ge=0),
+             page: Page = Depends(), p: Principal = Depends(PORTAL)):
+    """INV-01 worklist: filter by status, supplier, company code, free text (document or supplier invoice number), invoice / due date,
+    payment status and block, match type, open exception type, MSME suppliers and gross range."""
     with uow(p) as s:
         codes = _supplier_codes(s)
-        open_exc = {}
-        for exc in s.execute(select(InvoiceException).where(InvoiceException.status == "OPEN")).scalars():
-            open_exc[exc.invoice_id] = open_exc.get(exc.invoice_id, 0) + 1
-        q = select(Invoice)
+        open_exc = dict(s.execute(select(InvoiceException.invoice_id, func.count()).where(InvoiceException.status == "OPEN")
+                                  .group_by(InvoiceException.invoice_id)).all())
+        query = select(Invoice)
         if status:
-            q = q.where(Invoice.status.in_([x.strip().upper() for x in status.split(",")]))
+            query = query.where(Invoice.status.in_([x.strip().upper() for x in status.split(",")]))
+        if supplier:
+            query = query.where(Invoice.supplier_id.in_(select(Supplier.id).where(Supplier.code.in_([x.strip() for x in supplier.split(",")]))))
+        if company_code:
+            query = query.where(Invoice.company_code == company_code)
+        if q:
+            like = f"%{q.strip().replace('%', '').replace('_', '')}%"
+            query = query.where(or_(Invoice.number.ilike(like), Invoice.supplier_invoice_no.ilike(like), Invoice.erp_doc_no.ilike(like)))
+        if date_from:
+            query = query.where(Invoice.invoice_date >= date_from)
+        if date_to:
+            query = query.where(Invoice.invoice_date <= date_to)
+        if due_from:
+            query = query.where(Invoice.due_date >= due_from)
+        if due_to:
+            query = query.where(Invoice.due_date <= due_to)
+        if payment_status:
+            query = query.where(Invoice.payment_status.in_([x.strip().upper() for x in payment_status.split(",")]))
+        if payment_block is not None:
+            query = query.where(Invoice.payment_block.is_(payment_block))
+        if match_type:
+            query = query.where(Invoice.match_type.in_([x.strip().upper() for x in match_type.split(",")]))
+        if exception_type:
+            query = query.where(Invoice.id.in_(select(InvoiceException.invoice_id).where(
+                InvoiceException.status == "OPEN", InvoiceException.type.in_([x.strip().upper() for x in exception_type.split(",")]))))
+        if has_open_exceptions is not None:
+            open_ids = select(InvoiceException.invoice_id).where(InvoiceException.status == "OPEN")
+            query = query.where(Invoice.id.in_(open_ids) if has_open_exceptions else Invoice.id.not_in(open_ids))
+        if msme is not None:
+            msme_ids = select(Supplier.id).where(Supplier.msme_class.is_not(None))
+            query = query.where(Invoice.supplier_id.in_(msme_ids) if msme else Invoice.supplier_id.not_in(msme_ids))
+        if min_gross_minor is not None:
+            query = query.where(Invoice.gross_minor >= min_gross_minor)
+        if max_gross_minor is not None:
+            query = query.where(Invoice.gross_minor <= max_gross_minor)
         if _is_supplier(p):
-            q = q.where(Invoice.supplier_id == p.supplier_id)
-        return paginate(s, q, Invoice, page, lambda i: row(i, extra={"supplier_code": codes.get(i.supplier_id),
-                                                                         "open_exceptions": open_exc.get(i.id, 0)}))
+            query = query.where(Invoice.supplier_id == p.supplier_id)
+        return paginate(s, query, Invoice, page, lambda i: row(i, extra={"supplier_code": codes.get(i.supplier_id),
+                                                                           "open_exceptions": open_exc.get(i.id, 0)}))
 
 
 @router.get("/suppliers")

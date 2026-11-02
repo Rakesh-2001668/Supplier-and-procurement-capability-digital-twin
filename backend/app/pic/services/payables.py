@@ -13,13 +13,14 @@ from app.pic.models import (
     BudgetCommitment, CreditNote, Invoice, InvoiceException, InvoiceLine, Payment, PoLine, PurchaseOrder, ReturnDelivery, Supplier,
     SupplierBankAccount, Task,
 )
+from app.pic.models import IntegrationMessage
 from app.pic.platform import abac
 from app.pic.platform import agents, audit, clock, crypto, integration, outbox, rules, sod, workflow
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition, not_found, rule_violation
 from app.pic.platform.money import D, fmt_inr, line_amount, pct_of, tax_amount, to_minor
 from app.pic.platform.serialize import jsonable
-from app.pic.services import debit_notes, early_payment, einvoice, ind_construction, ind_logistics, mandatory
+from app.pic.services import debit_notes, early_payment, einvoice, finance_controls, ind_construction, ind_logistics, mandatory
 from app.pic.services import order as order_svc
 from app.pic.services.common import days_from_terms, principal, require_supplier_user, supplier_ref
 
@@ -39,6 +40,8 @@ SM = StateMachine("INVOICE", {
     ("APPROVED", "rematch"): "MATCHING",
     ("APPROVED", "post"): "POSTED",
     ("POSTED", "pay"): "PAID",
+    # The beneficiary bank returned the credit after the ERP cleared the payment: the invoice is payable again.
+    ("PAID", "return_payment"): "POSTED",
     ("EXCEPTION", "reject"): "REJECTED",
     ("CAPTURED", "reject"): "REJECTED",
 })
@@ -199,6 +202,10 @@ def capture(session: Session, *, supplier: str, supplier_invoice_no: str, invoic
         if pos[n] is None:
             raise not_found("Purchase order", f"{n} of supplier {supplier_row.code} in company code {company_code}")
     first_po = next(iter(pos.values()))
+    currencies = {(po.currency or "INR").upper() for po in pos.values()}
+    if len(currencies) > 1:
+        raise Problem(422, "MIXED_CURRENCY", f"One invoice cannot bill orders in different currencies ({', '.join(sorted(currencies))})",
+                      rule_ref="F7-01")
     mandatory.check(session, "INVOICE_CAPTURE",
                     {"supplier_invoice_no": supplier_invoice_no, "invoice_date": invoice_date, "irn": irn, "company_code": company_code},
                     [{**{k: l.get(k) for k in mandatory.CATALOGUE["INVOICE_CAPTURE"]["lines"]}, "_line_no": index * 10}
@@ -208,10 +215,11 @@ def capture(session: Session, *, supplier: str, supplier_invoice_no: str, invoic
         tenant_id=current_tenant(session), number=_internal_number(session, supplier_row.code, supplier_invoice_no, fiscal_year),
         supplier_invoice_no=supplier_invoice_no, fiscal_year=fiscal_year, company_code=company_code, supplier_id=supplier_row.id,
         po_id=list(pos.values())[0].id if len(pos) == 1 else None, invoice_date=invoice_date, channel=channel.upper(), irn=irn,
-        currency="INR", net_minor=0, tax_minor=0, gross_minor=0, status="CAPTURED", created_by=p.user_id,
+        currency=currencies.copy().pop(), net_minor=0, tax_minor=0, gross_minor=0, status="CAPTURED", created_by=p.user_id,
     )
     session.add(invoice)
     session.flush()
+    sod.record(session, "INVOICE_CAPTURE", {"invoice_id": invoice.id})  # SOD-08: the capturer may not approve this invoice
     net_total = tax_total = 0
     for index, data in enumerate(lines, start=1):
         po = pos[str(data["po"])]
@@ -280,15 +288,22 @@ def _duplicate_check(session: Session, invoice: Invoice, instance) -> None:
         func.coalesce(Invoice.match_type, "") != RETENTION,  # a retention release is not a supplier invoice
         func.abs(Invoice.gross_minor - invoice.gross_minor) <= int(rule.body["dupAmountMinor"]),
         Invoice.invoice_date.between(invoice.invoice_date - window, invoice.invoice_date + window))).scalars().first()
-    if fuzzy:
-        invoice.duplicate_of = fuzzy.id
+    # OCR / re-keying variants of an earlier number (INV-0012 / inv 12 / INVO12) from the same supplier are held too.
+    variant = None if fuzzy or invoice.channel == ERS else finance_controls.number_variant_of(session, invoice)
+    similar = fuzzy or variant
+    if similar:
+        invoice.duplicate_of = similar.id
         invoice.payment_block = True
+        by_number = fuzzy is None
         session.add(InvoiceException(tenant_id=invoice.tenant_id, invoice_id=invoice.id, type="DUPLICATE",
-                                     delta={"similarTo": fuzzy.number}, detail=f"Amount and date match {fuzzy.number} within tolerance",
+                                     delta={"similarTo": similar.number, **({"variant": "NUMBER_NORMALISED"} if by_number else {})},
+                                     detail=(f"Invoice number {invoice.supplier_invoice_no} reads like {similar.supplier_invoice_no} ({similar.number}) from the "
+                                             "same supplier (OCR / formatting variant)" if by_number
+                                             else f"Amount and date match {similar.number} within tolerance"),
                                      suggested_action="Hold; confirm with supplier whether this is a duplicate", status="OPEN",
                                      created_by=principal(session).user_id))
         SM.apply(session, invoice, "hold", rule_set_version=rule.ref)
-        workflow.step(session, instance, "F7-02", outcome=f"possible duplicate of {fuzzy.number}: held")
+        workflow.step(session, instance, "F7-02", outcome=f"possible duplicate of {similar.number}: held")
         workflow.wait(session, instance, "F7-05", outcome="resolve duplicate hold")
         return
     workflow.step(session, instance, "F7-02", outcome="captured; no duplicate (exact key and amount ±₹1 / date ±3 days)")
@@ -516,6 +531,7 @@ def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_no
     require_supplier_user(session, invoice.supplier_id)
     if invoice.status == "REJECTED":
         raise illegal_transition("Invoice", invoice.number, invoice.status, "credit")
+    finance_controls.assert_open(session, invoice.company_code, clock.today(), f"credit note against {invoice.number}")
     if not (reason or "").strip():
         raise Problem(422, "REASON_REQUIRED", "Give the reason for the credit note", rule_ref="DMN-03")
     if not lines:
@@ -788,11 +804,13 @@ def over_claimed(session: Session, invoice: Invoice) -> list[str]:
 def approve(session: Session, invoice: Invoice) -> Invoice:
     abac.guard(session, "INVOICE_APPROVE", invoice)
     sod.guard(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
+    sod.guard(session, "INVOICE_APPROVE", {"invoice_id": invoice.id})  # SOD-08: whoever captured the invoice cannot approve it
     if invoice.status == "MATCHED" and over_claimed(session, invoice):
         match(session, invoice)  # back through the match: the over-claim is raised as an exception (payment block)
         return invoice
     SM.apply(session, invoice, "approve", rule_set_version=invoice.rule_set_version)
     invoice.approved_by = principal(session).user_id
+    sod.record(session, "INVOICE_APPROVE", {"invoice_id": invoice.id})  # SOD-09: the approver cannot release its payment
     return invoice
 
 
@@ -820,6 +838,8 @@ def post(session: Session, invoice: Invoice, idempotency_key: Optional[str]) -> 
     if problems := over_claimed(session, invoice):
         match(session, invoice)  # the receipt was used up meanwhile: back to matching, raised as an exception
         return {"status": invoice.status, "rematched": True, "problems": problems}
+    finance_controls.assert_open(session, invoice.company_code, clock.today(), f"invoice {invoice.number}")  # cut-off: no posting into a closed period
+    _fix_fx_and_tds(session, invoice)
     sod.record(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
     invoice.posting_key = expected
     credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
@@ -835,6 +855,7 @@ def post(session: Session, invoice: Invoice, idempotency_key: Optional[str]) -> 
                                   payload={"invoice": invoice.supplier_invoice_no, "supplier": supplier.code, "companyCode": invoice.company_code,
                                            "grossMinor": invoice.gross_minor - credit, "creditNotes": credit,
                                            "irn": invoice.irn, "fiscalYear": invoice.fiscal_year, **retention,
+                                           **_finance_payload(invoice),
                                            **ind_construction.post_payload(session, invoice)})
     if retention and message.attempts == 0:
         audit.record(session, "INVOICE", invoice.id, "RETENTION_WITHHELD", object_ref=invoice.number,
@@ -843,6 +864,36 @@ def post(session: Session, invoice: Invoice, idempotency_key: Optional[str]) -> 
     if message.status != "POSTED":
         return {"status": "POSTING", "integrationStatus": message.status, "attempts": message.attempts, "error": message.last_error}
     return {"status": invoice.status, "erpDocument": invoice.erp_doc_no}
+
+
+def _fix_fx_and_tds(session: Session, invoice: Invoice) -> None:
+    """Fixed once, at the first posting attempt, so a retry sends the same payload: the exchange rate of a foreign-currency invoice and
+    the TDS the supplier's payment keeps back (TDS section on the supplier master, rule set TDS)."""
+    if invoice.fx_rate is None:
+        fx = finance_controls.fx_for(session, invoice)
+        if fx is not None:
+            invoice.fx_rate, invoice.fx_date, invoice.gross_group_minor = fx
+            audit.record(session, "INVOICE", invoice.id, "FX_RATE_FIXED", object_ref=invoice.number,
+                         after={"currency": invoice.currency, "rate": str(fx[0]), "rateDate": fx[1].isoformat(), "grossGroupMinor": fx[2]})
+    if invoice.tds_section is None and invoice.match_type != RETENTION:
+        supplier = session.get(Supplier, invoice.supplier_id)
+        tds = finance_controls.compute_tds(session, invoice, supplier)
+        if tds:
+            invoice.tds_section, invoice.tds_rate, invoice.tds_base_minor = tds["section"], tds["ratePct"], tds["taxableMinor"]
+            invoice.withholding_tax_minor = tds["tdsMinor"]
+            audit.record(session, "INVOICE", invoice.id, "TDS_DETERMINED", object_ref=invoice.number,
+                         after={k: (str(v) if isinstance(v, Decimal) else v) for k, v in tds.items()}, rule_set_version="TDS")
+
+
+def _finance_payload(invoice: Invoice) -> dict:
+    """Extra SUPPLIER_INVOICE payload; absent for a plain home-currency invoice without TDS so existing message hashes stay valid."""
+    out: dict = {}
+    if invoice.currency and invoice.currency != "INR":
+        out.update({"currency": invoice.currency, "fxRate": str(invoice.fx_rate) if invoice.fx_rate else None,
+                    "grossGroupMinor": invoice.gross_group_minor})
+    if invoice.tds_section and invoice.withholding_tax_minor:
+        out.update({"tdsSection": invoice.tds_section, "tdsRatePct": str(invoice.tds_rate), "tdsMinor": invoice.withholding_tax_minor})
+    return out
 
 
 @integration.on_posted("SUPPLIER_INVOICE")
@@ -854,7 +905,12 @@ def _invoice_posted(session: Session, message) -> None:
     invoice.payment_block = supplier_blocked(session, invoice)
     supplier = session.get(Supplier, invoice.supplier_id)
     terms = payment_terms_of(session, invoice)
-    invoice.due_date = invoice.invoice_date + timedelta(days=days_from_terms(terms))
+    invoice.due_date, invoice.msme_capped, invoice.acceptance_date = finance_controls.due_date(session, invoice, days_from_terms(terms))
+    invoice.posting_date = clock.today()
+    if invoice.msme_capped:
+        audit.record(session, "INVOICE", invoice.id, "DUE_DATE_MSME_CAPPED", object_ref=invoice.number,
+                     after={"terms": terms, "dueDate": invoice.due_date.isoformat(), "acceptanceDate": invoice.acceptance_date.isoformat()},
+                     reason="MSMED Act s.15: payment within 45 days of acceptance")
     credited = _credited_qty(session, invoice)
     value_credited = _credited_value(session, invoice)
     touched_pos = set()
@@ -912,6 +968,75 @@ def _payment_posted(session: Session, message) -> None:
         workflow.end(session, instance, "F7-09", outcome=f"paid; ERP clearing {message.erp_doc_no}; reconciled")
 
 
+def return_payment(session: Session, payment: Payment, reason: str) -> Payment:
+    """The beneficiary bank returned the credit (closed account, wrong IFSC...): the payment is cancelled, the invoice (and the debit notes
+    that were netted into it) payable again in the next run, and finance is told the ERP clearing document must be reversed (the
+    reconciliation lists it until it is). Cancelling frees the one-live-payment-per-invoice index."""
+    if payment.status != "COMPLETED":
+        raise Problem(409, "ILLEGAL_TRANSITION", f"Payment {payment.number} is {payment.status.lower()}: only a completed payment can be returned")
+    if not (reason or "").strip():
+        raise Problem(422, "REASON_REQUIRED", "Give the bank's return reason")
+    from app.pic.models import DebitNote
+    invoice = session.get(Invoice, payment.invoice_id)
+    clearing = session.execute(select(IntegrationMessage.erp_doc_no).where(
+        IntegrationMessage.idempotency_key == f"PAY|{payment.number}")).scalar_one_or_none()
+    payment.status, payment.bank_status, payment.return_reason, payment.bank_confirmed_at = "CANCELLED", "RETURNED", reason, clock.now()
+    reversal = _request_erp_reversal(session, payment, invoice, clearing, reason) if clearing else None
+    if payment.debit_note_id:
+        note = session.get(DebitNote, payment.debit_note_id)
+        if note is not None:
+            note.payment_status = "UNPAID"
+    else:
+        if invoice.status == "PAID":
+            SM.apply(session, invoice, "return_payment", reason=reason, extra_after={"payment": payment.number})
+        invoice.payment_status = "UNPAID"
+        for note in debit_notes.notes_of(session, invoice, debit_notes.SETTLED):
+            if note.payment_status in ("IN_PAYMENT", "PAID"):
+                note.payment_status = "UNPAID"
+    audit.record(session, "INVOICE", invoice.id, "PAYMENT_RETURNED", object_ref=invoice.number, reason=reason,
+                 after={"payment": payment.number, "amountMinor": payment.amount_minor, "clearingDocument": clearing,
+                        "erpReversalRequired": clearing is not None, "erpReversal": reversal})
+    outbox.emit(session, "payment.returned", "INVOICE", invoice.id, invoice.number,
+                {"payment": payment.number, "amountMinor": payment.amount_minor, "reason": reason, "clearingDocument": clearing})
+    return payment
+
+
+REVERSAL = "PAYMENT_REVERSAL"
+
+
+def _request_erp_reversal(session: Session, payment: Payment, invoice: Invoice, clearing: str, reason: str) -> dict:
+    """Ask the ERP to reverse the clearing document of a payment the bank returned: one idempotent PAYMENT_REVERSAL message per payment
+    (key PAYREV|<payment>), retried and replayable like every message. A connector that does not map it leaves the reversal to the treasury
+    clerk (the reconciliation item stays open until the ERP document shows it as reversed)."""
+    from app.pic.platform import connectors
+    target = integration.target_system(session, invoice.company_code)
+    if not connectors.maps(target, REVERSAL):
+        return {"status": "MANUAL", "detail": f"the {target} connector does not map {REVERSAL}: reverse the clearing document in the ERP"}
+    message = integration.enqueue(session, target_system=target, message_type=REVERSAL, idempotency_key=f"PAYREV|{payment.number}",
+                                  object_type="INVOICE", object_id=invoice.id, object_ref=invoice.number,
+                                  payload={"payment": payment.number, "clearingDocument": clearing, "amountMinor": payment.amount_minor,
+                                           "companyCode": invoice.company_code, "reason": reason})
+    integration.process_isolated(session, message)
+    return {"status": message.status, "key": message.idempotency_key, "document": message.erp_doc_no}
+
+
+@integration.on_posted(REVERSAL)
+def _payment_reversed(session: Session, message) -> None:
+    """The ERP confirmed the reversal: the clearing document is marked reversed, which closes PAYMENT_RETURN_OPEN in the reconciliation."""
+    from app.pic.models import ErpDocument
+    number = (message.payload or {}).get("payment")
+    payment = session.execute(select(Payment).where(Payment.number == number)).scalar_one_or_none()
+    if payment is None:
+        return
+    payment.reversal_doc = message.erp_doc_no
+    original = session.execute(select(ErpDocument).where(ErpDocument.system == message.target_system,
+                                                         ErpDocument.external_ref == f"PAY|{number}")).scalar_one_or_none()
+    if original is not None:
+        original.payload = {**(original.payload or {}), "reversedBy": message.erp_doc_no}
+    audit.record(session, "INVOICE", payment.invoice_id, "PAYMENT_REVERSED_IN_ERP", object_ref=number,
+                 after={"payment": number, "reversalDocument": message.erp_doc_no})
+
+
 def payment_terms_of(session: Session, invoice: Invoice) -> str:
     """The terms the invoice is due under: the purchase order's (inherited from the contract or agreed on the PO), the
     supplier master's only when the invoice has no PO."""
@@ -944,10 +1069,9 @@ def _consume_budget(session: Session, amounts_by_requisition: dict[uuid.UUID, in
 
 
 # ---------------------------------------------------------------- payment run (F7-07/09)
-def payment_run(session: Session, run_date: date, include_not_due: bool = False,
-                supplier_codes: Optional[list[str]] = None, invoice_numbers: Optional[list[str]] = None) -> dict:
-    """Pay the posted, unblocked invoices due by run_date; supplier_codes / invoice_numbers narrow the run (F7-07)."""
-    p = principal(session)
+def _due_invoices(session: Session, run_date: date, include_not_due: bool, supplier_codes: Optional[list[str]],
+                  invoice_numbers: Optional[list[str]]) -> tuple[list[Invoice], dict]:
+    """POSTED, unblocked, unpaid invoices due by run_date (all when include_not_due), narrowed by supplier and invoice number."""
     query = select(Invoice).where(Invoice.status == "POSTED", Invoice.payment_status == "UNPAID", Invoice.payment_block.is_(False))
     if not include_not_due:
         query = query.where(Invoice.due_date <= run_date)
@@ -966,55 +1090,115 @@ def payment_run(session: Session, run_date: date, include_not_due: bool = False,
             raise Problem(404, "INVOICE_NOT_FOUND", f"No invoice {', '.join(missing)}")
         query = query.where(Invoice.number.in_(numbers))
         selection["invoices"] = numbers
+    return session.execute(query.order_by(Invoice.due_date, Invoice.number)).scalars().all(), selection
+
+
+def _assess_payment(session: Session, invoice: Invoice, run_date: date, *, preview: bool) -> dict:
+    """What the payment run would do with one invoice: ``{"skip": reason}`` or the amount and the parts it is made of. Shared by the
+    run and the proposal, so the proposal is exactly what the run will pay."""
+    from app.pic.platform import connectors
+    p = principal(session)
+    supplier = session.get(Supplier, invoice.supplier_id)
+    if supplier.status in ("BLOCKED", "MERGED"):
+        return {"skip": f"supplier {supplier.code} is {supplier.status.lower()}"}
+    if finance_controls.is_closed(session, invoice.company_code, run_date):
+        return {"skip": f"posting period {finance_controls.period_of(run_date)} of company code {invoice.company_code} is closed: "
+                        "choose a run date in an open period"}
+    credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
+    debit_gross, debit_list = debit_notes.payable_adjustment(session, invoice)  # posted debit notes net into the payment
+    discount = early_payment.deduction_minor(invoice)                            # accepted early-payment discount
+    tds_detail = finance_controls.at_payment_detail(session, invoice, run_date)    # TDS kept back for the tax authority (s.197 certificate if valid)
+    rate = tds_detail["ratePct"] if tds_detail["ratePct"] is not None else invoice.tds_rate
+    note_tds = sum(finance_controls.note_tds_at_payment(n, rate) for n in debit_list)   # TDS on the debit notes netted into this payment
+    tds = tds_detail["tdsMinor"] + note_tds
+    amount = (invoice.gross_minor - credit + debit_gross - (invoice.retention_minor or 0) - discount
+              - ind_construction.payment_deduction_minor(session, invoice) - tds)
+    if amount <= 0:
+        return {"skip": f"nothing payable: net {fmt_inr(amount)} after credit notes and retention"}
+    blocked = ind_construction.payment_blocker(session, invoice)
+    if blocked:
+        return {"skip": blocked}
+    target = integration.target_system(session, invoice.company_code)
+    if not connectors.maps(target, "PAYMENT"):
+        return {"skip": f"the {target} connector does not map PAYMENT: pay and clear it in the ERP"}
+    account = session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == supplier.id,
+                                                                SupplierBankAccount.active.is_(True))).scalar_one_or_none()
+    if account is None:
+        return {"skip": "no verified bank account"}
+    if account.payable_from and account.payable_from > clock.now():
+        return {"skip": f"bank change cooling-off until {account.payable_from.isoformat()}"}
+    refs = {"supplier_id": supplier.id, "invoice_id": invoice.id}
+    try:
+        abac.guard(session, "PAYMENT_RUN", invoice)
+        if preview:
+            hit = sod.conflicts(session, "PAYMENT_APPROVE", refs, p.user_id)
+            if hit:
+                return {"skip": f"{hit[0].code}: {hit[0].description}"}
+        else:
+            sod.guard(session, "PAYMENT_APPROVE", refs)
+    except Problem as exc:
+        return {"skip": exc.detail}
+    return {"supplier": supplier, "account": account, "target": target, "amount": amount, "credit": credit, "debit_gross": debit_gross,
+            "debit_list": debit_list, "discount": discount, "tds": tds, "tds_rate": rate, "tds_certificate": tds_detail["certificate"],
+            "tds_base": tds_detail["baseMinor"] + sum(int(n.tds_base_minor or 0) for n in debit_list)}
+
+
+def payment_proposal(session: Session, run_date: date, include_not_due: bool = False, supplier_codes: Optional[list[str]] = None,
+                     invoice_numbers: Optional[list[str]] = None) -> dict:
+    """F7-07 payment-due proposal: what a run on ``run_date`` would pay and skip (and why), the totals by supplier, MSME invoices
+    first. Writes nothing and calls no ERP."""
+    invoices, selection = _due_invoices(session, run_date, include_not_due, supplier_codes, invoice_numbers)
+    items, skipped = [], []
+    for invoice in invoices:
+        decision = _assess_payment(session, invoice, run_date, preview=True)
+        if "skip" in decision:
+            skipped.append({"invoice": invoice.number, "supplier": session.get(Supplier, invoice.supplier_id).code, "reason": decision["skip"]})
+            continue
+        supplier = decision["supplier"]
+        items.append({"invoice": invoice.number, "supplier": supplier.code, "supplierName": supplier.legal_name,
+                      "dueDate": invoice.due_date.isoformat(), "overdueDays": max((run_date - invoice.due_date).days, 0),
+                      "msme": finance_controls.is_msme(session, supplier), "msmeCapped": invoice.msme_capped, "grossMinor": invoice.gross_minor,
+                      "creditNotesMinor": decision["credit"], "debitNotesMinor": decision["debit_gross"],
+                      "retentionMinor": invoice.retention_minor or 0, "discountMinor": decision["discount"], "tdsMinor": decision["tds"],
+                      "amountMinor": decision["amount"], "currency": invoice.currency})
+    items.sort(key=lambda i: (not i["msme"], i["dueDate"], i["invoice"]))
+    by_supplier: dict[str, dict] = {}
+    for item in items:
+        entry = by_supplier.setdefault(item["supplier"], {"supplier": item["supplier"], "invoices": 0, "amountMinor": 0, "currency": item["currency"]})
+        entry["invoices"] += 1
+        entry["amountMinor"] += item["amountMinor"]
+    return {"runDate": run_date.isoformat(), "includeNotDue": include_not_due, "items": items, "skipped": skipped,
+            "bySupplier": list(by_supplier.values()), "totalMinor": sum(i["amountMinor"] for i in items if i["currency"] == "INR"),
+            **({"selection": selection} if selection else {})}
+
+
+def payment_run(session: Session, run_date: date, include_not_due: bool = False,
+                supplier_codes: Optional[list[str]] = None, invoice_numbers: Optional[list[str]] = None) -> dict:
+    """Pay the posted, unblocked invoices due by run_date; supplier_codes / invoice_numbers narrow the run (F7-07)."""
+    p = principal(session)
     early_payment.lapse_missed(session, run_date)  # accepted early-payment offers whose pay-on date has passed
+    invoices, selection = _due_invoices(session, run_date, include_not_due, supplier_codes, invoice_numbers)
     run_ref = next_number(session, "PAYMENT_RUN")
     paid, skipped = [], []
-    from app.pic.platform import connectors
-    for invoice in session.execute(query.order_by(Invoice.due_date)).scalars().all():
-        supplier = session.get(Supplier, invoice.supplier_id)
-        if supplier.status in ("BLOCKED", "MERGED"):
-            skipped.append({"invoice": invoice.number, "reason": f"supplier {supplier.code} is {supplier.status.lower()}"})
+    for invoice in invoices:
+        decision = _assess_payment(session, invoice, run_date, preview=False)
+        if "skip" in decision:
+            skipped.append({"invoice": invoice.number, "reason": decision["skip"]})
             continue
-        credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
-        from app.pic.services import withholding   # TDS: payment amount hook (services/withholding.py)
-        debit_gross, debit_list = debit_notes.payable_adjustment(session, invoice)  # posted debit notes net into the payment
-        discount = early_payment.deduction_minor(invoice)                            # accepted early-payment discount
-        amount = (invoice.gross_minor - credit + debit_gross - (invoice.retention_minor or 0) - discount
-                  - ind_construction.payment_deduction_minor(session, invoice) - withholding.deduction_minor(invoice))
-        if amount <= 0:
-            skipped.append({"invoice": invoice.number, "reason": f"nothing payable: net {fmt_inr(amount)} after credit notes and retention"})
-            continue
-        blocked = ind_construction.payment_blocker(session, invoice)
-        if blocked:
-            skipped.append({"invoice": invoice.number, "reason": blocked})
-            continue
-        target = integration.target_system(session, invoice.company_code)
-        if not connectors.maps(target, "PAYMENT"):
-            skipped.append({"invoice": invoice.number, "reason": f"the {target} connector does not map PAYMENT: pay and clear it in the ERP"})
-            continue
-        account = session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == supplier.id,
-                                                                    SupplierBankAccount.active.is_(True))).scalar_one_or_none()
-        if account is None:
-            skipped.append({"invoice": invoice.number, "reason": "no verified bank account"})
-            continue
-        if account.payable_from and account.payable_from > clock.now():
-            skipped.append({"invoice": invoice.number, "reason": f"bank change cooling-off until {account.payable_from.isoformat()}"})
-            continue
-        try:
-            abac.guard(session, "PAYMENT_RUN", invoice)
-            sod.guard(session, "PAYMENT_APPROVE", {"supplier_id": supplier.id})
-        except Problem as exc:
-            skipped.append({"invoice": invoice.number, "reason": exc.detail})
-            continue
+        supplier, account, target = decision["supplier"], decision["account"], decision["target"]
+        amount, discount, tds = decision["amount"], decision["discount"], decision["tds"]
+        tds_rate, tds_certificate, tds_base = decision["tds_rate"], decision["tds_certificate"], decision["tds_base"]
+        debit_list, debit_gross = decision["debit_list"], decision["debit_gross"]
         if account.verified_on and (run_date - account.verified_on).days <= 30:
             audit.record(session, "INVOICE", invoice.id, "BANK_CHANGE_RECENT_ALERT", object_ref=invoice.number,
                          reason="Bank details changed within 30 days of this payment", after={"verifiedOn": account.verified_on.isoformat()})
         payment = Payment(tenant_id=invoice.tenant_id, number=next_number(session, "PAYMENT"), invoice_id=invoice.id, supplier_id=supplier.id,
-                          bank_account_id=account.id, amount_minor=amount,
-                          value_date=run_date, status="COMPLETED", run_ref=run_ref, approved_by=p.user_id, created_by=p.user_id)
+                          bank_account_id=account.id, amount_minor=amount, currency=invoice.currency or "INR", tds_minor=tds,
+                          tds_base_minor=tds_base if tds or tds_certificate else 0, tds_rate=tds_rate if tds or tds_certificate else None,
+                          tds_certificate=tds_certificate, value_date=run_date, status="COMPLETED", run_ref=run_ref, approved_by=p.user_id, created_by=p.user_id)
         session.add(payment)
         session.flush()
-        sod.record(session, "PAYMENT_APPROVE", {"supplier_id": supplier.id})
+        sod.record(session, "PAYMENT_APPROVE", {"supplier_id": supplier.id, "invoice_id": invoice.id})
         # Paid in the run (the payment record and its unique index stop a second payment); the invoice becomes PAID and the
         # process ends "reconciled" only when the ERP has posted the payment (_payment_posted).
         invoice.payment_status = "IN_PAYMENT"
@@ -1022,6 +1206,8 @@ def payment_run(session: Session, run_date: date, include_not_due: bool = False,
             note.payment_status = "IN_PAYMENT"
         if discount:
             early_payment.applied(session, invoice)
+        interest = (finance_controls.msme_interest_minor(session, amount, invoice.due_date, run_date)
+                    if finance_controls.is_msme(session, supplier) else None)
         message = integration.enqueue(session, target_system=target, message_type="PAYMENT",
                                       idempotency_key=f"PAY|{payment.number}",
                                       object_type="INVOICE", object_id=invoice.id, object_ref=invoice.number,
@@ -1029,6 +1215,9 @@ def payment_run(session: Session, run_date: date, include_not_due: bool = False,
                                                "companyCode": invoice.company_code, **_retention_payment_refs(session, invoice),
                                                **({"debitNotes": [n.number for n in debit_list], "debitMemoMinor": debit_gross} if debit_list else {}),
                                                **({"earlyPaymentDiscountMinor": discount} if discount else {}),
+                                               **({"tdsMinor": tds, "tdsSection": invoice.tds_section} if tds else {}),
+                                               **({"tdsCertificate": tds_certificate} if tds_certificate else {}),
+                                               **({"currency": invoice.currency} if invoice.currency and invoice.currency != "INR" else {}),
                                                **({"scf": True} if invoice.payment_option == "SCF" else {}),
                                                **ind_construction.payment_payload(session, invoice)})
         link(session, "INVOICE", invoice.id, invoice.number, "PAYMENT", payment.id, payment.number, "paid_by")
@@ -1036,7 +1225,10 @@ def payment_run(session: Session, run_date: date, include_not_due: bool = False,
         workflow.step(session, instance, "F7-07", outcome=f"{run_ref}: {payment.number} {fmt_inr(payment.amount_minor)}")
         integration.process(session, message)
         paid.append({"invoice": invoice.number, "payment": payment.number, "amountMinor": payment.amount_minor, "clearing": message.erp_doc_no,
-                     "integrationStatus": message.status, **({"error": message.last_error} if message.status != "POSTED" else {})})
+                     "integrationStatus": message.status, "dueDate": invoice.due_date.isoformat(), "tdsMinor": tds, "discountMinor": discount,
+                     "currency": invoice.currency, "msme": finance_controls.is_msme(session, supplier),
+                     **({"msmeInterestMinor": interest} if interest else {}),
+                     **({"error": message.last_error} if message.status != "POSTED" else {})})
     _pay_late_debit_notes(session, run_date, run_ref, include_not_due, supplier_codes, invoice_numbers, paid, skipped)
     audit.record(session, "PAYMENT_RUN", uuid.uuid5(uuid.NAMESPACE_URL, run_ref), "EXECUTED", object_ref=run_ref,
                  after={"paid": len(paid), "skipped": skipped, **({"selection": selection} if selection else {})})
@@ -1062,7 +1254,10 @@ def _pay_late_debit_notes(session: Session, run_date: date, run_ref: str, includ
         due = note.note_date + timedelta(days=days_from_terms(payment_terms_of(session, invoice)))
         if due > run_date and not include_not_due:
             continue
-        amount = note.gross_minor - (note.retention_minor or 0)
+        tds_detail = finance_controls.at_payment_detail(session, invoice, run_date)
+        note_rate = tds_detail["ratePct"] if tds_detail["ratePct"] is not None else invoice.tds_rate
+        note_tds = finance_controls.note_tds_at_payment(note, note_rate)
+        amount = note.gross_minor - (note.retention_minor or 0) - note_tds
         target = integration.target_system(session, invoice.company_code)
         account = session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id == supplier.id,
                                                                     SupplierBankAccount.active.is_(True))).scalar_one_or_none()
@@ -1087,7 +1282,9 @@ def _pay_late_debit_notes(session: Session, run_date: date, run_ref: str, includ
             continue
         payment = Payment(tenant_id=note.tenant_id, number=next_number(session, "PAYMENT"), invoice_id=invoice.id, supplier_id=supplier.id,
                           bank_account_id=account.id, amount_minor=amount, value_date=run_date, status="COMPLETED", run_ref=run_ref,
-                          approved_by=p.user_id, debit_note_id=note.id, created_by=p.user_id)
+                          approved_by=p.user_id, debit_note_id=note.id, created_by=p.user_id, tds_minor=note_tds,
+                          tds_base_minor=int(note.tds_base_minor or 0) if note_tds else 0, tds_rate=note_rate if note_tds else None,
+                          currency=invoice.currency or "INR")
         session.add(payment)
         session.flush()
         sod.record(session, "PAYMENT_APPROVE", {"supplier_id": supplier.id})
@@ -1276,12 +1473,14 @@ def settle_consignment(session: Session, *, supplier: str, period_to: date, comp
     return invoice
 
 
-def grir(session: Session) -> list[dict]:
+def grir(session: Session, company_code: Optional[str] = None) -> list[dict]:
     """Received-not-invoiced accruals by PO line (consignment: withdrawn-not-settled, the only quantity that is a liability)."""
     from app.pic.services.receiving import consignment_withdrawn
     rows = []
-    found = session.execute(select(PoLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
-        PoLine.accepted_qty > PoLine.invoiced_qty)).all()
+    query = select(PoLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(PoLine.accepted_qty > PoLine.invoiced_qty)
+    if company_code:
+        query = query.where(PurchaseOrder.company_code == company_code)
+    found = session.execute(query).all()
     withdrawn = consignment_withdrawn(session, [line.id for line, _ in found if line.ers])
     for line, po in found:
         qty = (withdrawn.get(line.id, Decimal(0)) if line.ers else line.accepted_qty) - line.invoiced_qty
@@ -1374,6 +1573,14 @@ def _reconcile_payments_and_memos(session: Session, company_code: str, target_sy
             items.append(("PAYMENT_MISSING_IN_ERP", payment.number, None, payment.amount_minor, None, "PAYMENT"))
         elif amount(doc) != payment.amount_minor:
             items.append(("PAYMENT_AMOUNT_MISMATCH", payment.number, doc.doc_no, payment.amount_minor, amount(doc), "PAYMENT"))
+    # A payment the bank returned is cancelled on the platform; its ERP clearing document has to be reversed there.
+    for payment in session.execute(select(Payment).join(Invoice, Invoice.id == Payment.invoice_id).where(
+            Invoice.company_code == company_code, Payment.status == "CANCELLED", Payment.bank_status == "RETURNED").order_by(Payment.number)).scalars():
+        key = f"PAY|{payment.number}"
+        seen.add(key)
+        doc = pay_docs.get(key)
+        if doc is not None and not (doc.payload or {}).get("reversedBy"):
+            items.append(("PAYMENT_RETURN_OPEN", payment.number, doc.doc_no, 0, amount(doc), "PAYMENT"))
     for key, doc in pay_docs.items():
         # Only clearing documents carrying a platform payment key (PAY|<payment>) are the platform's; payments booked
         # natively in the ERP are not platform postings.
@@ -1450,10 +1657,10 @@ def insights(session: Session) -> dict:
         if i.status == "POSTED" and i.payment_status == "UNPAID" and i.due_date:
             days = (i.due_date - today).days
             bucket = "overdue" if days < 0 else "0-7" if days <= 7 else "8-30" if days <= 30 else "31-60" if days <= 60 else "60+"
-            ladder[bucket] += i.gross_minor
+            ladder[bucket] += finance_controls.group_minor(i, i.gross_minor)
     payments = session.execute(select(Payment, Invoice).join(Invoice, Invoice.id == Payment.invoice_id).where(Payment.status == "COMPLETED")).all()
-    weighted = sum(Decimal((pay.value_date - inv.invoice_date).days) * pay.amount_minor for pay, inv in payments)
-    paid_total = sum(pay.amount_minor for pay, _ in payments)
+    weighted = sum(Decimal((pay.value_date - inv.invoice_date).days) * finance_controls.group_minor(inv, pay.amount_minor) for pay, inv in payments)
+    paid_total = sum(finance_controls.group_minor(inv, pay.amount_minor) for pay, inv in payments)
     available = captured = 0
     for pay, inv in payments:
         terms = _discount_terms(suppliers[inv.supplier_id].payment_terms if inv.supplier_id in suppliers else None)
@@ -1477,7 +1684,22 @@ def insights(session: Session) -> dict:
                          "accrualMinor": line_amount(accrual_qty, line.unit_price_minor), "ageDays": age,
                          "bucket": "0-30" if age <= 30 else "31-90" if age <= 90 else "90+"})
     ageing = {b: sum(a["accrualMinor"] for a in accruals if a["bucket"] == b) for b in ("0-30", "31-90", "90+")}
+    msme_unpaid = [i for i in invoices if i.status == "POSTED" and i.payment_status == "UNPAID" and i.due_date and i.supplier_id in suppliers
+                   and finance_controls.is_msme(session, suppliers[i.supplier_id])]
+    msme_paid = [(pay, inv) for pay, inv in payments if inv.supplier_id in suppliers and finance_controls.is_msme(session, suppliers[inv.supplier_id])]
+    msme_late = [(pay, inv) for pay, inv in msme_paid if inv.due_date and pay.value_date > inv.due_date]
+    exception_age = {"0-2": 0, "3-7": 0, "8-30": 0, "30+": 0}
+    for exc in session.execute(select(InvoiceException).where(InvoiceException.status == "OPEN")).scalars():
+        days = max((today - exc.created_at.date()).days, 0)
+        exception_age["0-2" if days <= 2 else "3-7" if days <= 7 else "8-30" if days <= 30 else "30+"] += 1
+    tds_total = session.execute(select(func.coalesce(func.sum(Payment.tds_minor), 0)).where(Payment.status == "COMPLETED")).scalar()
     return {"dueLadderMinor": ladder,
+            "msme": {"unpaidInvoices": len(msme_unpaid), "unpaidMinor": sum(finance_controls.group_minor(i, i.gross_minor) for i in msme_unpaid),
+                     "overdueInvoices": sum(1 for i in msme_unpaid if i.due_date < today),
+                     "overdueMinor": sum(finance_controls.group_minor(i, i.gross_minor) for i in msme_unpaid if i.due_date < today),
+                     "paidInvoices": len(msme_paid), "paidLate": len(msme_late),
+                     "onTimePct": f"{(len(msme_paid) - len(msme_late)) * 100 / len(msme_paid):.1f}" if msme_paid else None},
+            "exceptionAgeing": exception_age, "tdsWithheldMinor": int(tds_total or 0),
             "dpoDays": str((weighted / paid_total).quantize(Decimal("0.1"))) if paid_total else None,
             "discountAvailableMinor": available, "discountCapturedMinor": captured,
             "discountCapturePct": f"{captured * 100 / available:.1f}" if available else None,

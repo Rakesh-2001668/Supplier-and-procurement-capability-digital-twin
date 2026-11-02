@@ -39,6 +39,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // A second dev server on the same checkout (for example a test run beside the developer's own) needs its own build folder.
+  distDir: process.env.PIC_NEXT_DIST_DIR || '.next',
   // Self-contained server bundle for the Docker image (node server.js); Vercel (VERCEL=1 at build) uses its own output.
   output: process.env.VERCEL ? undefined : 'standalone',
   poweredByHeader: false,

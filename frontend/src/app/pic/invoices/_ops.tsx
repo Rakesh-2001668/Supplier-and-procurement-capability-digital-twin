@@ -94,13 +94,15 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
   const files = useApi<FileList>('/payment-files');
   const [formats, setFormats] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<PaymentFile | null>(null);
+  const [results, setResults] = useState<PaymentFile | null>(null);
+  const [importing, setImporting] = useState(false);
   const [downloadError, setDownloadError] = useState<Error | null>(null);
   const generate = useCommand((run: string) => api.post<PaymentFile>(`/payments/runs/${encodeURIComponent(run)}/file`, { format: formats[run] ?? 'ISO20022_PAIN001' }), {
     success: (f) => `${f.fileName} generated · ${f.payments} payment(s) · ${inr(f.totalMinor)}`,
   });
   const live = (r: Run) => r.files.find((f) => f.status !== 'REJECTED');
   return (
-    <Card title="Bank payment files · payment runs">
+    <Card title="Bank payment files · payment runs" actions={canManage ? <Button onClick={() => setImporting(true)}>Import bank statement</Button> : undefined}>
       {runs.isLoading || files.isLoading ? <Loading /> : runs.error ? <ProblemBox error={runs.error} /> : files.error ? <ProblemBox error={files.error} /> : (
         <div className="space-y-5">
           <p className="text-sm text-slate-600">
@@ -142,6 +144,7 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
                 <div className="flex gap-2">
                   <Button onClick={() => { setDownloadError(null); downloadFile(`/payment-files/${encodeURIComponent(f.number)}/content`, f.fileName).catch(setDownloadError); }}>Download</Button>
                   {NEXT[f.status] && <Button onClick={() => setStatus(f)}>Record bank status</Button>}
+                  {(f.status === 'SENT' || f.status === 'ACKNOWLEDGED') && <Button onClick={() => setResults(f)}>Bank results</Button>}
                 </div>
               ) : null },
             ]} />
@@ -149,6 +152,8 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
         </div>
       )}
       {status && <FileStatusDialog file={status} onClose={() => setStatus(null)} />}
+      {results && <BankResultsDialog file={results} onClose={() => setResults(null)} />}
+      {importing && <StatementDialog onClose={() => setImporting(false)} />}
     </Card>
   );
 }
@@ -176,6 +181,153 @@ function FileStatusDialog({ file, onClose }: { file: PaymentFile; onClose: () =>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!next || missing} busy={save.isPending} onClick={() => save.mutate()}>Save</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------- bank statement import (camt.053 / MT940)
+type StatementItem = { line: number; amountMinor: number; bankRef: string; valueDate: string; payment: string | null; action: string | null; state: string; detail: string };
+type StatementResult = { statementId: string; format: string; account: string; entries: number; counts: Record<string, number>; items: StatementItem[]; dryRun: boolean;
+  alreadyImported?: boolean; replayed?: boolean; applied?: number; credited?: number; returned?: number };
+
+/** Upload a bank statement: the dry run shows what each entry would do to which payment, then it is applied (idempotent per statement id). */
+export function StatementImport({ onDone }: { onDone?: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [result, setResult] = useState<StatementResult | null>(null);
+  const send = (dryRun: boolean) => {
+    const form = new FormData();
+    form.append('file', file as File);
+    return api.upload<StatementResult>(`/bank-statements/import?dry_run=${dryRun}`, form);
+  };
+  const analyse = useCommand(() => send(true), { onSuccess: setResult });
+  const apply = useCommand(() => send(false), {
+    success: (r) => (r.replayed ? `Statement ${r.statementId} was imported before: nothing changed` : `${r.applied ?? 0} result(s) recorded from ${r.statementId}`),
+    onSuccess: (r) => { setResult(r); onDone?.(); },
+  });
+  const ready = result?.counts?.READY ?? 0;
+  return (
+    <div className="space-y-3">
+      <Field label="Bank statement (camt.053 XML or MT940)" hint="Entries are matched to payments by payment number; a statement id is applied once.">
+        {(id) => <input id={id} type="file" accept=".xml,.sta,.mt940,.txt,text/xml,text/plain" className="block w-full text-sm"
+          onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />}
+      </Field>
+      <ProblemBox error={analyse.error ?? apply.error} />
+      {result && (
+        <div className="space-y-2">
+          <p className="text-sm">
+            {result.format} · statement <span className="font-mono">{result.statementId}</span> · {result.entries} entr{result.entries === 1 ? 'y' : 'ies'}
+            {' · '}{Object.entries(result.counts).map(([k, v]) => `${v} ${k.replace(/_/g, ' ').toLowerCase()}`).join(', ')}
+            {result.alreadyImported ? ' · already imported' : ''}
+          </p>
+          <div className="max-h-64 overflow-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-xs">
+              <thead className="bg-slate-50 text-left uppercase tracking-wide text-slate-500">
+                <tr><th className="px-2 py-1.5">#</th><th className="px-2 py-1.5">Payment</th><th className="px-2 py-1.5">Result</th><th className="px-2 py-1.5 text-right">Amount</th>
+                  <th className="px-2 py-1.5">Bank ref.</th><th className="px-2 py-1.5">State</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {result.items.map((i) => (
+                  <tr key={i.line}>
+                    <td className="px-2 py-1.5">{i.line}</td>
+                    <td className="px-2 py-1.5 font-mono">{i.payment ?? '–'}</td>
+                    <td className="px-2 py-1.5">{i.action ? label(i.action) : '–'}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{inr(i.amountMinor)}</td>
+                    <td className="px-2 py-1.5 font-mono">{i.bankRef || '–'}</td>
+                    <td className="px-2 py-1.5"><StatusChip status={i.state} /><span className="ml-1 text-slate-500">{i.detail}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button disabled={!file} busy={analyse.isPending} onClick={() => analyse.mutate()}>Analyse (dry run)</Button>
+        <Button variant="primary" disabled={!file || !result || !result.dryRun || ready === 0} busy={apply.isPending} onClick={() => apply.mutate()}>
+          Apply {ready ? `${ready} result${ready === 1 ? '' : 's'}` : ''}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function StatementDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <Dialog open title="Import bank statement" onClose={onClose}>
+      <StatementImport />
+      <div className="mt-4 flex justify-end"><Button onClick={onClose}>Close</Button></div>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------- bank result per payment (F7-09)
+type BankReconciliation = { file: string; run: string; fileStatus: string; fileTotalMinor: number; creditedMinor: number; returnedMinor: number; pendingMinor: number;
+  reconciled: boolean; payments: { payment: string; amountMinor: number; status: string; bankStatus: string; utr: string | null; returnReason: string | null }[] };
+type Decision = { status: '' | 'CREDITED' | 'RETURNED'; utr: string; reason: string };
+
+/** The bank's statement of what happened to each payment of a sent file: credited with the UTR, or returned with the reason. */
+function BankResultsDialog({ file, onClose }: { file: PaymentFile; onClose: () => void }) {
+  const rec = useApi<BankReconciliation>(`/payment-files/${encodeURIComponent(file.number)}/reconciliation`);
+  const [decisions, setDecisions] = useState<Record<string, Decision>>({});
+  const decide = (payment: string, patch: Partial<Decision>) =>
+    setDecisions((d) => ({ ...d, [payment]: { ...(d[payment] ?? { status: '', utr: '', reason: '' }), ...patch } }));
+  const entries = Object.entries(decisions).filter(([, d]) => d.status);
+  const invalid = entries.some(([, d]) => (d.status === 'CREDITED' && !d.utr.trim()) || (d.status === 'RETURNED' && !d.reason.trim()));
+  const save = useCommand(() => api.post<BankReconciliation>(`/payment-files/${encodeURIComponent(file.number)}/bank-results`, {
+    items: entries.map(([payment, d]) => ({ payment, status: d.status, utr: d.status === 'CREDITED' ? d.utr.trim() : undefined,
+      reason: d.status === 'RETURNED' ? d.reason.trim() : undefined })),
+  }), { success: (r) => `${r.file}: ${r.reconciled ? 'reconciled with the bank' : 'results recorded'}`, onSuccess: () => setDecisions({}) });
+  return (
+    <Dialog open title={`Bank results · ${file.number}`} onClose={onClose}>
+      {rec.isLoading ? <Loading /> : rec.error ? <ProblemBox error={rec.error} /> : rec.data && (
+        <div className="space-y-3">
+          <p className="text-sm">
+            {rec.data.run} · file {inr(rec.data.fileTotalMinor)} · credited {inr(rec.data.creditedMinor)} · returned {inr(rec.data.returnedMinor)} · open {inr(rec.data.pendingMinor)}
+            {' '}<StatusChip status={rec.data.reconciled ? 'RECONCILED' : 'OPEN'} />
+          </p>
+          <div className="max-h-80 overflow-auto rounded-lg border border-slate-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr><th className="px-3 py-2">Payment</th><th className="px-3 py-2 text-right">Amount</th><th className="px-3 py-2">Bank status</th><th className="px-3 py-2">Record</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rec.data.payments.map((p) => {
+                  const open = p.status === 'COMPLETED' && (p.bankStatus === 'SENT' || p.bankStatus === 'NOT_SENT');
+                  const d = decisions[p.payment] ?? { status: '', utr: '', reason: '' };
+                  return (
+                    <tr key={p.payment}>
+                      <td className="px-3 py-2 font-mono text-xs">{p.payment}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{inr(p.amountMinor)}</td>
+                      <td className="px-3 py-2"><StatusChip status={p.bankStatus} />{p.utr ? <span className="ml-2 font-mono text-xs text-slate-500">{p.utr}</span> : null}
+                        {p.returnReason ? <span className="ml-2 text-xs text-slate-500">{p.returnReason}</span> : null}</td>
+                      <td className="px-3 py-2">
+                        {open ? (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Select aria-label={`Bank result for ${p.payment}`} value={d.status} onChange={(e) => decide(p.payment, { status: e.target.value as Decision['status'] })}
+                              options={[{ value: '', label: 'No answer yet' }, { value: 'CREDITED', label: 'Credited' }, { value: 'RETURNED', label: 'Returned' }]} className="w-40" />
+                            {d.status === 'CREDITED' && <Input aria-label={`UTR for ${p.payment}`} placeholder="Bank UTR" maxLength={40} value={d.utr} onChange={(e) => decide(p.payment, { utr: e.target.value })} className="w-44" />}
+                            {d.status === 'RETURNED' && <Input aria-label={`Return reason for ${p.payment}`} placeholder="Return reason" maxLength={500} value={d.reason} onChange={(e) => decide(p.payment, { reason: e.target.value })} className="w-56" />}
+                          </div>
+                        ) : <span className="text-xs text-slate-500">{p.status === 'CANCELLED' ? 'payable again in the next run' : 'done'}</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-slate-500">A returned payment is cancelled and its invoice is payable again in the next run. The ERP clearing document of the returned payment must be
+            reversed in the ERP; the reconciliation lists it until then.</p>
+        </div>
+      )}
+      <div className="mt-4 border-t border-slate-200 pt-3">
+        <h3 className="mb-2 text-sm font-semibold text-slate-900">Or import the bank statement</h3>
+        <StatementImport />
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Close</Button>
+        <Button variant="primary" disabled={!entries.length || invalid} busy={save.isPending} onClick={() => save.mutate()}>Record {entries.length || ''} result{entries.length === 1 ? '' : 's'}</Button>
       </div>
     </Dialog>
   );

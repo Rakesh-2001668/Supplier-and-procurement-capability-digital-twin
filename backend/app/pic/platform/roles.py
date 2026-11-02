@@ -33,6 +33,7 @@ SCOPE_DESCRIPTIONS = {
     "mdm:request": "Raise and decide master data requests", "gr:post": "Post goods receipts", "quality:decide": "Take quality decisions",
     "ses:approve": "Approve service entry sheets", "invoice:capture": "Capture invoices", "invoice:resolve": "Resolve invoice exceptions",
     "invoice:approve": "Approve invoices", "invoice:post": "Post invoices", "payment:run": "Run and release payments",
+    "period:close": "Close and reopen posting periods (cut-off)",
 }
 
 # Scope pairs one person must not hold together: the scope-level form of the role pairs in services.admin.TOXIC_PAIRS

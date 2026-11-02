@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.pic import views
 from app.pic.api.deps import idempotency_key, idempotent, uow
 from app.pic.models import Asn, GoodsReceipt, InspectionLot, Invoice, PurchaseOrder, ReturnDelivery, ServiceEntry
+from app.pic.config import get_settings
 from app.pic.platform import workflow
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.core import check_if_match, etag
@@ -340,18 +341,32 @@ def capture_invoice(body: InvoiceIn, p: Principal = Depends(require_any("invoice
 
 
 @router.get("/invoices/{ref}", tags=["F7 Invoice"])
-def get_invoice(ref: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+def get_invoice(ref: str, response: Response, p: Principal = Depends(require_any(READ, "supplier:portal"))):
     with uow(p) as s:
         invoice = by_ref(s, Invoice, ref)
         if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
             raise not_found("Invoice", ref)
+        response.headers["ETag"] = etag(invoice)
         return views.invoice(s, invoice)
 
 
+IfMatch = Header(default=None, alias="If-Match")
+
+
+def _locked_invoice(s, ref: str, if_match: Optional[str]) -> Invoice:
+    """The invoice row-locked for a write; If-Match (the ETag of its GET) refuses a write on a stale view with 412, and is required
+    when PIC_REQUIRE_IF_MATCH is on."""
+    if if_match is None and get_settings().if_match_required:
+        raise Problem(428, "PRECONDITION_REQUIRED", "Send If-Match with the ETag of GET /v1/invoices/{ref}")
+    invoice = by_ref(s, Invoice, ref, lock=True)
+    check_if_match(invoice, if_match)
+    return invoice
+
+
 @router.post("/invoices/{ref}/match", tags=["F7 Invoice"])
-def rematch(ref: str, p: Principal = Depends(require("invoice:resolve"))):
+def rematch(ref: str, p: Principal = Depends(require("invoice:resolve")), if_match: Optional[str] = IfMatch):
     with uow(p) as s:
-        return payables.match(s, by_ref(s, Invoice, ref, lock=True))
+        return payables.match(s, _locked_invoice(s, ref, if_match))
 
 
 class CreditNoteLineIn(BaseModel):
@@ -369,14 +384,18 @@ class CreditNoteIn(BaseModel):
 
 
 @router.post("/invoices/{ref}/credit-notes", status_code=201, tags=["F7 Invoice"])
-def credit_note(ref: str, body: CreditNoteIn, p: Principal = Depends(require_any("invoice:submit", "invoice:capture"))):
+def credit_note(ref: str, body: CreditNoteIn, p: Principal = Depends(require_any("invoice:submit", "invoice:capture")),
+                key: Optional[str] = Depends(idempotency_key)):
     with uow(p) as s:
         invoice = by_ref(s, Invoice, ref, lock=True)
         if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
             raise not_found("Invoice", ref)
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/credit-notes", key, body)
+        if idem.replay:
+            return idem.replay
         data = body.model_dump()
         data["lines"] = [{k: v for k, v in line.items() if v is not None} for line in data["lines"]]
-        return row(payables.submit_credit_note(s, invoice, **data))
+        return idem.store(row(payables.submit_credit_note(s, invoice, **data)), 201)
 
 
 class ResolveIn(BaseModel):
@@ -386,9 +405,13 @@ class ResolveIn(BaseModel):
 
 
 @router.post("/invoices/{ref}/exceptions/{exception_id}/resolve", tags=["F7 Invoice"])
-def resolve(ref: str, exception_id: uuid.UUID, body: ResolveIn, p: Principal = Depends(require("invoice:resolve"))):
+def resolve(ref: str, exception_id: uuid.UUID, body: ResolveIn, p: Principal = Depends(require("invoice:resolve")),
+            if_match: Optional[str] = IfMatch, key: Optional[str] = Depends(idempotency_key)):
     with uow(p) as s:
-        return payables.resolve_exception(s, by_ref(s, Invoice, ref, lock=True), exception_id, body.resolution, body.note, body.credit_note)
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/exceptions/{exception_id}/resolve", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(payables.resolve_exception(s, _locked_invoice(s, ref, if_match), exception_id, body.resolution, body.note, body.credit_note))
 
 
 class RejectIn(BaseModel):
@@ -396,20 +419,23 @@ class RejectIn(BaseModel):
 
 
 @router.post("/invoices/{ref}/reject", tags=["F7 Invoice"])
-def reject_invoice(ref: str, body: RejectIn, p: Principal = Depends(require("invoice:resolve"))):
+def reject_invoice(ref: str, body: RejectIn, p: Principal = Depends(require("invoice:resolve")), if_match: Optional[str] = IfMatch):
     with uow(p) as s:
-        return row(payables.reject(s, by_ref(s, Invoice, ref, lock=True), body.reason))
+        return row(payables.reject(s, _locked_invoice(s, ref, if_match), body.reason))
 
 
 @router.post("/invoices/{ref}/approve", tags=["F7 Invoice"])
-def approve_invoice(ref: str, p: Principal = Depends(require("invoice:approve"))):
+def approve_invoice(ref: str, response: Response, p: Principal = Depends(require("invoice:approve")), if_match: Optional[str] = IfMatch):
     with uow(p) as s:
-        return row(payables.approve(s, by_ref(s, Invoice, ref, lock=True)))
+        invoice = payables.approve(s, _locked_invoice(s, ref, if_match))
+        s.flush()
+        response.headers["ETag"] = etag(invoice)
+        return row(invoice)
 
 
 @router.post("/invoices/{ref}/post", tags=["F7 Invoice"])
 def post_invoice(ref: str, p: Principal = Depends(require("invoice:post")),
-                 key: Optional[str] = Header(default=None, alias="Idempotency-Key")):
+                 key: Optional[str] = Header(default=None, alias="Idempotency-Key"), if_match: Optional[str] = IfMatch):
     """Post to ERP exactly once. Retrying with the same Idempotency-Key returns the original result with replayed=true (§10.3)."""
     if not key:
         raise Problem(428, "IDEMPOTENCY_KEY_REQUIRED", "Send Idempotency-Key: tenant|company code|supplier|invoice number")
@@ -417,7 +443,9 @@ def post_invoice(ref: str, p: Principal = Depends(require("invoice:post")),
         idem = idempotent(s, f"POST /v1/invoices/{ref}/post", key, {"invoice": ref})
         if idem.replay:
             return idem.replay
-        result = payables.post(s, by_ref(s, Invoice, ref, lock=True), key)
+        result = payables.post(s, _locked_invoice(s, ref, if_match), key)
+        if result.get("status") == "POSTING" or result.get("rematched"):
+            return idem.release({**result, "replayed": False})  # not final: the retry with the same key must run again, not replay this
         return idem.store({**result, "replayed": False})
 
 

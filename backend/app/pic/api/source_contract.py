@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -12,6 +12,7 @@ from app.pic import views
 from app.pic.api.deps import idempotency_key, idempotent, uow
 from app.pic.models import Contract, Obligation, SavingsInitiative, SourcingEvent, Supplier
 from app.pic.platform.auth import READ, Principal, require, require_any
+from app.pic.platform.core import check_if_match, etag
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
 from app.pic.services import contract as contract_svc
@@ -367,15 +368,24 @@ def savings_register(p: Principal = Depends(require(READ))):
 
 
 @router.get("/savings/{ref}/waterfall", tags=["Savings & Spend"])
-def savings_waterfall(ref: str, p: Principal = Depends(require(READ))):
+def savings_waterfall(ref: str, response: Response, p: Principal = Depends(require(READ))):
     with uow(p) as s:
-        return savings.waterfall(s, by_ref(s, SavingsInitiative, ref))
+        initiative = by_ref(s, SavingsInitiative, ref)
+        response.headers["ETag"] = etag(initiative)
+        return savings.waterfall(s, initiative)
 
 
 @router.post("/savings/{ref}/validate", tags=["Savings & Spend"])
-def validate_savings(ref: str, p: Principal = Depends(require("savings:validate"))):
+def validate_savings(ref: str, response: Response, p: Principal = Depends(require("savings:validate")),
+                     if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    """Finance validation (M11, SOD-07). If-Match carries the ETag of GET /v1/savings/{ref}/waterfall when sent (412 on a stale view)."""
     with uow(p) as s:
-        return row(savings.validate(s, by_ref(s, SavingsInitiative, ref, lock=True)))
+        initiative = by_ref(s, SavingsInitiative, ref, lock=True)
+        check_if_match(initiative, if_match)
+        result = savings.validate(s, initiative)
+        s.flush()
+        response.headers["ETag"] = etag(result)
+        return row(result)
 
 
 @router.get("/spend/cube", tags=["Savings & Spend"])

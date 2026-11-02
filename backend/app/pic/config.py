@@ -52,7 +52,8 @@ class Settings(BaseSettings):
     db_schema: str = "pic"
     environment: str = Field(default="dev", alias="PIC_ENV")
     # Comma-separated browser origins allowed to call the API directly (the web app normally calls through its own server).
-    cors_origins: str = Field(default="http://localhost:3000", alias="PIC_CORS_ORIGINS")
+    # The default covers the two ways a developer opens the local web app (the old prototype screens call the API from the browser).
+    cors_origins: str = Field(default="http://localhost:3000,http://127.0.0.1:3000", alias="PIC_CORS_ORIGINS")
 
     # ---------------------------------------------------------------- production surface
     # Old prototype routers (app.routers.*, app.api.*). Unset: off in production, on elsewhere.

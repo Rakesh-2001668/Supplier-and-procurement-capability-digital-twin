@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
+  <BkToCstmrStmt>
+    <GrpHdr><MsgId>MSG-{{STMT}}</MsgId><CreDtTm>2027-01-06T08:00:00+05:30</CreDtTm></GrpHdr>
+    <Stmt>
+      <Id>{{STMT}}</Id>
+      <ElctrncSeqNb>1</ElctrncSeqNb>
+      <Acct><Id><Othr><Id>50200011223344</Id></Othr></Id><Ccy>INR</Ccy></Acct>
+      <Ntry>
+        <Amt Ccy="INR">{{AMT_OK}}</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-01-05</Dt></BookgDt>
+        <ValDt><Dt>2027-01-05</Dt></ValDt>
+        <AcctSvcrRef>HDFCR52027010500123</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>{{PAY_OK}}</EndToEndId><TxId>HDFCTX0001</TxId></Refs>
+          <RmtInf><Ustrd>Payment {{PAY_OK}} Alpha Alloys</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">{{AMT_RET}}</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <RvslInd>true</RvslInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-01-07</Dt></BookgDt>
+        <ValDt><Dt>2027-01-07</Dt></ValDt>
+        <AcctSvcrRef>HDFCRTN2027010700077</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>{{PAY_RET}}</EndToEndId></Refs>
+          <RtrInf><Rsn><Cd>AC04</Cd></Rsn><AddtlInf>Beneficiary account closed</AddtlInf></RtrInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">1250000.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-01-07</Dt></BookgDt>
+        <AcctSvcrRef>HDFCCUST0099</AcctSvcrRef>
+        <NtryDtls><TxDtls><RmtInf><Ustrd>Customer receipt INV 5521</Ustrd></RmtInf></TxDtls></NtryDtls>
+      </Ntry>
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>

@@ -37,6 +37,9 @@ class DebitNote(TenantScoped, Base):
     tax_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     gross_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     retention_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # TDS on the additional taxable value (migration 0017): the base it applies to (net of GST) and the tax a payment keeps back.
+    tds_base_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    tds_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
     # [{"kind": "PRICE", "invoice_line": 10, "qty": "20", "unitDebitMinor": 150, "netMinor": .., "taxMinor": .., "gstRate": "18"},
     #  {"kind": "CHARGE", "description": "Freight", "netMinor": .., "taxMinor": .., "gstRate": "18", "hsn": "9965"}]
     lines: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)

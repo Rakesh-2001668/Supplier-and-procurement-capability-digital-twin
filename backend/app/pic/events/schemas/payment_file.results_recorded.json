@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:payment_file.results_recorded",
+  "title": "payment_file.results_recorded",
+  "description": "Payload (outbox_event.payload) of payment_file.results_recorded on PAYMENT_FILE. Produced by services/bank_files.py.",
+  "type": "object",
+  "properties": {
+    "run": {},
+    "credited": {
+      "type": "integer"
+    },
+    "returned": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "run",
+    "credited",
+    "returned"
+  ],
+  "additionalProperties": true
+}

@@ -89,6 +89,16 @@ class Idempotent:
             raise Problem(409, "REQUEST_IN_PROGRESS", "A request with this Idempotency-Key is still being processed")
         self.replay = dict(existing.response, replayed=True)
 
+    def release(self, response: dict) -> dict:
+        """The outcome is not final yet (e.g. the ERP did not answer, the post is queued for retry): forget the reservation so that the
+        client's retry with the same key runs again instead of replaying the interim answer for ever."""
+        response = jsonable(response)
+        if self.key:
+            record = self.session.get(IdempotencyRecord, (current_tenant(self.session), self.scope, self.key))
+            if record is not None:
+                self.session.delete(record)
+        return response
+
     def store(self, response: dict, status_code: int = 200) -> dict:
         response = jsonable(response)
         if self.key:

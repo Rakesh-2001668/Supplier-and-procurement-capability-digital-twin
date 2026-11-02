@@ -97,6 +97,8 @@ def submit(session: Session, invoice: Invoice, *, supplier_debit_note_no: str, n
         raise illegal_transition("Invoice", invoice.number, invoice.status, "debit")
     if invoice.match_type == "RETENTION":
         raise rule_violation(f"{invoice.number} is a retention release; a debit note is raised against the supplier's invoice", KEY)
+    from app.pic.services import finance_controls
+    finance_controls.assert_open(session, invoice.company_code, clock.today(), f"debit note against {invoice.number}")
     if len((reason or "").strip()) < 3:
         raise Problem(422, "REASON_REQUIRED", "Give the reason for the debit note", rule_ref=KEY)
     if not lines:
@@ -233,6 +235,12 @@ def match(session: Session, note: DebitNote, invoice: Optional[Invoice] = None) 
                              f"{(po_line.unit_price_minor if po_line else 0) / 100:,.2f}"})
         if po_line is not None:
             creators.append(session.get(PurchaseOrder, po_line.po_id).created_by)
+    # SOD-04 reaches every debit note on the invoice, not only those with a price line: whoever created an order the invoice bills may
+    # not approve a charge or price correction on it (a CHARGE line carries no order line of its own).
+    for inv_line in inv_lines.values():
+        charged_line = session.get(PoLine, inv_line.po_line_id) if inv_line.po_line_id else None
+        if charged_line is not None:
+            creators.append(session.get(PurchaseOrder, charged_line.po_id).created_by)
     note.match_result = {"checks": checks, "findings": findings, "rule": rule.ref}
     if not findings:
         SM.apply(session, note, "match", rule_set_version=rule.ref, extra_after={"checks": len(checks)})
@@ -307,8 +315,16 @@ def post(session: Session, note: DebitNote) -> dict:
     target = integration.target_system(session, invoice.company_code)
     from app.pic.platform import connectors
     connectors.require_mapped(target, MESSAGE_TYPE)
+    from app.pic.services import finance_controls
+    finance_controls.assert_open(session, invoice.company_code, clock.today(), f"debit note {note.number}")  # cut-off
     sod.record(session, "INVOICE_POST", {"supplier_id": note.supplier_id})
     supplier = session.get(Supplier, note.supplier_id)
+    if note.posting_key is None:  # TDS on the additional taxable value is fixed once, at the first posting attempt (a retry sends the same payload)
+        tds = finance_controls.compute_note_tds(session, invoice, note)
+        if tds:
+            note.tds_base_minor, note.tds_minor = tds["taxableMinor"], tds["tdsMinor"]
+            audit.record(session, "DEBIT_NOTE", note.id, "TDS_DETERMINED", object_ref=note.number, rule_set_version="TDS",
+                         after={"section": tds["section"], "ratePct": str(tds["ratePct"]), "taxableMinor": tds["taxableMinor"], "tdsMinor": tds["tdsMinor"]})
     note.posting_key = posting_key(session, note, invoice)
     note.retention_minor = _retention_of(session, note)
     message = integration.enqueue(
@@ -317,6 +333,7 @@ def post(session: Session, note: DebitNote) -> dict:
         payload={"debitNote": note.number, "supplierDebitNote": note.supplier_debit_note_no, "invoice": invoice.supplier_invoice_no,
                  "invoiceErp": invoice.erp_doc_no, "supplier": supplier.code, "companyCode": invoice.company_code, "grossMinor": note.gross_minor,
                  "netMinor": note.net_minor, "taxMinor": note.tax_minor, "retentionMinor": note.retention_minor, "fiscalYear": invoice.fiscal_year,
+                 **({"tdsMinor": note.tds_minor, "tdsSection": invoice.tds_section} if note.tds_minor else {}),
                  "lines": [{k: v for k, v in e.items() if k in ("kind", "invoice_line", "charge", "netMinor", "taxMinor", "gstRate", "hsn")}
                            for e in note.lines]})
     integration.process(session, message)

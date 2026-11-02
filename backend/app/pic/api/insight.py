@@ -210,7 +210,7 @@ def delete_saved_view(view_id: uuid.UUID, p: Principal = Depends(require(READ)))
 
 
 # ---------------------------------------------------------------- object page tabs: approvals and documents
-@router.get("/documents/{object_type}/{ref}/approvals", tags=["Workflow"])
+@router.get("/documents/{object_type}/{ref:path}/approvals", tags=["Workflow"])
 def document_approvals(object_type: str, ref: str, p: Principal = Depends(require(READ))):
     """Every approval task of a document, open and decided, with who decided what and when."""
     from app.pic.api.platform import resolve_document
@@ -218,7 +218,7 @@ def document_approvals(object_type: str, ref: str, p: Principal = Depends(requir
         return workspace.approvals_of(s, object_type, resolve_document(s, object_type, ref))
 
 
-@router.get("/documents/{object_type}/{ref}/files", tags=["Workflow"])
+@router.get("/documents/{object_type}/{ref:path}/files", tags=["Workflow"])
 def document_files(object_type: str, ref: str, p: Principal = Depends(require(READ))):
     """Printouts, EDI and ERP documents, signed documents, supplier-supplied files and linked documents of a document."""
     from app.pic.api.platform import resolve_document
