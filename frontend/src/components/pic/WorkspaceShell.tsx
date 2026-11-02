@@ -47,6 +47,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/purchase-orders/changes', label: 'Confirmations & changes' },
     { href: '/pic/purchase-orders/expediting', label: 'Expediting' },
     { href: '/pic/receiving', label: 'Receiving & quality' },
+    { href: '/pic/inventory', label: 'Inventory' },
     { href: '/pic/invoices', label: 'Invoices & payments' },
     { href: '/pic/invoices/reconciliation', label: 'Posting & reconciliation', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
     { href: '/pic/invoices/insights', label: 'Payables insights', roles: ['AP_CLERK', 'FINANCE_CONTROLLER', 'CPO', 'PROCUREMENT_HEAD'] },

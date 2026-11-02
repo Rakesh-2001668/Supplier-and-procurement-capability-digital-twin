@@ -16,7 +16,7 @@ export default function LotTracePage() {
     <div>
       <PageHeader eyebrow="RCV-05 · Lot traceability" title={<>{material} <span className="text-base font-normal text-slate-500">lot {batch}</span></>}
         subtitle={data ? `${data.description}${data.suppliers.length ? ` · supplied by ${data.suppliers.join(', ')}` : ''}` : undefined}
-        actions={<LinkButton href="/pic/receiving">Receiving</LinkButton>} />
+        actions={<><LinkButton href={`/pic/inventory/${encodeURIComponent(material)}`}>Stock card</LinkButton><LinkButton href="/pic/receiving">Receiving</LinkButton></>} />
       {isLoading ? <Loading /> : error ? <ProblemBox error={error} /> : data && (
         <LotTraceView trace={data} canRecall={hasRole(user, 'QUALITY_INSPECTOR')} />
       )}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock_posting.rejected",
+  "title": "stock_posting.rejected",
+  "description": "Payload (outbox_event.payload) of stock_posting.rejected on STOCK_POSTING. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "posting": {},
+    "type": {},
+    "reason": {}
+  },
+  "required": [
+    "posting",
+    "type",
+    "reason"
+  ],
+  "additionalProperties": true
+}

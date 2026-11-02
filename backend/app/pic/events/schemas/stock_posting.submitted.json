@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock_posting.submitted",
+  "title": "stock_posting.submitted",
+  "description": "Payload (outbox_event.payload) of stock_posting.submitted on STOCK_POSTING. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "posting": {},
+    "type": {},
+    "plant": {},
+    "valueMinor": {},
+    "lines": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "posting",
+    "type",
+    "plant",
+    "valueMinor",
+    "lines"
+  ],
+  "additionalProperties": true
+}

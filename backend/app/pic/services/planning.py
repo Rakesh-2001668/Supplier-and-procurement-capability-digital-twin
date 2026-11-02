@@ -520,3 +520,39 @@ def on_requisition_approved(session: Session, pr) -> None:
             PlannedOrder.mrp_run_id == order.mrp_run_id, PlannedOrder.status.in_(("CREATED", "FIRMED")))).scalar()
         if remaining == 0:
             workflow.end(session, instance, "F1-10", outcome="all planned orders converted; PRs ready for sourcing / PO")
+
+
+# ---------------------------------------------------------------- stock/requirements list (MRP-02)
+def requirements_profile(session: Session, material: Material, plant: str, run_date: Optional[date] = None, horizon_days: int = 90) -> dict:
+    """The stock/requirements list of one material and plant: the elements MRP nets (on-hand unrestricted stock, open purchase orders, ASNs in
+    transit, firmed planned orders, demand incl. reservations) and the projected balance per planning bucket, from the same reads and bucket
+    rules as ``net_material``. Nothing is written."""
+    run_date = run_date or clock.today()
+    reads = _Reads(session, plant)
+    supply = reads.supply(material)
+    bucket = BUCKET_BY_TYPE.get(material.mrp_type, "DAY")
+    key = (lambda d: d) if bucket == "DAY" else (lambda d: bucket_of(d, bucket)[0])
+    demand = session.execute(select(DemandElement.req_date, DemandElement.qty, DemandElement.type, DemandElement.reference).where(
+        DemandElement.material_id == material.id, DemandElement.plant == plant, DemandElement.qty > 0).order_by(DemandElement.req_date)).all()
+    safety = material.safety_stock or Decimal(0)
+    gross: dict[date, Decimal] = defaultdict(Decimal)
+    receipts: dict[date, Decimal] = defaultdict(Decimal)
+    for req_date, qty, _, _ in demand:
+        gross[key(max(req_date, run_date))] += qty   # overdue requirements fall due in the current bucket
+    for day, qty, _, _ in supply["receipts"]:
+        receipts[key(max(day, run_date))] += qty
+    projected = supply["on_hand"]
+    horizon = run_date + timedelta(days=horizon_days)
+    buckets = []
+    for day in sorted(set(gross) | set(receipts)):
+        opening = projected
+        projected = projected + receipts.get(day, Decimal(0)) - gross.get(day, Decimal(0))
+        buckets.append({"from": day, "to": bucket_of(day, bucket)[1], "receipts": receipts.get(day, Decimal(0)), "requirements": gross.get(day, Decimal(0)),
+                        "opening": opening, "projected": projected, "belowSafety": projected < safety, "shortage": projected < 0})
+    return {"material": material.number, "plant": plant, "mrpType": material.mrp_type, "bucket": bucket, "asOf": run_date, "horizonTo": horizon,
+            "onHand": supply["on_hand"], "openPo": supply["open_po"], "inTransit": supply["in_transit"], "firmPlannedReceipts": supply["firm_receipts"],
+            "demand": sum((qty for _, qty, _, _ in demand), Decimal(0)), "safetyStock": safety,
+            "available": supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"],
+            "receipts": [{"date": d, "qty": q, "kind": k, "ref": r} for d, q, k, r in sorted(supply["receipts"], key=lambda x: x[0])],
+            "requirements": [{"date": d, "qty": q, "type": t, "reference": r} for d, q, t, r in demand],
+            "buckets": [b for b in buckets if b["from"] <= horizon], "parameters": reads.parameters(material)}

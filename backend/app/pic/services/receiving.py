@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
@@ -21,7 +22,7 @@ from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.platform.money import D, line_amount, tax_amount
 from app.pic.platform.serialize import jsonable
 from app.pic.services import ind_healthcare
-from app.pic.services import mandatory, org_guard, p2p_rules, po_controls
+from app.pic.services import mandatory, org_guard, p2p_rules, po_controls, stock_ledger
 from app.pic.services import order as order_svc
 from app.pic.services.common import principal, require_supplier_user
 
@@ -62,6 +63,15 @@ def sample_size(lot: Decimal) -> int:
     return 1250
 
 
+def _guard_stock_change(session: Session, plant: str, what: str, company_code: Optional[str] = None) -> None:
+    """A command that moves stock of a plant outside the receipt itself (consignment withdrawal, recall, components to a subcontractor,
+    expiry write-off): the user must be assigned to the plant (SEC-AZ, action STOCK_MOVE) and the posting period of its company code must be
+    open (cut-off)."""
+    from app.pic.services import finance_controls
+    abac.guard(session, "STOCK_MOVE", None, plant=plant, company_code=company_code)
+    finance_controls.assert_open(session, company_code or stock_ledger.plant_company(session, plant), clock.today(), what)
+
+
 def _positive(qty, what: str) -> Decimal:
     """Shipped, received and service quantities are strictly positive (a negative receipt is a reversal, never a line)."""
     value = D(qty)
@@ -71,19 +81,9 @@ def _positive(qty, what: str) -> Decimal:
 
 
 def _move(session: Session, *, material_id, plant, sloc, stock_type, batch, qty: Decimal, movement: str, ref_type, ref_id, ref) -> None:
-    stock = session.execute(select(Stock).where(Stock.material_id == material_id, Stock.plant == plant, Stock.storage_location == sloc,
-                                                Stock.stock_type == stock_type, Stock.batch == batch).with_for_update()).scalar_one_or_none()
-    if stock is None:
-        stock = Stock(tenant_id=current_tenant(session), material_id=material_id, plant=plant, storage_location=sloc,
-                      stock_type=stock_type, batch=batch, qty=0, created_by=principal(session).user_id)
-        session.add(stock)
-        session.flush()
-    if stock.qty + qty < 0:
-        raise Problem(422, "NEGATIVE_STOCK", f"Movement {movement} would make {stock_type} stock negative", rule_ref="RCV")
-    stock.qty += qty
-    session.add(StockMovement(tenant_id=current_tenant(session), material_id=material_id, plant=plant, storage_location=sloc,
-                              movement_type=movement, stock_type=stock_type, batch=batch, qty=qty, reference_type=ref_type,
-                              reference_id=ref_id, reference_ref=ref, created_by=principal(session).user_id))
+    """Thin alias of ``stock_ledger.post_movement`` (kept for the modules that import it from here)."""
+    stock_ledger.post_movement(session, material_id=material_id, plant=plant, sloc=sloc, stock_type=stock_type, batch=batch, qty=qty,
+                               movement=movement, ref_type=ref_type, ref_id=ref_id, ref=ref)
 
 
 # ---------------------------------------------------------------- ASN (F5-09/10) and e-way bill (Technical Document §12.3)
@@ -362,6 +362,9 @@ def usage_decision(session: Session, lot: InspectionLot, *, accepted: Decimal, r
     gr_line = session.get(GrLine, lot.gr_line_id)
     po_line = session.get(PoLine, gr_line.po_line_id)
     po = session.get(PurchaseOrder, gr.po_id)
+    abac.guard(session, "STOCK_MOVE", po, plant=po_line.plant)  # SEC-AZ: the inspector is assigned to the plant whose stock the decision moves
+    from app.pic.services import finance_controls
+    finance_controls.assert_open(session, po.company_code, clock.today(), f"usage decision on {lot.number}")  # cut-off, as at the receipt
     lot.status, lot.accepted_qty, lot.rejected_qty, lot.defect_code, lot.decided_by = "DECIDED", accepted, rejected, defect_code, p.user_id
     lot.usage_decision = "ACCEPTED" if rejected == 0 else ("REJECTED" if accepted == 0 else "PARTIALLY_ACCEPTED")
     gr_line.accepted_qty, gr_line.rejected_qty = accepted, rejected
@@ -455,6 +458,12 @@ def reverse_gr(session: Session, gr: GoodsReceipt, reason: str) -> GoodsReceipt:
                       invoices=[{"invoice": number, "status": status} for number, status in invoices])
     if not GR_SM.can(gr.status, "reverse"):
         raise illegal_transition("Goods receipt", gr.number, gr.status, "reverse")
+    po = session.get(PurchaseOrder, gr.po_id)
+    gr_lines = session.execute(select(GrLine, PoLine).join(PoLine, PoLine.id == GrLine.po_line_id).where(GrLine.gr_id == gr.id)).all()
+    for plant in sorted({po_line.plant for _, po_line in gr_lines} or {po.plant}):
+        abac.guard(session, "GR_POST", po, plant=plant)  # SEC-AZ: reversing a receipt takes stock out of its plant
+    from app.pic.services import finance_controls
+    finance_controls.assert_open(session, po.company_code, clock.today(), f"reversal of {gr.number}")  # cut-off, as at the receipt
     lots = {l.gr_line_id: l for l in session.execute(select(InspectionLot).where(InspectionLot.gr_id == gr.id)).scalars()}
     returned = [l.number for l in lots.values() if l.status == "DECIDED" and D(l.rejected_qty or 0) > 0]
     if returned:
@@ -585,8 +594,12 @@ def _check_lot(session: Session, line: PoLine, qty: Decimal, batch: str, expiry:
     if serials:
         if len(set(serials)) != len(serials):
             raise rule_violation(f"Line {line.line_no}: serial numbers must be unique", "RCV-LOT")
-        known = {s for g in session.execute(select(GrLine).where(GrLine.material_id == line.material_id)).scalars() for s in (g.serials or [])}
-        repeated = sorted(set(serials) & known)
+        # One indexed query (GIN on gr_line.serials): serials of receipts that were reversed (102) are free again, so the corrected receipt
+        # of the same serial numbers is accepted.
+        repeated = sorted({serial for (found,) in session.execute(
+            select(GrLine.serials).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
+                GrLine.material_id == line.material_id, GoodsReceipt.status != "REVERSED", GrLine.serials.has_any(postgresql.array(list(serials)))))
+            for serial in (found or []) if serial in serials})
         if repeated:
             raise rule_violation(f"Line {line.line_no}: serial number(s) {', '.join(repeated)} already received", "RCV-LOT")
 
@@ -617,6 +630,7 @@ def provide_components(session: Session, po: PurchaseOrder, line_no: int, *, com
     planned = {c["material"]: c for c in subcontracting_components(po, line)}
     if not planned:
         raise rule_violation(f"{po.number}/{line.line_no} has no component list", "P08")
+    _guard_stock_change(session, line.plant, f"components for {po.number}/{line.line_no}", company_code=po.company_code)
     supplier = session.get(Supplier, po.supplier_id)
     issues = components or [{"material": number, "qty": c["qty"]} for number, c in planned.items()]
     moved = []
@@ -758,6 +772,7 @@ def withdraw_consignment(session: Session, *, material: str, plant: str, qty, us
     if purpose == "CONSUMPTION" and not (cost_object and ":" in cost_object):
         raise rule_violation("A consumption is charged to a cost object, e.g. COST_CENTER:6100", "P08")
     mat = material_by_number(session, material)
+    _guard_stock_change(session, plant, f"consignment withdrawal of {mat.number}")
     serials = [str(s) for s in (serials or [])]
     if (mat.attributes or {}).get("serialManaged") and Decimal(len(serials)) != qty:
         raise rule_violation(f"{mat.number} is serial-managed: give the {qty} serial number(s) used", "RCV-LOT")
@@ -874,6 +889,7 @@ def recall_lot(session: Session, *, material: str, batch: str, notice_ref: str, 
     for stock in session.execute(select(Stock).where(Stock.material_id == mat.id, Stock.batch == batch, Stock.qty > 0,
                                                      Stock.stock_type.in_((CONSIGNMENT, "UNRESTRICTED")))
                                  .order_by(Stock.plant, Stock.storage_location)).scalars().all():
+        _guard_stock_change(session, stock.plant, f"recall of lot {batch}")
         consignment = stock.stock_type == CONSIGNMENT
         if consignment:
             parts = [(g, pl, gr, q) for g, pl, gr, q in _consignment_lots(session, mat.id, stock.plant, stock.storage_location, batch)]

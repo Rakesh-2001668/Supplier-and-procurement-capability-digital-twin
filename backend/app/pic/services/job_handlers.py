@@ -8,6 +8,7 @@
 | retention-purge    | daily 03:30     | applies rule PRIVACY-RETENTION (dry-run until the rule says otherwise) |
 | audit-archive      | Sunday 04:00    | moves old audit events to the verified archive (dry-run until the rule says otherwise) |
 | idempotency-purge  | hourly :15      | deletes Idempotency-Key records older than 24 hours |
+| inventory-reservations | daily 02:45 | expires stock reservations past their need date plus grace (rule INVENTORY-RESERVATION) |
 """
 import uuid
 from datetime import date, timedelta
@@ -272,3 +273,13 @@ def idempotency_purge(ctx: jobs.JobContext) -> dict:
                 "cutoff": cutoff.isoformat()}
     deleted = ctx.session.execute(delete(IdempotencyRecord).where(query)).rowcount or 0
     return {"deleted": deleted, "cutoff": cutoff.isoformat()}
+
+
+# ---------------------------------------------------------------- 7 reservation expiry (inventory)
+@jobs.job("inventory-reservations", name="Reservation expiry", schedule="45 2 * * *", dry_run=True,
+          description="Expires the open stock reservations whose need date plus the grace of rule INVENTORY-RESERVATION (graceDays) has passed: "
+                      "the open quantity is released from the demand MRP sees, the reservation is EXPIRED and audited. Also removes the zero-quantity "
+                      "reservation demand that net-change MRP has had a week to see.")
+def inventory_reservations(ctx: jobs.JobContext) -> dict:
+    from app.pic.services import inventory
+    return inventory.expire_due(ctx.session, dry_run=ctx.dry_run)

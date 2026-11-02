@@ -8,4 +8,5 @@ from app.pic.services import clause_extract, material_changes, rebates, supplier
 from app.pic.services import (  # noqa: F401,E402  (wave 1 engineer D: industry-template controls)
     ind_construction, ind_general, ind_healthcare, ind_it, ind_kpis, ind_logistics, ind_manufacturing,
 )
+from app.pic.services import inventory, stock_ledger, stock_reads  # noqa: F401,E402  (inventory: stock ledger, postings, counts, reservations)
 from app.pic.services import debit_notes, early_payment, edi_invoice, mandatory, po_controls, request_templates, sales_order  # noqa: F401,E402  (wave 1 engineer B: P2P completion)

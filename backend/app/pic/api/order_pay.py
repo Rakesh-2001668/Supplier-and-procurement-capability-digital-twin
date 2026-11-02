@@ -158,10 +158,17 @@ def short_close_po(ref: str, body: PoReasonIn, p: Principal = Depends(require("p
 
 
 # ---------------------------------------------------------------- F6 receiving
+class AsnBatchIn(BaseModel):
+    """A batch announced on an ASN line: the lot number, its quantity and (for lot-controlled goods) the expiry date as YYYY-MM-DD."""
+    batch: str = Field(min_length=1, max_length=30)
+    qty: Decimal = Field(gt=0)
+    expiry: Optional[date] = None
+
+
 class AsnLineIn(BaseModel):
     line: int
     qty: Decimal = Field(gt=0)
-    batches: list[dict] = []
+    batches: list[AsnBatchIn] = []
 
 
 class AsnIn(BaseModel):
@@ -183,7 +190,7 @@ def create_asn(body: AsnIn, p: Principal = Depends(require("asn:create")), key: 
         if idem.replay:
             return idem.replay
         po = by_ref(s, PurchaseOrder, body.po, lock=True)
-        asn = receiving.create_asn(s, po, lines=[l.model_dump(mode="json") for l in body.lines], ship_date=body.ship_date,
+        asn = receiving.create_asn(s, po, lines=[l.model_dump(mode="json", exclude_none=True) for l in body.lines], ship_date=body.ship_date,
                                    expected_date=body.expected_date, eway_bill_no=body.eway_bill_no, documents=body.documents,
                                    eway_bill_valid_until=body.eway_bill_valid_until, vehicle_no=body.vehicle_no, distance_km=body.distance_km)
         return idem.store(views.asn(s, asn), 201)
@@ -194,7 +201,7 @@ class GrLineIn(BaseModel):
     qty: Decimal = Field(gt=0)
     batch: str = ""
     storage_location: Optional[str] = None
-    expiry: Optional[str] = None
+    expiry: Optional[date] = None   # YYYY-MM-DD; anything else is a 422, never a 500 at posting
     serials: list[str] = []
 
 

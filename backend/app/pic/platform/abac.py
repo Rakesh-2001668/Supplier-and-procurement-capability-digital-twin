@@ -48,14 +48,26 @@ DEFAULT_POLICY: dict = {
         "MASTER_CHANGE": {"check": ["company_code", "plant"]},
     },
 }
+# Actions added after tenants were bootstrapped: a tenant whose ABAC rule set predates them gets these (its own entry for the action wins).
+# STOCK_MOVE: any stock-changing command outside the goods receipt (usage decision, consignment withdrawal, recall, expiry write-off);
+# INVENTORY_*: the inventory documents (services/inventory.py); approving is bound by the approver's value limit.
+INVENTORY_ACTIONS = {
+    "STOCK_MOVE": {"check": ["company_code", "plant"]},
+    "INVENTORY_POST": {"check": ["company_code", "plant"]},
+    "INVENTORY_APPROVE": {"check": ["company_code", "plant"], "valueLimit": True},
+    "INVENTORY_COUNT": {"check": ["company_code", "plant"]},
+    "INVENTORY_RESERVE": {"check": ["company_code", "plant"]},
+}
+DEFAULT_POLICY["actions"].update(INVENTORY_ACTIONS)
 
 # Approval task kind -> ABAC action (workflow.complete calls ``guard_task``).
 TASK_ACTIONS = {
     "REQ_APPROVAL": "REQ_APPROVE", "PO_APPROVAL": "PO_APPROVE", "PO_CHANGE_APPROVAL": "PO_APPROVE", "PO_CHANGE_REVIEW": "PO_APPROVE",
     "AWARD_APPROVAL": "AWARD_APPROVE", "CONTRACT_APPROVAL": "CONTRACT_SIGN", "BANK_CHANGE": "SUPPLIER_CHANGE",
     "SES_APPROVAL": "INVOICE_APPROVE", "MDM_STEWARD": "MASTER_CHANGE",
+    "STOCK_POSTING_APPROVAL": "INVENTORY_APPROVE", "PHYSICAL_INVENTORY_APPROVAL": "INVENTORY_APPROVE",
 }
-VALUE_FIELDS = ("total_minor", "gross_minor", "net_minor", "amount_minor", "target_value_minor", "award_value_minor")
+VALUE_FIELDS = ("total_minor", "gross_minor", "net_minor", "amount_minor", "target_value_minor", "award_value_minor", "total_value_minor")
 MODES = ("ENFORCE", "AUDIT", "OFF")
 
 
@@ -120,9 +132,11 @@ def dimensions_of(obj: Any, **override: Any) -> tuple[dict, Optional[int]]:
 def policy_for(session, **scope: Optional[str]) -> dict:
     from app.pic.platform import rules  # local import: rules is imported by modules that import abac
     try:
-        return rules.resolve(session, "ABAC", **scope).body
+        body = rules.resolve(session, "ABAC", **scope).body
     except Problem:
         return DEFAULT_POLICY
+    missing = {k: v for k, v in INVENTORY_ACTIONS.items() if k not in (body.get("actions") or {})}
+    return {**body, "actions": {**(body.get("actions") or {}), **missing}} if missing else body
 
 
 def _attributes(session, principal) -> dict:
@@ -171,7 +185,8 @@ def _document(session, object_type: str, object_id):
     from app.pic import models
     model = {"REQUISITION": models.Requisition, "PURCHASE_ORDER": models.PurchaseOrder, "SOURCING_EVENT": models.SourcingEvent,
              "CONTRACT": models.Contract, "INVOICE": models.Invoice, "SERVICE_ENTRY": models.ServiceEntry,
-             "MATERIAL_REQUEST": models.MaterialRequest}.get(object_type)
+             "MATERIAL_REQUEST": models.MaterialRequest, "STOCK_POSTING": models.StockPosting,
+             "PHYSICAL_INVENTORY": models.PhysicalInventory}.get(object_type)
     return session.get(model, object_id) if model is not None else None
 
 

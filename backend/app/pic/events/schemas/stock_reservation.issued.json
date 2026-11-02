@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock_reservation.issued",
+  "title": "stock_reservation.issued",
+  "description": "Payload (outbox_event.payload) of stock_reservation.issued on STOCK_RESERVATION. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "reservation": {},
+    "material": {},
+    "plant": {},
+    "issuedQty": {
+      "type": "string"
+    },
+    "openQty": {
+      "type": "string"
+    },
+    "valueMinor": {},
+    "erpDocument": {}
+  },
+  "required": [
+    "reservation",
+    "material",
+    "plant",
+    "issuedQty",
+    "openQty",
+    "valueMinor",
+    "erpDocument"
+  ],
+  "additionalProperties": true
+}

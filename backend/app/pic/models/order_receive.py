@@ -166,6 +166,9 @@ class GoodsReceipt(TenantScoped, Base):
 
 class GrLine(TenantScoped, Base):
     __tablename__ = "gr_line"
+    # material + batch: expiry and recall lookups; serials (GIN): "already received" check at receipt without a scan of the material's lines
+    __table_args__ = (Index("ix_gr_line_material_batch", "tenant_id", "material_id", "batch"),
+                      Index("ix_gr_line_serials", "serials", postgresql_using="gin"))
     gr_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.goods_receipt.id"), nullable=False)
     line_no: Mapped[int] = mapped_column(Integer, nullable=False)
     po_line_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.po_line.id"), nullable=False)

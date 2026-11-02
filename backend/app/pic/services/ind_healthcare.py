@@ -381,7 +381,8 @@ def vac_report(session: Session, plant: Optional[str] = None, days: int = 90) ->
         expiring = D(session.execute(select(func.coalesce(func.sum(Stock.qty), 0)).where(
             Stock.material_id == mat.id, Stock.plant == level.plant, Stock.storage_location == level.storage_location, Stock.qty > 0,
             Stock.stock_type.in_(("UNRESTRICTED", "CONSIGNMENT")), Stock.batch.in_(
-                select(GrLine.batch).where(GrLine.material_id == mat.id, GrLine.expiry.isnot(None), GrLine.expiry <= soon, GrLine.batch != "")))).scalar_one())
+                select(GrLine.batch).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
+                    GrLine.material_id == mat.id, GrLine.expiry.isnot(None), GrLine.expiry <= soon, GrLine.batch != "", GoodsReceipt.status != "REVERSED")))).scalar_one())
         price = int(mat.standard_price_minor or 0)
         lead = int(mat.planned_delivery_days or 0) + int(mat.gr_processing_days or 0)
         suggested = (daily * Decimal(lead + 7)).quantize(Decimal("1"), rounding="ROUND_CEILING") if daily > 0 else None
@@ -404,8 +405,9 @@ def vac_report(session: Session, plant: Optional[str] = None, days: int = 90) ->
 def expired_stock(session: Session, as_of: Optional[date] = None) -> list[dict]:
     """Own stock (unrestricted) of batches whose expiry has passed; consignment stock is the supplier's, returned rather than written off."""
     as_of = as_of or clock.today()
-    expired = (select(GrLine.material_id, GrLine.batch, func.min(GrLine.expiry).label("expiry")).where(
-        GrLine.expiry.isnot(None), GrLine.expiry < as_of, GrLine.batch != "").group_by(GrLine.material_id, GrLine.batch).subquery())
+    expired = (select(GrLine.material_id, GrLine.batch, func.min(GrLine.expiry).label("expiry")).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
+        GrLine.expiry.isnot(None), GrLine.expiry < as_of, GrLine.batch != "", GoodsReceipt.status != "REVERSED")
+        .group_by(GrLine.material_id, GrLine.batch).subquery())
     rows = session.execute(select(Stock, Material, expired.c.expiry).join(Material, Material.id == Stock.material_id)
                            .join(expired, (expired.c.material_id == Stock.material_id) & (expired.c.batch == Stock.batch))
                            .where(Stock.qty > 0, Stock.stock_type == "UNRESTRICTED").order_by(Material.number, Stock.batch)).all()
@@ -420,8 +422,11 @@ def write_off_expired(session: Session, reason: str, as_of: Optional[date] = Non
         raise Problem(422, "REASON_REQUIRED", "Give the write-off reason (e.g. the monthly expiry sweep)")
     done, total = [], 0
     batch_id = uuid.uuid7()
+    from app.pic.services.receiving import _guard_stock_change
+
     for item in expired_stock(session, as_of):
         stock, mat = item["stock"], item["material"]
+        _guard_stock_change(session, stock.plant, f"expiry write-off of {mat.number} lot {stock.batch}")
         qty = D(stock.qty)
         _move(session, material_id=mat.id, plant=stock.plant, sloc=stock.storage_location, stock_type="UNRESTRICTED", batch=stock.batch, qty=-qty,
               movement="551", ref_type="EXPIRY_WRITE_OFF", ref_id=batch_id, ref=f"EXP-{(as_of or clock.today()).isoformat()}")

@@ -67,12 +67,15 @@ USERS = [
     ("quality.inspector", "J. Nirmala", ["QUALITY_INSPECTOR"], {"plants": PLANTS}),
     ("service.owner", "T. Kalaiselvi", ["SERVICE_OWNER"], {"cost_objects": ["COST_CENTER:9300", "COST_CENTER:1140", "COST_CENTER:1240"]}),
     ("ap.clerk", "Fathima Nasreen", ["AP_CLERK"], {}),
+    ("inventory.controller", "P. Kalaivani", ["INVENTORY_CONTROLLER"], {"plants": PLANTS}),    # approves stock postings and count differences
+    ("inventory.controller2", "M. Sundaram", ["INVENTORY_CONTROLLER"], {"plants": PLANTS}),
 ]
 ROLE_USER = {
     "COST_OBJECT_OWNER": "maintenance.head", "DEPT_HEAD": "plant.head", "PROCUREMENT_HEAD": "procurement.head",
     "FINANCE_CONTROLLER": ["finance.controller", "finance.controller2"], "CATEGORY_MANAGER": "category.head", "CPO": "cpo", "LEGAL": "legal",
     "CONTRACT_MANAGER": ["contract.manager", "contract.manager2"], "BUYER": "buyer.direct", "SERVICE_OWNER": "service.owner",
     "MDM_STEWARD": ["mdm.purchasing", "mdm.quality", "mdm.finance", "mdm.plant"],
+    "INVENTORY_CONTROLLER": ["inventory.controller", "inventory.controller2"],
 }
 
 

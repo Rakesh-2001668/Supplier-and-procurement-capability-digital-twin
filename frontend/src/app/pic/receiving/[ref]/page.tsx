@@ -80,6 +80,10 @@ export default function GoodsReceiptPage() {
             { key: 'expiry', header: 'Expiry', render: (l) => l.expiry || '–' },
             { key: 'serials', header: 'Serials', render: (l) => l.serials?.length ? <span className="font-mono text-xs">{l.serials.join(', ')}</span> : '–' },
             { key: 'storage_location', header: 'Sloc' },
+            { key: 'stock_card', header: 'Stock', render: (l) => {
+              const material = materialNo(l.material_id);
+              return material ? <Link className="text-[#1A56DB] hover:underline" href={`/pic/inventory/${encodeURIComponent(material)}`}>Stock card<span className="sr-only"> of {material}</span></Link> : '–';
+            } },
             { key: 'stock_type', header: 'Stock type', render: (l) => <StatusChip status={l.stock_type} /> },
             { key: 'movement_type', header: 'Mvt', render: (l) => <span className="font-mono text-xs">{l.movement_type}</span> },
           ]} />

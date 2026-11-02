@@ -42,6 +42,14 @@ STREAM_ONLY = {
     "payment.returned": "A payment returned by the beneficiary bank; finance reverses the ERP clearing document (reconciliation lists it).",
     "finance.period.closed": "Cut-off of a posting period; subscribers (ERP, controlling) freeze their own period.",
     "finance.period.reopened": "A closed posting period was reopened with a reason; the audit trail holds who and why.",
+    "stock_posting.submitted": "Approval tasks and the audit trail already carry it; subscribers use it for the inventory approval backlog.",
+    "stock_posting.approved": "The posting is posted by a stock poster; the audit trail holds the approver and the rule version.",
+    "stock_posting.posted": "The stock movements are in the ledger and the ERP material document is queued; subscribers (planning, BI) read the stream.",
+    "stock_posting.rejected": "The maker sees the rejection on the document; the audit trail holds who and why.",
+    "physical_inventory.posted": "The count differences are in the ledger and the ERP material document is queued; subscribers (finance, BI) read the stream.",
+    "stock_reservation.created": "The reservation's RESERVATION demand element is what MRP reads; subscribers use the event for requester dashboards.",
+    "stock_reservation.issued": "The goods issue (201) is in the ledger and the ERP material document is queued; subscribers (consumption analytics) read the stream.",
+    "stock_reservation.cancelled": "The reservation demand is released for MRP through its demand element; subscribers use the event for dashboards.",
 }
 
 

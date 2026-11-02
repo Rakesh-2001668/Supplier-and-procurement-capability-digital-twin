@@ -197,3 +197,121 @@ def _debit_notes(session: Session, inv: Invoice) -> list[dict]:
 
 def material(session: Session, m: Material) -> dict:
     return row(m)
+
+
+# ---------------------------------------------------------------- inventory documents (services/inventory.py)
+def _task_views(session: Session, kind: str, object_id) -> list[dict]:
+    from app.pic.models import Task
+    return [{"role": t.candidate_role, "sequence": t.sequence, "status": t.status, "decision": t.decision, "comment": t.comment,
+             "dueAt": t.due_at.isoformat() if t.due_at else None, "decidedAt": t.completed_at.isoformat() if t.completed_at else None,
+             "decidedBy": str(t.completed_by) if t.completed_by else None, "taskId": str(t.id)}
+            for t in session.execute(select(Task).where(Task.kind == kind, Task.object_id == object_id).order_by(Task.created_at, Task.sequence)).scalars()]
+
+
+def stock_posting_summary(posting) -> dict:
+    return {"id": str(posting.id), "number": posting.number, "type": posting.posting_type, "status": posting.status, "plant": posting.plant,
+            "companyCode": posting.company_code, "postingDate": posting.posting_date.isoformat(), "reasonCode": posting.reason_code,
+            "reason": posting.reason, "totalValueMinor": posting.total_value_minor, "autoPosted": posting.auto_posted,
+            "erpDocument": posting.erp_doc_no, "createdAt": posting.created_at.isoformat() if posting.created_at else None,
+            "postedAt": posting.posted_at.isoformat() if posting.posted_at else None, "rowVersion": posting.row_version}
+
+
+def stock_posting(session: Session, posting) -> dict:
+    from app.pic.models import StockMovement, StockPostingLine
+    from app.pic.services import inventory, stock_ledger
+    lines = session.execute(select(StockPostingLine).where(StockPostingLine.posting_id == posting.id).order_by(StockPostingLine.line_no)).scalars().all()
+    materials = {m.id: m for m in session.execute(select(Material).where(Material.id.in_([l.material_id for l in lines] or [posting.id]))).scalars()}
+    users = inventory._user_names(session, [posting.created_by, posting.submitted_by, posting.approved_by, posting.posted_by])  # noqa: SLF001
+    warnings = []
+    if posting.status in ("DRAFT", "SUBMITTED", "APPROVED"):
+        for l in lines:
+            if l.from_stock_type == "UNRESTRICTED":
+                free = stock_ledger.on_hand(session, l.material_id, l.from_plant, l.from_storage_location) - stock_ledger.reserved_open(
+                    session, l.material_id, l.from_plant, l.from_storage_location)
+                if l.qty > free:
+                    warnings.append({"code": "RESERVED_STOCK", "line": l.line_no, "material": materials[l.material_id].number,
+                                     "detail": f"{l.qty} posted, but only {free} of the unrestricted stock is not reserved: open reservations will be short"})
+    movements = []
+    if posting.status == "POSTED":
+        movements = [{"movementType": m.movement_type, "plant": m.plant, "storageLocation": m.storage_location, "stockType": m.stock_type, "batch": m.batch,
+                      "qty": jsonable(m.qty), "valueMinor": m.value_minor, "material": materials[m.material_id].number if m.material_id in materials else None}
+                     for m in session.execute(select(StockMovement).where(StockMovement.reference_type == "STOCK_POSTING", StockMovement.reference_id == posting.id)
+                                              .order_by(StockMovement.created_at, StockMovement.id)).scalars()]
+    return {**stock_posting_summary(posting), "rule": posting.rule_set_version, "decisionComment": posting.decision_comment,
+            "createdBy": users.get(posting.created_by), "submittedBy": users.get(posting.submitted_by), "approvedBy": users.get(posting.approved_by),
+            "postedBy": users.get(posting.posted_by), "submittedAt": posting.submitted_at.isoformat() if posting.submitted_at else None,
+            "approvedAt": posting.approved_at.isoformat() if posting.approved_at else None,
+            "lines": [{"lineNo": l.line_no, "material": materials[l.material_id].number, "description": materials[l.material_id].description,
+                       "uom": materials[l.material_id].base_uom, "batch": l.batch, "qty": jsonable(l.qty), "fromPlant": l.from_plant,
+                       "fromStorageLocation": l.from_storage_location, "fromStockType": l.from_stock_type, "toPlant": l.to_plant,
+                       "toStorageLocation": l.to_storage_location, "toStockType": l.to_stock_type, "movementType": l.movement_type,
+                       "unitPriceMinor": l.unit_price_minor, "valueMinor": l.value_minor} for l in lines],
+            "approvals": _task_views(session, "STOCK_POSTING_APPROVAL", posting.id), "movements": movements, "warnings": warnings}
+
+
+def physical_inventory_summary(inv, reveal: bool) -> dict:
+    out = {"id": str(inv.id), "number": inv.number, "status": inv.status, "plant": inv.plant, "companyCode": inv.company_code,
+           "storageLocation": inv.storage_location, "materialGroup": inv.material_group, "scope": inv.scope, "description": inv.description,
+           "plannedDate": inv.planned_date.isoformat() if inv.planned_date else None, "frozenAt": inv.frozen_at.isoformat(), "lineCount": inv.line_count,
+           "erpDocument": inv.erp_doc_no, "createdAt": inv.created_at.isoformat() if inv.created_at else None,
+           "postedAt": inv.posted_at.isoformat() if inv.posted_at else None, "rowVersion": inv.row_version, "blind": not reveal}
+    if reveal:
+        out.update(gainMinor=inv.gain_minor, lossMinor=inv.loss_minor, accuracyPct=str(inv.accuracy_pct) if inv.accuracy_pct is not None else None)
+    return out
+
+
+def counts_revealed(session: Session, lines) -> bool:
+    """Approvers and controllers see the book quantities and differences of a count; a counter (anyone who entered a count on the document) and
+    every user without the approval scope never does: the count is blind."""
+    p = session.info["principal"]
+    counted_by = {u for l in lines for u in (l.counted_by, l.recounted_by) if u}
+    return "inventory:approve" in p.scopes and p.user_id not in counted_by
+
+
+def physical_inventory(session: Session, inv, reveal: bool | None = None) -> dict:
+    from app.pic.services import inventory
+    lines = inventory.count_lines(session, inv)
+    if reveal is None:
+        reveal = counts_revealed(session, lines)
+    materials = {m.id: m for m in session.execute(select(Material).where(Material.id.in_([l.material_id for l in lines] or [inv.id]))).scalars()}
+    users = inventory._user_names(session, [inv.created_by, inv.submitted_by, inv.approved_by, inv.posted_by]  # noqa: SLF001
+                                  + [u for l in lines for u in (l.counted_by, l.recounted_by)])
+
+    def line(l) -> dict:
+        m = materials[l.material_id]
+        out = {"lineNo": l.line_no, "material": m.number, "description": m.description, "uom": m.base_uom, "batch": l.batch, "stockType": l.stock_type,
+               "unlisted": l.unlisted, "countStatus": l.count_status, "countedQty": jsonable(l.counted_qty), "countedBy": users.get(l.counted_by),
+               "countedAt": l.counted_at.isoformat() if l.counted_at else None, "recountQty": jsonable(l.recount_qty),
+               "recountedBy": users.get(l.recounted_by), "recountReason": l.recount_reason, "finalQty": jsonable(l.final_qty), "note": l.note}
+        if reveal:
+            out.update(bookQty=jsonable(l.book_qty), unitPriceMinor=l.unit_price_minor, diffQty=jsonable(l.diff_qty), diffValueMinor=l.diff_value_minor,
+                       firstCountWithinTolerance=l.first_count_ok, postedQty=jsonable(l.posted_qty), driftQty=jsonable(l.drift_qty))
+        return out
+
+    return {**physical_inventory_summary(inv, reveal), "rule": inv.rule_set_version, "decisionComment": inv.decision_comment,
+            "createdBy": users.get(inv.created_by), "submittedBy": users.get(inv.submitted_by), "approvedBy": users.get(inv.approved_by),
+            "postedBy": users.get(inv.posted_by), "submittedAt": inv.submitted_at.isoformat() if inv.submitted_at else None,
+            "progress": {"lines": len(lines), "counted": sum(1 for l in lines if l.counted_qty is not None),
+                         "recountRequired": sum(1 for l in lines if l.count_status == "RECOUNT_REQUIRED"),
+                         "accepted": sum(1 for l in lines if l.final_qty is not None)},
+            "lines": [line(l) for l in lines], "approvals": _task_views(session, "PHYSICAL_INVENTORY_APPROVAL", inv.id)}
+
+
+def stock_reservation(session: Session, res) -> dict:
+    from app.pic.models import StockMovement
+    from app.pic.services import inventory, stock_ledger
+    material = session.get(Material, res.material_id)
+    users = inventory._user_names(session, [res.requester_id])  # noqa: SLF001
+    issues = [{"at": m.created_at.isoformat(), "batch": m.batch, "qty": jsonable(-m.qty), "valueMinor": -m.value_minor if m.value_minor is not None else None}
+              for m in session.execute(select(StockMovement).where(StockMovement.reference_type == "STOCK_RESERVATION", StockMovement.reference_id == res.id)
+                                       .order_by(StockMovement.created_at, StockMovement.id)).scalars()]
+    live = res.status in stock_ledger.OPEN_RESERVATION
+    return {"id": str(res.id), "number": res.number, "status": res.status, "companyCode": res.company_code, "material": material.number,
+            "description": material.description, "uom": material.base_uom, "plant": res.plant, "storageLocation": res.storage_location, "qty": jsonable(res.qty),
+            "issuedQty": jsonable(res.issued_qty), "openQty": jsonable(res.qty - res.issued_qty), "needDate": res.need_date.isoformat(),
+            "costObject": f"{res.cost_object_type}:{res.cost_object_code}" if res.cost_object_code else None, "purpose": res.purpose,
+            "requester": users.get(res.requester_id), "availabilityAtCreation": res.availability,
+            "availableNow": jsonable(inventory.availability(session, res.material_id, res.plant, res.storage_location, exclude_id=res.id)["available"]) if live else None,
+            "demandElement": str(res.demand_element_id) if res.demand_element_id else None, "rule": res.rule_set_version,
+            "closedAt": res.closed_at.isoformat() if res.closed_at else None, "closedReason": res.closed_reason, "issues": issues,
+            "createdAt": res.created_at.isoformat() if res.created_at else None, "rowVersion": res.row_version}

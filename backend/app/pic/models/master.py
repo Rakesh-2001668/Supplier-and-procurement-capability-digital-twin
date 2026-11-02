@@ -316,26 +316,42 @@ class BudgetCommitment(TenantScoped, Base):
     justification: Mapped[Optional[str]] = mapped_column(Text)
 
 
+STOCK_TYPES = ("UNRESTRICTED", "QUALITY", "BLOCKED", "CONSIGNMENT", "SUBCONTRACTOR")
+
+
 class Stock(TenantScoped, Base):
+    """Stock ledger balance per tenant > plant > storage location > stock type > batch (Technical Document section 1.1). The balance is
+    maintained only by ``services.stock_ledger.post_movement`` (and the ERP stock sync), which writes one ``stock_movement`` per change."""
     __tablename__ = "stock"
-    __table_args__ = (UniqueConstraint("tenant_id", "material_id", "plant", "storage_location", "stock_type", "batch"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "material_id", "plant", "storage_location", "stock_type", "batch"),
+                      Index("ix_stock_plant_type", "tenant_id", "plant", "stock_type"),
+                      CheckConstraint("stock_type IN ('UNRESTRICTED','QUALITY','BLOCKED','CONSIGNMENT','SUBCONTRACTOR')", name="stock_type"),
+                      CheckConstraint("qty >= 0", name="qty_not_negative"))
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     storage_location: Mapped[str] = mapped_column(String(10), nullable=False)
-    stock_type: Mapped[str] = mapped_column(String(15), nullable=False)  # UNRESTRICTED | QUALITY | BLOCKED
+    stock_type: Mapped[str] = mapped_column(String(15), nullable=False)  # UNRESTRICTED | QUALITY | BLOCKED | CONSIGNMENT | SUBCONTRACTOR
     batch: Mapped[str] = mapped_column(String(30), nullable=False, default="")
     qty: Mapped[Decimal] = mapped_column(QTY, nullable=False, default=0)
 
 
 class StockMovement(TenantScoped, Base):
+    """One signed line of the stock ledger. ``value_minor`` is the quantity at the material's standard price when it was posted (null
+    when the material has no standard price), ``posting_ref`` the inventory document that caused it (STP-, PHI-, RSV-), ``reason_code``
+    the reason of a scrap, block or count difference."""
     __tablename__ = "stock_movement"
+    __table_args__ = (Index("ix_stock_movement_material_plant_created", "tenant_id", "material_id", "plant", "created_at"),
+                      Index("ix_stock_movement_reference", "tenant_id", "reference_type", "reference_id"))
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     storage_location: Mapped[str] = mapped_column(String(10), nullable=False)
-    movement_type: Mapped[str] = mapped_column(String(5), nullable=False)  # 101 GR, 321 QI release, 122 return, 102 reversal
+    movement_type: Mapped[str] = mapped_column(String(5), nullable=False)  # 101 GR, 102 reversal, 122 return, 321 QI release, 311/301 transfer, 343/344 (un)block, 551 scrap, 701/702 count
     stock_type: Mapped[str] = mapped_column(String(15), nullable=False)
     batch: Mapped[str] = mapped_column(String(30), default="")
     qty: Mapped[Decimal] = mapped_column(QTY, nullable=False)
     reference_type: Mapped[str] = mapped_column(String(40), nullable=False)
     reference_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     reference_ref: Mapped[str] = mapped_column(String(60), nullable=False)
+    value_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    posting_ref: Mapped[Optional[str]] = mapped_column(String(60))
+    reason_code: Mapped[Optional[str]] = mapped_column(String(30))

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock_posting.posted",
+  "title": "stock_posting.posted",
+  "description": "Payload (outbox_event.payload) of stock_posting.posted on STOCK_POSTING. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "posting": {},
+    "type": {},
+    "plant": {},
+    "valueMinor": {},
+    "movements": {},
+    "erpDocument": {}
+  },
+  "required": [
+    "posting",
+    "type",
+    "plant",
+    "valueMinor",
+    "movements",
+    "erpDocument"
+  ],
+  "additionalProperties": true
+}

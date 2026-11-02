@@ -16,6 +16,7 @@ first four; the rest cover backup/DR, releases, secrets, incidents and privacy r
 | [privacy-requests.md](privacy-requests.md) | DPDP data-principal requests: access, erasure, retention reporting |
 | [clause_library.md](clause_library.md) | Loading the client's legal-approved clause library, the mock e-signature provider and the mock contract data (and how to replace each), the If-Match decision |
 | [admin_operations.md](admin_operations.md) | Provisioning a tenant, organisation setup, user invitations and resets, custom roles, template packs |
+| [inventory_operations.md](inventory_operations.md) | How stock changes: ledger, stock postings, physical inventory, reservations, who may do what, the INVENTORY-* rule sets, ERP messages, what the tenant must supply |
 
 ## Signals (all from `GET /metrics`, Prometheus text, `Authorization: Bearer $PIC_METRICS_TOKEN`)
 

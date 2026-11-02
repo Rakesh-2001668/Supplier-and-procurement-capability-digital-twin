@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock_posting.approved",
+  "title": "stock_posting.approved",
+  "description": "Payload (outbox_event.payload) of stock_posting.approved on STOCK_POSTING. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "posting": {},
+    "type": {},
+    "approvedBy": {
+      "type": "string"
+    },
+    "auto": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "posting",
+    "type",
+    "approvedBy",
+    "auto"
+  ],
+  "additionalProperties": true
+}

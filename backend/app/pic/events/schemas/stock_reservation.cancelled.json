@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:stock_reservation.cancelled",
+  "title": "stock_reservation.cancelled",
+  "description": "Payload (outbox_event.payload) of stock_reservation.cancelled on STOCK_RESERVATION. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "reservation": {},
+    "material": {},
+    "plant": {},
+    "openQty": {
+      "type": "string"
+    },
+    "reason": {},
+    "expired": {}
+  },
+  "required": [
+    "reservation",
+    "material",
+    "plant",
+    "openQty",
+    "reason",
+    "expired"
+  ],
+  "additionalProperties": true
+}

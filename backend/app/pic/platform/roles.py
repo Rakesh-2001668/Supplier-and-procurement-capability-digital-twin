@@ -34,6 +34,9 @@ SCOPE_DESCRIPTIONS = {
     "ses:approve": "Approve service entry sheets", "invoice:capture": "Capture invoices", "invoice:resolve": "Resolve invoice exceptions",
     "invoice:approve": "Approve invoices", "invoice:post": "Post invoices", "payment:run": "Run and release payments",
     "period:close": "Close and reopen posting periods (cut-off)",
+    "inventory:post": "Create, submit and post stock postings (transfer, block, unblock, scrap), reservations and their issues",
+    "inventory:count": "Enter physical-inventory counts and recounts (blind count)",
+    "inventory:approve": "Approve stock postings and physical-inventory differences (never your own: SOD-10, SOD-11)",
 }
 
 # Scope pairs one person must not hold together: the scope-level form of the role pairs in services.admin.TOXIC_PAIRS
@@ -42,6 +45,9 @@ SCOPE_CONFLICTS = [
     ({"supplier:bank"}, {"payment:run"}, "SOD-02", "bank changes and payment approval"),
     ({"po:create", "po:release"}, {"gr:post"}, "SOD-03", "PO creation and goods receipt"),
     ({"po:create", "po:release"}, {"invoice:capture", "invoice:resolve", "invoice:post"}, "SOD-04", "PO creation and invoice exceptions"),
+    # SOD-11: who counts may not approve the count's differences. (SOD-10, the maker of a stock posting may not approve it, is evaluated per
+    # document at command time: the built-in INVENTORY_CONTROLLER holds inventory:post and inventory:approve and must stay assignable.)
+    ({"inventory:count"}, {"inventory:approve"}, "SOD-11", "counting stock and approving the count differences"),
 ]
 
 

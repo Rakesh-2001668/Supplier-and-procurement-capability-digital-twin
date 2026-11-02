@@ -52,7 +52,7 @@ from app.pic.db import system_tx, tenant_tx
 from app.pic.models import (
     AppUser, Asn, BankChangeRequest, Budget, Capa, Certificate, Contract, ContractAmendment, DemandElement, GoodsReceipt,
     InspectionLot, IntegrationMessage, Invoice, InvoiceException, Material, MaterialRequest, Obligation, PlannedOrder,
-    PurchaseOrder, Qualification, Requisition, ServiceEntry, SourcingEvent, Stock, Supplier, Task, Tenant, Timer,
+    PurchaseOrder, Qualification, Requisition, ServiceEntry, SourcingEvent, Stock, StockMovement, Supplier, Task, Tenant, Timer,
 )
 from app.pic.platform import audit, clock, integration, outbox, workflow
 from app.pic.platform.auth import hash_password
@@ -219,6 +219,10 @@ def _masters(sc: Scenario) -> None:
         s.flush()
         s.add(Stock(tenant_id=sc.tenant_id, material_id=material.id, plant="P100", storage_location="0001", stock_type="UNRESTRICTED",
                     batch="", qty=Decimal(300)))
+        s.add(StockMovement(tenant_id=sc.tenant_id, material_id=material.id, plant="P100", storage_location="0001", movement_type="561",
+                            stock_type="UNRESTRICTED", batch="", qty=Decimal(300), reference_type="OPENING_BALANCE",
+                            reference_id=uuid.uuid5(uuid.NAMESPACE_URL, "axn-opening-DC-345"), reference_ref="OPEN-DC-345",
+                            value_minor=300 * 18_600, posting_ref="OPEN-AXN", reason_code="OPENING"))   # the ledger explains the opening balance
         changed = clock.now()
         for kind, ref, day, qty in (("SALES_ORDER", "SO-90412", date(2027, 4, 9), 1000), ("FORECAST", "FC-2027-05", date(2027, 5, 17), 2400),
                                     ("FORECAST", "FC-2027-06", date(2027, 6, 14), 2400)):

@@ -15,7 +15,7 @@ from app.pic.models import (
 )
 from app.pic.platform import agents as agent_catalogue
 from app.pic.platform import clock
-from app.pic.platform import finance_defaults, job_defaults, p2p_defaults
+from app.pic.platform import finance_defaults, inventory_defaults, job_defaults, p2p_defaults
 from app.pic.platform.process_defs import baseline
 from app.pic.seed import clause_library, templates
 
@@ -34,6 +34,8 @@ NUMBER_RANGES = {
     "RECONCILIATION": ("REC-", 101, 0), "CONTRACT_AMENDMENT": ("CA-", 101, 0), "PAYMENT_FILE": ("PF-", 1001, 0),
     "SUPPLIER_CHANGE": ("SMC-", 101, 0), "INTEGRATION_BATCH": ("IB-", 101, 0), "PUNCHOUT": ("PUN-", 1001, 0),
     # wave 1 (engineer C1): material change requests, rebates, clause extraction, supplier development plans
+    # inventory (M09 stock): stock postings, physical-inventory documents, reservations
+    "STOCK_POSTING": ("STP-", 1001, 0), "PHYSICAL_INVENTORY": ("PHI-", 1001, 0), "STOCK_RESERVATION": ("RSV-", 1001, 0),
     "MATERIAL_CHANGE": ("MCR-", 101, 0), "REBATE_AGREEMENT": ("RBA-", 101, 0), "REBATE_SETTLEMENT": ("RBS-", 101, 0),
     "CLAUSE_EXTRACTION": ("CLX-", 101, 0), "DEVELOPMENT_PLAN": ("SDP-", 101, 0),
 }
@@ -68,6 +70,7 @@ CURRENCIES = [("INR", "Indian rupee"), ("USD", "US dollar"), ("EUR", "Euro"), ("
 RULE_SETS = {
     **job_defaults.BODIES,  # wave 1 platform: PAYMENT-RUN, MRP-SCHEDULE, PRIVACY-RETENTION, DELEGATION, AI-CONTROL
     **p2p_defaults.BODIES,  # wave 1 P2P completion: ONE-TIME-VENDOR, PO-PRICE-CHECK, DEBIT-NOTE, EARLY-PAYMENT, MANDATORY-FIELDS, ...
+    **inventory_defaults.BODIES,  # inventory: INVENTORY-POSTING, INVENTORY-COUNT, INVENTORY-RESERVATION, INVENTORY-ALERTS
     "DMN-01": ({"bands": [
         {"upTo": 25_000 * 100, "autoChannels": ["CATALOGUE", "CONTRACT"], "chain": ["COST_OBJECT_OWNER"]},
         {"upTo": 2 * L, "chain": ["COST_OBJECT_OWNER"]},
@@ -182,12 +185,13 @@ RULE_SETS = {
                       "In-app notifications; e-mail delivery switches on when SMTP is configured"),
     "ERP-TARGET": ({"system": "SAP_S4"}, "ERP every posting goes to (connector registry); add a company-code-scoped version to route one company elsewhere"),
     "MFA": ({"enforce": False, "requiredRoles": ["TENANT_ADMIN", "FINANCE_CONTROLLER", "CPO", "PROCUREMENT_HEAD", "COST_OBJECT_OWNER", "DEPT_HEAD",
-                                                 "CAPEX_COMMITTEE", "AP_CLERK"], "issuer": "AlphaHelion PIC"},
+                                                 "CAPEX_COMMITTEE", "AP_CLERK", "INVENTORY_CONTROLLER"], "issuer": "AlphaHelion PIC"},
             "MFA (TOTP) for approvers, finance and admins (§14); set enforce=true per tenant once users have enrolled"),
     "ESCALATION": ({"managerAtLevel": 2, "managers": {
         "COST_OBJECT_OWNER": "DEPT_HEAD", "DEPT_HEAD": "PROCUREMENT_HEAD", "PROCUREMENT_HEAD": "CPO", "FINANCE_CONTROLLER": "CPO",
         "BUYER": "PROCUREMENT_HEAD", "CATEGORY_MANAGER": "CPO", "SUPPLIER_MANAGER": "PROCUREMENT_HEAD", "CONTRACT_MANAGER": "PROCUREMENT_HEAD",
-        "SERVICE_OWNER": "DEPT_HEAD", "AP_CLERK": "FINANCE_CONTROLLER", "RECEIVER": "DEPT_HEAD", "QUALITY_INSPECTOR": "DEPT_HEAD"},
+        "SERVICE_OWNER": "DEPT_HEAD", "AP_CLERK": "FINANCE_CONTROLLER", "RECEIVER": "DEPT_HEAD", "QUALITY_INSPECTOR": "DEPT_HEAD",
+        "INVENTORY_CONTROLLER": "DEPT_HEAD"},
         "keepScopeFor": ["DEPT_HEAD"], "mode": {"2": "ADD", "default": "REASSIGN"}},
         "Approval SLA escalation (TD §8): level 1 reminds the approvers; level 2 adds the manager role as a candidate; level 3 and beyond "
         "reassigns the task to the manager role (the original candidates lose it). mode: ADD | REASSIGN, as one value or per level; "
@@ -208,7 +212,12 @@ RULE_SETS = {
                   "CONTRACT_SIGN": {"check": ["company_code"], "valueLimit": True},
                   "AWARD_APPROVE": {"check": ["category"], "valueLimit": True},
                   "SUPPLIER_CHANGE": {"check": ["category"]},
-                  "MASTER_CHANGE": {"check": ["company_code", "plant"]}}},
+                  "MASTER_CHANGE": {"check": ["company_code", "plant"]},
+                  "STOCK_MOVE": {"check": ["company_code", "plant"]},
+                  "INVENTORY_POST": {"check": ["company_code", "plant"]},
+                  "INVENTORY_APPROVE": {"check": ["company_code", "plant"], "valueLimit": True},
+                  "INVENTORY_COUNT": {"check": ["company_code", "plant"]},
+                  "INVENTORY_RESERVE": {"check": ["company_code", "plant"]}}},
              "ABAC on commands (SEC-AZ): company code, plant, category and value limit from the user attributes; "
              "mode ENFORCE | AUDIT (log only) | OFF. A user without the attribute is not restricted on that dimension."),
     "SOD-MITIGATION": ({"approvers": {"Low": ["PROCUREMENT_HEAD"], "Medium": ["PROCUREMENT_HEAD"], "High": ["PROCUREMENT_HEAD", "CPO"]},
@@ -238,6 +247,9 @@ SOD_RULES = [
     ("SOD-07", "SAVINGS_INITIATE", "SAVINGS_VALIDATE", "initiative_id", None, "High", "Savings owner may not validate the same savings"),
     ("SOD-08", "INVOICE_CAPTURE", "INVOICE_APPROVE", "invoice_id", None, "High", "Whoever captured an invoice may not approve it (four-eyes)"),
     ("SOD-09", "INVOICE_APPROVE", "PAYMENT_APPROVE", "invoice_id", None, "High", "Whoever approved an invoice may not release its payment"),
+    ("SOD-10", "INVENTORY_POST", "INVENTORY_APPROVE", "posting_id", None, "High", "Whoever submitted a stock posting may not approve it (maker-checker)"),
+    ("SOD-11", "INVENTORY_COUNT", "INVENTORY_COUNT_APPROVE", "count_id", None, "High",
+     "Whoever counted or recounted stock may not approve the differences of that count"),
 ]
 
 

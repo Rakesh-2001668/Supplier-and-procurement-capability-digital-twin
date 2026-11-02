@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:physical_inventory.posted",
+  "title": "physical_inventory.posted",
+  "description": "Payload (outbox_event.payload) of physical_inventory.posted on PHYSICAL_INVENTORY. Produced by services/inventory.py.",
+  "type": "object",
+  "properties": {
+    "inventory": {},
+    "plant": {},
+    "storageLocation": {},
+    "lines": {
+      "type": "integer"
+    },
+    "differences": {
+      "type": "integer"
+    },
+    "gainMinor": {},
+    "lossMinor": {},
+    "accuracyPct": {
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    "erpDocument": {}
+  },
+  "required": [
+    "inventory",
+    "plant",
+    "storageLocation",
+    "lines",
+    "differences",
+    "gainMinor",
+    "lossMinor",
+    "accuracyPct",
+    "erpDocument"
+  ],
+  "additionalProperties": true
+}

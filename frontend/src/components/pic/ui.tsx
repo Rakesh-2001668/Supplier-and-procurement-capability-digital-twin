@@ -283,7 +283,7 @@ export function Tabs({ tabs, label: name = 'Sections' }: { tabs: { id: string; l
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /** Modal dialog: labelled by its title, focus moves in and is trapped while open, Escape closes, focus returns to the opener. */
-export function Dialog({ open, title, onClose, children }: { open: boolean; title: string; onClose: () => void; children: ReactNode }) {
+export function Dialog({ open, title, onClose, children, wide = false }: { open: boolean; title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -307,7 +307,7 @@ export function Dialog({ open, title, onClose, children }: { open: boolean; titl
   return (
     <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-16" role="dialog" aria-modal="true" aria-labelledby={titleId}
       onKeyDown={onKeyDown}>
-      <div ref={panel} tabIndex={-1} className="w-full max-w-2xl rounded-xl bg-white shadow-xl focus:outline-none">
+      <div ref={panel} tabIndex={-1} className={`w-full ${wide ? 'max-w-5xl' : 'max-w-2xl'} rounded-xl bg-white shadow-xl focus:outline-none`}>
         <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
           <h2 id={titleId} className="text-base font-semibold">{title}</h2>
           <button type="button" onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB]" aria-label="Close dialog">✕</button>
@@ -328,7 +328,7 @@ export const LIFECYCLE: { id: string; label: string; href: string; paths: string
   { id: 'contract', label: 'Contract', href: '/pic/contracts', paths: ['/pic/contracts'] },
   { id: 'order', label: 'Order', href: '/pic/purchase-orders', paths: ['/pic/purchase-orders'] },
   { id: 'confirm', label: 'Confirm', href: '/pic/purchase-orders/changes', paths: ['/pic/purchase-orders/changes', '/pic/purchase-orders/expediting'] },
-  { id: 'receive', label: 'Receive', href: '/pic/receiving', paths: ['/pic/receiving'] },
+  { id: 'receive', label: 'Receive', href: '/pic/receiving', paths: ['/pic/receiving', '/pic/inventory'] },
   { id: 'inspect', label: 'Inspect', href: '/pic/receiving', paths: [] },
   { id: 'invoice', label: 'Invoice', href: '/pic/invoices', paths: ['/pic/invoices'] },
   { id: 'match', label: 'Match & post', href: '/pic/invoices/reconciliation', paths: ['/pic/invoices/reconciliation'] },

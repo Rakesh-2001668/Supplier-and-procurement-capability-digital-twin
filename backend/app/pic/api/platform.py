@@ -11,7 +11,8 @@ from app.pic.api.deps import idempotency_key, idempotent, uow
 from app.pic.db import system_tx, tenant_tx
 from app.pic.models import (
     Agent, AgentRun, AppUser, Contract, GoodsReceipt, IntegrationMessage, Invoice, MaterialRequest, MrpRun, ProcessDefinition,
-    ProcessInstance, PurchaseOrder, Requisition, RuleSet, ServiceEntry, SodRule, SodViolation, SourcingEvent, Supplier, Task, Tenant,
+    PhysicalInventory, ProcessInstance, PurchaseOrder, Requisition, RuleSet, ServiceEntry, SodRule, SodViolation, SourcingEvent, StockPosting,
+    StockReservation, Supplier, Task, Tenant,
 )
 from app.pic.platform import audit, http, integration, mfa, workflow
 from app.pic.platform.auth import (
@@ -26,7 +27,7 @@ router = APIRouter(prefix="/v1")
 DOC_MODELS = {
     "REQUISITION": Requisition, "PURCHASE_ORDER": PurchaseOrder, "SOURCING_EVENT": SourcingEvent, "CONTRACT": Contract,
     "INVOICE": Invoice, "GOODS_RECEIPT": GoodsReceipt, "SERVICE_ENTRY": ServiceEntry, "MATERIAL_REQUEST": MaterialRequest,
-    "MRP_RUN": MrpRun,
+    "MRP_RUN": MrpRun, "STOCK_POSTING": StockPosting, "PHYSICAL_INVENTORY": PhysicalInventory, "STOCK_RESERVATION": StockReservation,
 }
 
 
@@ -192,6 +193,10 @@ def list_rules(p: Principal = Depends(require(READ))):
 def new_rule_version(body: RuleSetIn, p: Principal = Depends(require("admin:rules"))):
     """Rule changes are new effective-dated versions; existing versions are never edited (P14). A version label is used once
     per key; a second version with the same scope and effective date must name the version it supersedes (it then wins)."""
+    from app.pic.platform import inventory_defaults
+    problems = inventory_defaults.validate(body.key, body.body)
+    if problems:
+        raise Problem(422, "RULE_INVALID", f"{body.key}: " + "; ".join(problems), rule_ref=body.key, errors=problems)
     with uow(p) as s:
         same_key = s.execute(select(RuleSet).where(RuleSet.key == body.key)).scalars().all()
         if any(r.version == body.version for r in same_key):

@@ -186,9 +186,10 @@ def m02_conversion_lead(c: Ctx) -> Result:
 
 def m02_stockouts(c: Ctx) -> Result:
     n = c.scalar("SELECT count(*) FROM (SELECT m.id FROM pic.material m LEFT JOIN pic.stock s ON s.material_id = m.id "
-                 "AND s.stock_type = 'UNRESTRICTED'" + c.at_plant("s.plant") + " WHERE m.status <> 'BLOCKED' GROUP BY m.id "
-                 "HAVING coalesce(sum(s.qty), 0) <= 0 AND EXISTS (SELECT 1 FROM pic.demand_element d WHERE d.material_id = m.id AND d.qty > 0)) x")
-    return count_of(n, {"definition": "materials with demand and no unrestricted stock"})
+                 "AND s.stock_type = 'UNRESTRICTED'" + c.at_plant("s.plant") + " WHERE m.status <> 'BLOCKED' AND m.type = 'STOCK' GROUP BY m.id "
+                 "HAVING coalesce(sum(s.qty), 0) <= 0 AND EXISTS (SELECT 1 FROM pic.demand_element d WHERE d.material_id = m.id AND d.qty > 0"
+                 + c.at_plant("d.plant") + ")) x")
+    return count_of(n, {"definition": "stock materials with demand and no unrestricted stock"})
 
 
 def m02_days_of_cover(c: Ctx) -> Result:
@@ -387,6 +388,38 @@ def m09_quality_rejection(c: Ctx) -> Result:
     return pct(row[0], row[1])
 
 
+def m09_inventory_turns(c: Ctx) -> Result:
+    """Value issued (movements 201 / 201K at the standard price) annualised, over the average own stock value of the window (opening and closing
+    value at the standard price; the opening is the closing less the window's net movement of own stock)."""
+    end = c.end or (clock.today() + timedelta(days=1))
+    start = c.start or (end - timedelta(days=365))
+    days = max((end - start).days, 1)
+    row = c.one("SELECT coalesce(sum(-m.qty * coalesce(mat.standard_price_minor, 0)) FILTER (WHERE m.movement_type IN ('201', '201K')), 0), "
+                "coalesce(sum(m.qty * coalesce(mat.standard_price_minor, 0)) FILTER (WHERE m.stock_type IN ('UNRESTRICTED', 'QUALITY', 'BLOCKED')), 0) "
+                "FROM pic.stock_movement m JOIN pic.material mat ON mat.id = m.material_id WHERE m.created_at >= :wfrom AND m.created_at < :wto"
+                + c.at_plant("m.plant"), wfrom=start, wto=end)
+    closing = _d(c.scalar("SELECT coalesce(sum(s.qty * coalesce(mat.standard_price_minor, 0)), 0) FROM pic.stock s JOIN pic.material mat ON mat.id = s.material_id "
+                          "WHERE s.stock_type IN ('UNRESTRICTED', 'QUALITY', 'BLOCKED')" + c.at_plant("s.plant")))
+    issues, net = _d(row[0]), _d(row[1])
+    average = ((closing - net) + closing) / 2
+    annual = issues * Decimal(365) / Decimal(days)
+    detail = {"windowDays": days, "issuesMinor": int(issues), "annualisedIssuesMinor": int(annual), "averageStockValueMinor": int(average)}
+    return ((annual / average).quantize(Decimal("0.1"), ROUND_HALF_UP) if average > 0 else None), annual, average, detail
+
+
+def m09_count_accuracy(c: Ctx) -> Result:
+    row = c.one("SELECT count(*) FILTER (WHERE l.first_count_ok), count(*) FROM pic.physical_inventory_line l JOIN pic.physical_inventory i ON i.id = l.inventory_id "
+                "WHERE i.status = 'POSTED' AND l.first_count_ok IS NOT NULL" + c.when("i.posted_at") + c.at_plant("i.plant"))
+    return pct(row[0], row[1], {"definition": "counted lines whose first count was inside the count tolerance (rule INVENTORY-COUNT) / counted lines of posted counts"})
+
+
+def m09_adjustment_value(c: Ctx) -> Result:
+    row = c.one("SELECT coalesce(sum(abs(coalesce(m.value_minor, m.qty * coalesce(mat.standard_price_minor, 0)))), 0), count(*) "
+                "FROM pic.stock_movement m JOIN pic.material mat ON mat.id = m.material_id WHERE m.movement_type IN ('701', '702', '551')"
+                + c.when("m.created_at") + c.at_plant("m.plant"))
+    return _d(row[0]), _d(row[0]), None, {"movements": int(row[1]), "definition": "inventory differences (701 / 702) and scrapping (551), absolute value"}
+
+
 # ---------------------------------------------------------------- M10 invoices
 def m10_first_pass(c: Ctx) -> Result:
     row = c.one("SELECT count(*) FILTER (WHERE first_pass_matched), count(*) FROM pic.invoice WHERE first_pass_matched IS NOT NULL" + c.when("invoice_date"))
@@ -549,6 +582,9 @@ for _args, _kw in [
     (("PO_CHANGE_RATE", "M08", "PO change rate %", "PCT", L, "released POs with more than one version / released POs", "purchase_order", 10, 20), {"compute": m08_change_rate, "scopes": ("TENANT", "PLANT")}),
     (("RECEIPT_ACCURACY", "M09", "Receipt-to-PO accuracy %", "PCT", H, "received PO lines inside the PO tolerance / received PO lines", "po_line, purchase_order", 98, 95), {"compute": m09_receipt_accuracy, "scopes": ("TENANT", "PLANT")}),
     (("DOCK_TO_STOCK", "M09", "Dock-to-stock time (hours)", "HOURS", L, "mean time from goods receipt to the quality usage decision", "inspection_lot", 24, 48), {"compute": m09_dock_to_stock}),
+    (("INVENTORY_TURNS", "M09", "Inventory turns", "RATIO", H, "value issued (201 / 201K, annualised) / average own stock value at standard price", "stock_movement, stock, material", 6, 3), {"compute": m09_inventory_turns, "scopes": ("TENANT", "PLANT")}),
+    (("STOCK_COUNT_ACCURACY", "M09", "Stock count accuracy %", "PCT", H, "counted lines inside the count tolerance at the first count / counted lines of posted physical inventories", "physical_inventory_line, physical_inventory", 98, 95), {"compute": m09_count_accuracy, "scopes": ("TENANT", "PLANT")}),
+    (("STOCK_ADJUSTMENT_VALUE", "M09", "Stock adjustment value (minor units)", "MINOR", L, "absolute value of inventory differences (701 / 702) and scrapping (551)", "stock_movement", None, None), {"compute": m09_adjustment_value, "scopes": ("TENANT", "PLANT")}),
     (("SES_APPROVAL", "M09", "SES approval time (hours)", "HOURS", L, "mean time to approve a service entry sheet", "task", 24, 72), {"compute": m09_ses_approval}),
     (("QUALITY_REJECTION", "M09", "Quality rejection rate %", "PCT", L, "rejected quantity / received quantity", "gr_line", 1, 3), {"compute": m09_quality_rejection}),
     (("FIRST_PASS_MATCH", "M10", "First-pass match %", "PCT", H, "invoices matched without an exception / invoices matched", "invoice", 85, 70), {"compute": m10_first_pass}),

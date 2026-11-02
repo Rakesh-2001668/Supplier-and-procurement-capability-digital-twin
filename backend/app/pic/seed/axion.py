@@ -20,7 +20,7 @@ from app.pic.db import tenant_tx
 from app.pic.models import (
     AppUser, Budget, CatalogueItem, Contract, DemandElement, GoodsReceipt, InfoRecord, InspectionLot, Invoice, InvoiceException,
     Material, MaterialRequest, PlannedOrder, PoLine, PurchaseOrder, Qualification, Requisition, SavingsInitiative, ServiceEntry,
-    SourceList, SourcingEvent, Stock, Supplier, Task, TwinSnapshot,
+    SourceList, SourcingEvent, Stock, StockMovement, Supplier, Task, TwinSnapshot,
 )
 from app.pic.platform import audit, clock, crypto, workflow
 from app.pic.platform.auth import Principal, hash_password, scopes_for
@@ -61,6 +61,8 @@ INTERNAL_USERS = [
     ("quality.inspector", "Bhavani Shankar", ["QUALITY_INSPECTOR"], {"plants": ["P100"]}),
     ("service.owner", "Prakash Rajan", ["SERVICE_OWNER"], {"cost_objects": ["COST_CENTER:4100"]}),
     ("ap.clerk", "Fathima Begum", ["AP_CLERK"], {}),
+    ("inventory.controller", "Pooja Natarajan", ["INVENTORY_CONTROLLER"], {"plants": ["P100", "P200"]}),   # approves stock postings and count differences
+    ("inventory.controller2", "Ilango Chezhian", ["INVENTORY_CONTROLLER"], {"plants": ["P100", "P200"]}),  # second controller: the maker is never the approver
 ]
 
 SUPPLIERS = [
@@ -81,6 +83,7 @@ ROLE_USER = {
     "FINANCE_CONTROLLER": ["finance.controller", "finance.controller2"], "CATEGORY_MANAGER": "category.head", "CPO": "cpo",
     "LEGAL": "legal", "CONTRACT_MANAGER": "contract.manager", "BUYER": "buyer.lead", "SERVICE_OWNER": "service.owner",
     "MDM_STEWARD": ["mdm.purchasing", "mdm.quality", "mdm.finance", "mdm.plant"],
+    "INVENTORY_CONTROLLER": ["inventory.controller", "inventory.controller2"],
 }
 
 
@@ -259,6 +262,10 @@ def _migrate_open_supply(sc: Scenario, suppliers: dict) -> None:
         kd = suppliers["KD002"]
         s.add(Stock(tenant_id=sc.tenant_id, material_id=dc330.id, plant="P100", storage_location="0001", stock_type="UNRESTRICTED",
                     batch="", qty=Decimal(1400)))
+        s.add(StockMovement(tenant_id=sc.tenant_id, material_id=dc330.id, plant="P100", storage_location="0001", movement_type="561",
+                            stock_type="UNRESTRICTED", batch="", qty=Decimal(1400), reference_type="OPENING_BALANCE",
+                            reference_id=uuid.uuid5(uuid.NAMESPACE_URL, "axn-opening-DC-330"), reference_ref="OPEN-DC-330",
+                            value_minor=1400 * 41000, posting_ref="OPEN-AXN", reason_code="OPENING"))   # the ledger explains the opening balance
         s.add(InfoRecord(tenant_id=sc.tenant_id, supplier_id=kd, material_id=dc330.id, plant="P100", last_price_minor=41000,
                          lead_time_days=10))
         # ERP source list for the cover: Trichy Forge fixed, Kovai Diecast as alternate (DC-330 is sourced by contract quota).
