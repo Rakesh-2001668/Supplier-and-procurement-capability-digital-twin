@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
-from app.pic.models import GoodsReceipt, GrLine, Material, Plant, Stock, StockMovement, StockReservation
+from app.pic.models import GoodsReceipt, GrLine, Material, Plant, Stock, StockBatch, StockMovement, StockReservation
 from app.pic.platform import audit, integration
 from app.pic.platform.errors import Problem
 from app.pic.platform.money import D, line_amount
@@ -122,13 +122,40 @@ def reserved_open(session: Session, material_id, plant: str, sloc: Optional[str]
     return D(session.execute(query).scalar_one())
 
 
+def _earliest(rows) -> dict:
+    out: dict = {}
+    for m, b, e in rows:
+        if e is not None and ((m, b) not in out or e < out[(m, b)]):
+            out[(m, b)] = e
+    return out
+
+
 def batch_expiry(session: Session, material_id, batches: Optional[list] = None) -> dict:
-    """{batch: earliest expiry} from the goods receipts of a material. A reversed receipt never counts: its goods were taken back."""
-    query = select(GrLine.batch, func.min(GrLine.expiry)).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
+    """{batch: earliest expiry} of a material (of the named batches, else all): the goods-receipt lines (a reversed receipt never counts: its
+    goods were taken back) and the batch master ``stock_batch`` (opening balances, ERP batch master)."""
+    receipts = select(GrLine.material_id, GrLine.batch, func.min(GrLine.expiry)).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
         GrLine.material_id == material_id, GrLine.expiry.is_not(None), GrLine.batch != "", GoodsReceipt.status != "REVERSED")
+    master = select(StockBatch.material_id, StockBatch.batch, StockBatch.expiry_date).where(
+        StockBatch.material_id == material_id, StockBatch.expiry_date.is_not(None), StockBatch.batch != "")
     if batches is not None:
-        query = query.where(GrLine.batch.in_(list(batches) or [""]))
-    return {batch: expiry for batch, expiry in session.execute(query.group_by(GrLine.batch)).all()}
+        receipts, master = receipts.where(GrLine.batch.in_(list(batches) or [""])), master.where(StockBatch.batch.in_(list(batches) or [""]))
+    rows = list(session.execute(receipts.group_by(GrLine.material_id, GrLine.batch)).all()) + list(session.execute(master).all())
+    return {b: e for (_, b), e in _earliest(rows).items()}
+
+
+def expiry_for_pairs(session: Session, pairs: set) -> dict:
+    """{(material_id, batch): earliest expiry} for the (material, batch) pairs, from goods-receipt lines (reversed receipts excluded) and the
+    batch master. The same answer as ``batch_expiry`` for many materials at once (stock lists, alerts)."""
+    wanted = {(m, b) for m, b in pairs if b}
+    if not wanted:
+        return {}
+    materials, names = {m for m, _ in wanted}, {b for _, b in wanted}
+    receipts = session.execute(select(GrLine.material_id, GrLine.batch, func.min(GrLine.expiry)).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
+        GrLine.material_id.in_(materials), GrLine.batch.in_(names), GrLine.expiry.is_not(None), GoodsReceipt.status != "REVERSED")
+        .group_by(GrLine.material_id, GrLine.batch)).all()
+    master = session.execute(select(StockBatch.material_id, StockBatch.batch, StockBatch.expiry_date).where(
+        StockBatch.material_id.in_(materials), StockBatch.batch.in_(names), StockBatch.expiry_date.is_not(None))).all()
+    return {k: e for k, e in _earliest(list(receipts) + list(master)).items() if k in wanted}
 
 
 def fefo_allocation(session: Session, material_id, plant: str, sloc: str, qty: Decimal, stock_type: str = "UNRESTRICTED",

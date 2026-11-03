@@ -233,7 +233,7 @@ class SapS4Simulator(Connector):
 
 
 # ---------------------------------------------------------------- SAP S/4HANA: sandbox simulator by default, the real connector when configured
-REF_LEN = {"PURCHASE_ORDER": 12, "SUPPLIER_INVOICE": 25, "SUPPLIER_CREDIT_MEMO": 25, "GOODS_RECEIPT": 25, "SUPPLIER_MASTER": 20,
+REF_LEN = {"PURCHASE_ORDER": 12, "SUPPLIER_INVOICE": 25, "SUPPLIER_CREDIT_MEMO": 25, "GOODS_RECEIPT": 25, "STOCK_POSTING": 25, "SUPPLIER_MASTER": 20,
            "PURCHASE_REQUISITION": 40, "MATERIAL_MASTER": 40, "PAYMENT": 25}
 # message type -> (mapping key in sap_mapping.SERVICES, entity set, reference field, number field, select)
 SAP_FIND = {
@@ -242,6 +242,7 @@ SAP_FIND = {
     "SUPPLIER_INVOICE": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
     "SUPPLIER_CREDIT_MEMO": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
     "GOODS_RECEIPT": ("A_MaterialDocumentHeader", "MaterialDocumentHeaderText", "MaterialDocument"),
+    "STOCK_POSTING": ("A_MaterialDocumentHeader", "MaterialDocumentHeaderText", "MaterialDocument"),
     "SUPPLIER_MASTER": ("A_BusinessPartner", "SearchTerm1", "BusinessPartner"),
 }
 
@@ -259,6 +260,8 @@ class SapS4(SapS4Simulator):
         PIC_ERP_SAP_S4_COMPANY_MAP    PIC company code -> SAP company code, "1000=1710" (unmapped codes are sent unchanged)
         PIC_ERP_SAP_S4_PURCH_ORG, _PURCH_GROUP, _PO_TYPE, _TAX_CODE, _GL_ACCOUNT (invoices without PO), _BANK_GL_ACCOUNT (IDoc payment),
         PIC_ERP_SAP_S4_PAYMENT_SERVICE (custom OData service for outgoing payments), _BP_GROUPING, _PRODUCT_TYPE
+        PIC_ERP_SAP_S4_SCRAP_COST_CENTER (cost centre of a scrapping / goods issue whose PIC document names none), _REASON_MAP ("DAMAGED=0001,EXPIRED=0002":
+        PIC scrap reason -> SAP goods movement reason), _STOCK_TYPE_MAP ("QUALITY=02,BLOCKED=03": PIC stock type -> SAP stock type code)
         PIC_ERP_SAP_S4_TIMEOUT / _RETRIES   seconds per call (20) and retries (2) on read errors and gateway overload
 
     The field mappings and the assumed API shapes are documented in ``sap_mapping.py``; the inbound reads in ``sap_pull.py``.
@@ -266,7 +269,8 @@ class SapS4(SapS4Simulator):
     name = "SAP S/4HANA"
     credentials = "basic|token"
     SETTINGS = ("SAP_CLIENT", "ODATA_VERSION", "TRANSPORT", "IDOC_DIR", "IDOC_PARTNER", "IDOC_PORT", "IDOC_RECEIVER", "PURCH_ORG", "PURCH_GROUP",
-                "PO_TYPE", "TAX_CODE", "GL_ACCOUNT", "BANK_GL_ACCOUNT", "PAYMENT_SERVICE", "BP_GROUPING", "PRODUCT_TYPE", "TERMS_MAP", "TIMEOUT", "RETRIES")
+                "PO_TYPE", "TAX_CODE", "GL_ACCOUNT", "BANK_GL_ACCOUNT", "PAYMENT_SERVICE", "BP_GROUPING", "PRODUCT_TYPE", "TERMS_MAP", "TIMEOUT", "RETRIES",
+                "SCRAP_COST_CENTER", "REASON_MAP", "STOCK_TYPE_MAP")
 
     # ------------------------------------------------------------ mode and configuration
     @property
@@ -356,7 +360,9 @@ class SapS4(SapS4Simulator):
                 "today": clock.today(), "purch_org": self.env("PURCH_ORG"), "purch_group": self.env("PURCH_GROUP"), "po_type": self.env("PO_TYPE"),
                 "tax_code": self.env("TAX_CODE"), "bp_grouping": self.env("BP_GROUPING"), "product_type": self.env("PRODUCT_TYPE"),
                 "payment_service": self.env("PAYMENT_SERVICE"), "bank_gl_account": self.env("BANK_GL_ACCOUNT"), "idoc_partner": self.env("IDOC_PARTNER"),
-                "idoc_port": self.env("IDOC_PORT"), "idoc_receiver": self.env("IDOC_RECEIVER")}
+                "idoc_port": self.env("IDOC_PORT"), "idoc_receiver": self.env("IDOC_RECEIVER"),
+                "stock_cost_center": self.env("SCRAP_COST_CENTER"), "reason_map": _pairs(self.env("REASON_MAP")),
+                "stock_type_codes": _pairs(self.env("STOCK_TYPE_MAP")) or None}
 
     def _po_lines(self, session: Session, p: dict) -> list[dict]:
         from app.pic.models import Material, PoLine, PurchaseOrder
@@ -392,6 +398,43 @@ class SapS4(SapS4Simulator):
             items.append({"material": material.number, "plant": po_line.plant, "storageLocation": po_line.storage_location, "po": po.erp_doc_no,
                           "poItem": po_line.line_no, "qty": line["accepted"], "uom": po_line.uom})
         return [i for i in items if Decimal(str(i["qty"])) > 0]
+
+    def _stock_items(self, session: Session, message: IntegrationMessage, ctx: dict) -> list[dict]:
+        """Material-document items of an inventory message (stock posting, count differences, reservation issue). The payload carries PIC keys
+        only; the unit of measure comes from the material master. What cannot be expressed in SAP is a rejection (retried, then dead-lettered)."""
+        from app.pic.models import Material
+        p = _payload(message)
+        if p.get("reversalOf"):
+            raise ConnectorRejected(f"{message.object_ref}: PIC never reverses a posted inventory document and the SAP mapping has no reversal "
+                                    "(post the correction as a new document)")
+        numbers = {line.get("material") for line in p.get("lines") or [] if line.get("material")}
+        uoms = {m.number: m.base_uom for m in session.execute(select(Material).where(Material.number.in_(numbers or {""}))).scalars()}
+        try:
+            return sap_mapping.stock_items(message.object_type, p, uoms, ctx)
+        except ValueError as exc:
+            raise ConnectorRejected(f"{message.object_ref}: {exc}")
+
+    def _stock_refs(self, message: IntegrationMessage) -> list[str]:
+        """The PIC references of the material documents of an inventory message (one per goods movement code)."""
+        codes = sap_mapping.stock_codes(_payload(message))
+        base = reference(message.idempotency_key, REF_LEN["STOCK_POSTING"])
+        return [sap_mapping.stock_reference(base, code, len(codes)) for code in codes]
+
+    def _post_stock(self, session: Session, client, message: IntegrationMessage, ctx: dict) -> str:
+        """OData: one material document per goods movement code. A document already in SAP (an earlier attempt failed after the first of two)
+        is reused, never created again."""
+        specs = sap_mapping.stock_posting(message.object_type, _payload(message), ctx, self._stock_items(session, message, ctx))
+        numbers = []
+        for spec in specs:
+            rows = client.query(spec.service, spec.entity_set, filter=f"{spec.reference_field} eq {sap_odata.literal(spec.reference)}", select=spec.number_field, top=1)
+            number = rows[0].get(spec.number_field) if rows else None
+            if not number:
+                entity = client.create(spec.service, spec.entity_set, spec.body)
+                number = entity.get(spec.number_field)
+            if not number:
+                raise ConnectorRejected(f"SAP accepted the {message.message_type} but returned no {spec.number_field}")
+            numbers.append(str(number))
+        return "/".join(numbers)
 
     def _invoice_items(self, session: Session, message: IntegrationMessage, scale: Optional[Decimal] = None) -> list[dict]:
         from app.pic.models import Invoice, InvoiceLine, PoLine, PurchaseOrder
@@ -464,6 +507,9 @@ class SapS4(SapS4Simulator):
         transport = self.transport_for(t)
         reference_value = reference(message.idempotency_key, REF_LEN.get(t, 40))
         if transport == "idoc-file":
+            if t == "STOCK_POSTING":
+                refs = self._stock_refs(message)
+                return RemoteDocument("/".join(refs)) if refs and all(self.idoc_transport().exists(r) for r in refs) else None
             return RemoteDocument(reference_value) if self.idoc_transport().exists(reference_value) else None
         if transport == "idoc":
             return None            # the ICF IDoc port has no query by reference; the IDoc ARCKEY carries it for the SAP-side status report
@@ -476,6 +522,17 @@ class SapS4(SapS4Simulator):
             return None            # master changes are always applied (PATCH is idempotent)
         if t == "PAYMENT":
             return None
+        if t == "STOCK_POSTING":   # one material document per goods movement code: found only when every one of them is
+            entity, field, number = SAP_FIND[t]
+            found, refs = [], self._stock_refs(message)
+            if not refs:
+                return None
+            for ref in refs:
+                rows = self.client().query(sap_mapping.SERVICES[t], entity, filter=f"{field} eq {sap_odata.literal(ref)}", select=number, top=1)
+                if not rows:
+                    return None
+                found.append(str(rows[0][number]))
+            return RemoteDocument("/".join(found))
         entity, field, number = SAP_FIND[t]
         value = str(p.get("supplier")) if t == "SUPPLIER_MASTER" else reference_value
         rows = self.client().query(sap_mapping.SERVICES[t], entity, filter=f"{field} eq {sap_odata.literal(value)}", select=number, top=1)
@@ -504,6 +561,8 @@ class SapS4(SapS4Simulator):
         if transport != "odata":
             return self._post_idoc(session, message, ctx)
         client = self.client()
+        if t == "STOCK_POSTING":
+            return self._post_stock(session, client, message, ctx)
         if t == "SUPPLIER_MASTER" and p.get("change"):
             return self._change_vendor(session, client, message, ctx)
         if t == "MATERIAL_MASTER" and p.get("change"):
@@ -531,8 +590,20 @@ class SapS4(SapS4Simulator):
             data["items"] = self._invoice_items(session, message)
         elif t == "SUPPLIER_MASTER":
             data["supplier"] = self._supplier_master(session, message)
+        elif t == "STOCK_POSTING":
+            return self._post_stock_idoc(session, message, ctx)
         xml = sap_mapping.idoc_xml(t, p, ctx, data)
         return self.idoc_transport().send(ctx["reference"], xml)
+
+    def _post_stock_idoc(self, session, message, ctx) -> str:
+        """IDoc MBGMCR03: one IDoc (one E1BP2017_GM_CODE) per goods movement code. The IDoc port returns the IDoc numbers, joined with '/'."""
+        p = _payload(message)
+        groups = sap_mapping.stock_groups(self._stock_items(session, message, ctx))
+        transport, numbers = self.idoc_transport(), []
+        for (code, items), ref in zip(groups, self._stock_refs(message)):
+            xml = sap_mapping.idoc_xml("STOCK_POSTING", p, {**ctx, "reference": ref}, {"code": code, "items": items, "objectType": message.object_type})
+            numbers.append(transport.send(ref, xml))
+        return "/".join(numbers)
 
     def _change_vendor(self, session, client, message, ctx) -> str:
         """Apply an approved MDM-04 change (tax number, address, e-mail) to the business partner found by supplier code."""
@@ -606,6 +677,17 @@ class SapS4(SapS4Simulator):
         if not self.configured():
             raise ConnectorNotConfigured(f"SAP_S4 connector is not configured: set {', '.join(self.missing())}")
         return sap_pull.pull(self.client(), kind, since, self.company(company_code), clock.today())
+
+
+def _pairs(value: Optional[str]) -> dict:
+    """``"A=1,B=2"`` (an environment setting) as a dict; blanks and entries without '=' are ignored."""
+    out = {}
+    for pair in (value or "").split(","):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            if k.strip() and v.strip():
+                out[k.strip()] = v.strip()
+    return out
 
 
 def _payload(message: IntegrationMessage) -> dict:

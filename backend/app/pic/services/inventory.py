@@ -414,7 +414,7 @@ def _execute_posting(session: Session, posting: StockPosting, lines: list[StockP
     erp = stock_ledger.enqueue_erp(
         session, object_type="STOCK_POSTING", object_id=posting.id, ref=posting.number, company_code=posting.company_code, key=f"STP|{posting.number}",
         payload={"posting": posting.number, "type": posting.posting_type, "plant": posting.plant, "postingDate": posting.posting_date.isoformat(),
-                 "grossMinor": posting.total_value_minor,
+                 "grossMinor": posting.total_value_minor, "reasonCode": posting.reason_code, "reason": (posting.reason or "")[:200] or None,
                  "lines": [{"material": session.get(Material, l.material_id).number, "batch": l.batch, "qty": str(l.qty), "movement": l.movement_type,
                             "fromPlant": l.from_plant, "fromStorageLocation": l.from_storage_location, "fromStockType": l.from_stock_type,
                             "toPlant": l.to_plant, "toStorageLocation": l.to_storage_location, "toStockType": l.to_stock_type,

@@ -46,6 +46,7 @@ PACKS = (
     "erp_client_kac",         # D10 tenant KAC loaded from a mock SAP S/4HANA cutover extract (TD §12.4 ERP migration)
     "contracts_kac",          # D12 tenant KAC: master agreements, call-offs, NDAs, rate cards, SOWs from a mock contract-register export
     "inventory_ops",          # D13 tenants AXN and KAC: opening stock, transfer, blocked batch, scrap, counts and reservations (inventory module)
+    "inventory_master",       # D14 tenants AXN and KAC: MOCK go-live inputs of the inventory module: master data, KAC opening stock, controllers per plant, KAC rule values
     "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
 )

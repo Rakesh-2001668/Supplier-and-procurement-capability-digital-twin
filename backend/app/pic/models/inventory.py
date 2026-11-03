@@ -167,3 +167,18 @@ class StockReservation(TenantScoped, Base):
     rule_set_version: Mapped[Optional[str]] = mapped_column(String(80))
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     closed_reason: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class StockBatch(TenantScoped, Base):
+    """Batch master of a material: the expiry (and manufacturing) date of a lot that did not come in through a goods receipt, i.e. an opening
+    balance (``tools/stock_opening_load.py``) or an ERP batch master (SAP MCH1-VFDAT). Goods receipts keep carrying their own expiry
+    (``gr_line.expiry``); ``stock_ledger.batch_expiry`` takes the earliest of both. One row per tenant, material and batch (migration 0019)."""
+    __tablename__ = "stock_batch"
+    __table_args__ = (UniqueConstraint("tenant_id", "material_id", "batch"),
+                      CheckConstraint("expiry_date IS NULL OR manufactured_date IS NULL OR expiry_date >= manufactured_date", name="expiry_after_manufacture"))
+    material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
+    batch: Mapped[str] = mapped_column(String(30), nullable=False)
+    expiry_date: Mapped[Optional[date]] = mapped_column(Date)
+    manufactured_date: Mapped[Optional[date]] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="OPENING_BALANCE")     # OPENING_BALANCE | ERP_BATCH_MASTER | MANUAL
+    note: Mapped[Optional[str]] = mapped_column(Text)

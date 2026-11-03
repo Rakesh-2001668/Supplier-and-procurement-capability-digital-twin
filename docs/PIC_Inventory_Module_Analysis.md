@@ -15,7 +15,7 @@ The Technical Document (TD) and Blueprint (BP) do not define a stand-alone inven
 | 3 | Batch, serial, expiry capture where required (BP §15.1) | Built, with a serial-reuse defect and a 500 on bad dates | Fixed |
 | 4 | Over-delivery above tolerance blocked at receipt (BP §15.4, TD §5.2) | Built | Unchanged |
 | 5 | Consignment and subcontracting stock (BP §15.1, §22) | Built, no plant check | Plant and period checks added |
-| 6 | MRP supply uses unrestricted on-hand (TD §9.1) | Built | Unchanged (consignment decision open, section 6) |
+| 6 | MRP supply uses unrestricted on-hand (TD §9.1) | Built | Extended by product decision (2 Nov 2026): consignment stock is also available supply (section 6) |
 | 7 | Reservations are gross demand in MRP (TD §9.1) | Demand type only, nothing created it | Reservations create and release the demand |
 | 8 | Stock/requirements list per material (BP MRP-02) | Missing | Material stock card with per-bucket projection |
 | 9 | KPIs: stock-outs, days of cover, dock-to-stock, quality rejection (BP) | Built | Stock-out definition corrected; inventory turns, count accuracy, adjustment value added |
@@ -66,16 +66,24 @@ Each has a regression test in `backend/tests/pic/test_inventory_ledger.py`.
 
 1. **Not run in the browser:** block and unblock postings, rejecting a posting, a Finance Controller approving, a controller requesting a recount, and the batch, material-group, expiring and below-safety filters. The shortage highlighting in the material card was not seen because the demo data has no demand inside the 90-day horizon.
 2. **Full backend suite** to be run once on the final code before the push.
-3. **Decision: consignment stock in MRP supply.** The TD says unrestricted only, so consignment goods are neither open order nor on-hand supply after receipt. Left as specified.
+3. **Decided (2 Nov 2026): consignment stock counts as MRP supply.** This deliberately extends TD §9.1 ("on_hand_unrestricted"): without it, goods received into consignment were neither open order nor on-hand supply, so MRP would plan a second purchase for stock the supplier already holds at the plant. "Available stock" is now unrestricted plus consignment in MRP netting, the stock card, the stock-out KPI and the stock-out, below-safety and reorder alerts. Quality, blocked and subcontractor stock stay excluded. Own-stock value and days of cover still use unrestricted stock only, because the liability for consignment goods arises at withdrawal. Regression test: `test_consignment_stock_counts_as_supply_but_quality_stock_does_not`.
 4. **Decision: cancelled or issued reservations** set the demand to zero and keep the row so net-change MRP replans the material; the daily job removes zero rows after seven days.
 5. **SOD-10** is enforced per document, not as a role-pair rule, because the new controller role legitimately holds both posting and approval. Consequence: a Receiver cannot also be an Inventory Controller or Finance Controller.
 6. **Known, not changed:** the ERP stock sync writes an empty-batch balance that can double-count batch-managed materials; fractional quantities are accepted for each-unit materials (no unit-of-measure rule); demo documents are dated 2027 by the pinned business clock, so new documents sort below them in lists.
 7. The old `/inventory` prototype screens still use their own mock tables and are not part of the PIC lint scope.
 
-## 7. What the product owner must supply
+## 7. Mock stand-ins for the go-live inputs, and what is still needed for real
 
-- ERP mapping of the `STOCK_POSTING` message (goods-movement BAPI or material-document API) for any live ERP; the SAP simulator works today.
-- Standard prices, safety stock, reorder points and batch/expiry flags on materials; opening stock for real tenants (ledger opening movement or ERP stock sync).
-- At least two Inventory Controller users per plant, with plant and value-limit attributes.
-- Decisions on the rule values: auto-post limit (default ₹25,000), approval bands, count tolerance (2% and ₹5,000), scrap reason codes, reservation grace days (7), alert ageing limits.
-- A decision window to apply migration 0018 to production, then the normal Neon setup run (it seeds number ranges, rule sets, SoD rules and the demo pack).
+On 3 November 2026 the five go-live inputs were mocked so the demo tenants behave like configured production tenants. Everything is labelled MOCK, idempotent, and loaded by the dataset pack `inventory-master` (after `inventory-ops`); migration 0019 adds one table, `stock_batch`, so opening balances can carry an expiry date.
+
+| Input | Mock built | Needed for real |
+|---|---|---|
+| ERP mapping of `STOCK_POSTING` | SAP mapping for both the IDoc path (MBGMCR03) and the OData path (material document), with payload builders for transfer, block, unblock, scrap, count gain and loss, and reservation issue; round trip proven against the loopback mock; runbook section 7 has the field table | Validation against a real SAP sandbox: count differences as goods movements versus physical-inventory documents, stock-type, reason and unit codes, cost-centre determination |
+| Standard prices, safety stock, reorder points | KAC: 147 safety stocks and 1,574 reorder/max rows filled, 48 materials flagged batch/expiry; AXN: 13 each. All KAC prices already existed from SAP. Formulas in `backend/data/erp_mock/KAC_INVENTORY/README.md`; every filled value has an audit event | The client's own planning parameters |
+| Opening stock (KAC) | 1,624 lines for 1,057 materials at plants 1100, 1200 and 1300, value INR 50.2 crore, reconciled to the paisa; deliberate stock-outs, low stock, expiring, quality-hold, blocked and consignment cases; reusable loader `tools/stock_opening_load.py` with dry run and validation | The client's stock list from the ERP at cut-over, reconciled to its totals |
+| Two Inventory Controllers per plant | 10 mock controllers (two for each of P100, P200, 1100, 1200, 1300), plant-restricted, KAC limit INR 15 lakh; a receiver for P200 | The client's real users, plants and value limits |
+| Rule values | KAC rule versions `2026.2-KAC-MOCK` for the four inventory rule sets, described as "MOCK proposal - pending client sign-off"; `docs/PIC_Inventory_Rule_Values_Proposal.md` lists every value and has a blank sign-off table | The client's signed-off values. Open question recorded there: GST treatment of plant-to-plant transfers between states |
+
+Known limits of the mocks: the expiry dates are relative to 31 October 2026, so they look expired when viewed months later; 34 die-set lines sit below the SAP safety stock because that safety stock is 34 to 39 pieces of INR 35 lakh each (noted in the data README).
+
+Still needed regardless: a decision window to apply migrations 0018 and 0019 to production, then the normal Neon setup run.

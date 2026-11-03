@@ -19,7 +19,10 @@ from tests.pic.conftest import PASSWORD
 def packs(database):
     assert datasets.apply_pack("erp_client_kac", PASSWORD)[0]["status"] in ("LOADED", "ALREADY_LOADED")   # KAC comes from its SAP extract
     results = {r["tenant"]: r for r in datasets.apply_pack("inventory_ops", PASSWORD)}
-    assert set(results) == {"AXN", "KAC"} and {r["status"] for r in results.values()} == {"LOADED"}, results
+    assert set(results) == {"AXN", "KAC"} and {r["status"] for r in results.values()} <= {"LOADED", "ALREADY_LOADED"}, results
+    for code, result in results.items():       # another module of the same run (the inventory_master pack needs this one) may have loaded it: read what the load recorded
+        if result["status"] == "ALREADY_LOADED":
+            result["summary"] = datasets.loaded(code, "inventory-ops").summary
     with system_tx() as s:
         ids = {code: tid for code, tid in s.execute(select(Tenant.code, Tenant.id))}
     yield {"results": results, "ids": ids}

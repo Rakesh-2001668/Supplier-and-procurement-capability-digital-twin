@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.pic.db import current_tenant
 from app.pic.models import (
     AppUser, DemandElement, GoodsReceipt, GrLine, InspectionLot, Material, PhysicalInventory, PlanningParameter, PurchaseOrder, Stock, StockMovement,
-    PoLine, StockPosting, StockReservation,
+    PoLine, StockBatch, StockPosting, StockReservation,
 )
 from app.pic.platform import abac, audit, clock
 from app.pic.platform import inventory_defaults as ir
@@ -78,16 +78,8 @@ def _material_filter(query, term: Optional[str]):
 
 
 def _expiry_map(session: Session, pairs: set) -> dict:
-    """{(material_id, batch): earliest expiry} for the pairs, receipts that were reversed excluded."""
-    if not pairs:
-        return {}
-    wanted = {(m, b) for m, b in pairs if b}
-    if not wanted:
-        return {}
-    rows = session.execute(select(GrLine.material_id, GrLine.batch, func.min(GrLine.expiry)).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
-        GrLine.material_id.in_({m for m, _ in wanted}), GrLine.batch.in_({b for _, b in wanted}), GrLine.expiry.is_not(None),
-        GoodsReceipt.status != "REVERSED").group_by(GrLine.material_id, GrLine.batch)).all()
-    return {(m, b): e for m, b, e in rows}
+    """{(material_id, batch): earliest expiry} for the pairs: goods-receipt lines (reversed receipts excluded) and the batch master (opening balances)."""
+    return stock_ledger.expiry_for_pairs(session, pairs)
 
 
 def _unrestricted(session: Session, pairs: set) -> dict:
@@ -138,7 +130,7 @@ def stock_query(session: Session, *, material: Optional[str], plant: Optional[st
     if only_non_zero:
         query = query.where(Stock.qty != 0)
     if below_safety:
-        unrestricted = (select(Stock.material_id.label("m"), Stock.plant.label("p"), func.sum(Stock.qty).label("q")).where(Stock.stock_type == "UNRESTRICTED")
+        unrestricted = (select(Stock.material_id.label("m"), Stock.plant.label("p"), func.sum(Stock.qty).label("q")).where(Stock.stock_type.in_(planning.AVAILABLE_STOCK_TYPES))
                         .group_by(Stock.material_id, Stock.plant).subquery())
         below = select(Material.id, unrestricted.c.p).join(unrestricted, unrestricted.c.m == Material.id).where(
             Material.safety_stock > 0, unrestricted.c.q < Material.safety_stock)
@@ -147,7 +139,9 @@ def stock_query(session: Session, *, material: Optional[str], plant: Optional[st
         limit = clock.today() + timedelta(days=max(0, int(expiring_within_days)))
         expiring = (select(GrLine.material_id, GrLine.batch).join(GoodsReceipt, GoodsReceipt.id == GrLine.gr_id).where(
             GrLine.expiry.is_not(None), GrLine.expiry <= limit, GrLine.batch != "", GoodsReceipt.status != "REVERSED"))
-        query = query.where(Stock.qty > 0, Stock.stock_type.in_(LIVE_TYPES), tuple_(Stock.material_id, Stock.batch).in_(expiring))
+        master = select(StockBatch.material_id, StockBatch.batch).where(StockBatch.expiry_date.is_not(None), StockBatch.expiry_date <= limit,
+                                                                        StockBatch.batch != "")   # opening balances have no receipt
+        query = query.where(Stock.qty > 0, Stock.stock_type.in_(LIVE_TYPES), tuple_(Stock.material_id, Stock.batch).in_(expiring.union(master)))
     return query
 
 
@@ -219,7 +213,7 @@ def summary(session: Session, plant: Optional[str] = None) -> dict:
             buckets[key]["valueMinor"] += _price_value(s.qty, m.standard_price_minor) or 0
     materials_below = session.execute(
         select(func.count()).select_from(select(Stock.material_id, Stock.plant).join(Material, Material.id == Stock.material_id)
-                                         .where(Stock.stock_type == "UNRESTRICTED", Material.safety_stock > 0, *where)
+                                         .where(Stock.stock_type.in_(planning.AVAILABLE_STOCK_TYPES), Material.safety_stock > 0, *where)
                                          .group_by(Stock.material_id, Stock.plant, Material.safety_stock)
                                          .having(func.sum(Stock.qty) < Material.safety_stock).subquery())).scalar_one()
     ctx_plants = sorted(scope) if scope is not None else [None]
@@ -238,7 +232,7 @@ def summary(session: Session, plant: Optional[str] = None) -> dict:
             "qualityHold": {"openLots": len(lot_ages), "ageBucketsDays": _age_buckets(lot_ages),
                             "valueMinor": by_type.get("QUALITY", {}).get("valueMinor", 0)},
             "blockedValueMinor": by_type.get("BLOCKED", {}).get("valueMinor", 0), "expiring": buckets, "belowSafetyCount": materials_below,
-            "stockOutCount": stockouts, "stockOutDefinition": "materials with open demand and no unrestricted stock (KPI M02.STOCKOUTS)",
+            "stockOutCount": stockouts, "stockOutDefinition": "stock materials with open demand and no available (unrestricted or consignment) stock (KPI M02.STOCKOUTS)",
             "daysOfCover": str(cover) if cover is not None else None,
             "openReservations": {"count": reservation[0], "openQty": jsonable(reservation[1])},
             "openCounts": {"total": sum(counts.values()), "byStatus": counts, "awaitingApproval": counts.get("PENDING_APPROVAL", 0)},
@@ -267,7 +261,7 @@ def alerts(session: Session, plant: Optional[str] = None, types: Optional[str] =
     def want(kind: str) -> bool:
         return not wanted or kind in wanted
 
-    unrestricted = (select(Stock.material_id.label("m"), Stock.plant.label("p"), func.sum(Stock.qty).label("q")).where(Stock.stock_type == "UNRESTRICTED", in_scope(Stock.plant))
+    unrestricted = (select(Stock.material_id.label("m"), Stock.plant.label("p"), func.sum(Stock.qty).label("q")).where(Stock.stock_type.in_(planning.AVAILABLE_STOCK_TYPES), in_scope(Stock.plant))
                     .group_by(Stock.material_id, Stock.plant).subquery())
     demand = (select(DemandElement.material_id.label("m"), DemandElement.plant.label("p"), func.sum(DemandElement.qty).label("d")).where(
         DemandElement.qty > 0, in_scope(DemandElement.plant)).group_by(DemandElement.material_id, DemandElement.plant).subquery())
@@ -276,7 +270,7 @@ def alerts(session: Session, plant: Optional[str] = None, types: Optional[str] =
                                            .outerjoin(unrestricted, and_(unrestricted.c.m == Material.id, unrestricted.c.p == demand.c.p))
                                            .where(Material.status != "BLOCKED", Material.type == "STOCK", func.coalesce(unrestricted.c.q, 0) <= 0)
                                            .order_by(Material.number)).all():
-            out.append(_alert("STOCK_OUT", "CRITICAL", f"{m.number} is out of stock at {pl}", f"Open demand {jsonable(d)} {m.base_uom} and no unrestricted stock.",
+            out.append(_alert("STOCK_OUT", "CRITICAL", f"{m.number} is out of stock at {pl}", f"Open demand {jsonable(d)} {m.base_uom} and no available (unrestricted or consignment) stock.",
                               material=m, plant=pl, qty=q, obj={"type": "MATERIAL", "ref": m.number}, action="Expedite open supply or raise a requisition"))
     if want("BELOW_SAFETY"):
         for m, pl, q in session.execute(select(Material, unrestricted.c.p, unrestricted.c.q).join(unrestricted, unrestricted.c.m == Material.id).where(

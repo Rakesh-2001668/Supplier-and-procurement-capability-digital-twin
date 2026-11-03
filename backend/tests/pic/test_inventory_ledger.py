@@ -472,3 +472,33 @@ def test_movement_ledger_filters_and_csv_export(env, client, login):
         from app.pic.models import AuditEvent
         assert s.execute(select(func.count()).select_from(AuditEvent).where(AuditEvent.object_type == "STOCK_LEDGER_EXPORT")).scalar_one() >= 1
     assert client.get("/v1/stock/movements/export?plant=P100", headers=_h(login, "recv2")).status_code == 403
+
+
+def test_consignment_stock_counts_as_supply_but_quality_stock_does_not(env, client, login):
+    """Product decision of 2 Nov 2026 (extends TD 9.1): supplier-owned consignment stock is available supply for MRP, the stock card and the
+    stock-out alert; quality and blocked stock are not. It is not part of the own-stock value or days of cover (the liability arises at withdrawal)."""
+    _pin(TODAY, 12)
+    ic = _h(login, "ic")
+    with env.act("ic", at(TODAY, 10)) as s:   # a posting needs a signed-in user
+        for number in ("INL-CSUP", "INL-QSUP"):
+            m = Material(tenant_id=env.tenant_id, number=number, description=f"Ledger test {number}", type="STOCK", material_group="GENERAL", category="GENERAL",
+                         base_uom="EA", mrp_type="PD", lot_size_policy="EXACT", safety_stock=Decimal(0), planned_delivery_days=3, gr_processing_days=0,
+                         standard_price_minor=10_000, status="ACTIVE", hsn_code="8708", gst_rate=Decimal(18))
+            s.add(m)
+            s.flush()
+            M[number] = m.id
+        for number, stock_type in (("INL-CSUP", "CONSIGNMENT"), ("INL-QSUP", "QUALITY")):
+            stock_ledger.post_movement(s, material_id=M[number], plant=P2, sloc="0001", stock_type=stock_type, batch="", qty=Decimal(50), movement="101",
+                                       ref_type="TEST", ref_id=uuid.uuid4(), ref="CS-1")
+            s.add(DemandElement(tenant_id=env.tenant_id, material_id=M[number], plant=P2, type="SALES_ORDER", reference=f"SO-{number}",
+                                req_date=TODAY + timedelta(days=5), qty=Decimal(30), changed_at=clock.now()))
+    consignment = client.get(f"/v1/stock/materials/INL-CSUP?plant={P2}", headers=ic).json()
+    profile = next(p for p in consignment["requirements"] if p["plant"] == P2)
+    assert profile["onHand"] == "50" and profile["buckets"][0]["shortage"] is False
+    quality = client.get(f"/v1/stock/materials/INL-QSUP?plant={P2}", headers=ic).json()
+    assert next(p for p in quality["requirements"] if p["plant"] == P2)["onHand"] == "0"
+    outs = {a["material"] for a in client.get("/v1/stock/alerts?type=STOCK_OUT&limit=200", headers=ic).json()["items"]}
+    assert "INL-CSUP" not in outs and "INL-QSUP" in outs
+    with tenant_tx(env.tenant_id) as s:   # remove the demand again: later tests count stock-outs
+        for row in s.execute(select(DemandElement).where(DemandElement.reference.in_(("SO-INL-CSUP", "SO-INL-QSUP")))).scalars():
+            s.delete(row)

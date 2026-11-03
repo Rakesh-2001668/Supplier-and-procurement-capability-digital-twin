@@ -186,10 +186,10 @@ def m02_conversion_lead(c: Ctx) -> Result:
 
 def m02_stockouts(c: Ctx) -> Result:
     n = c.scalar("SELECT count(*) FROM (SELECT m.id FROM pic.material m LEFT JOIN pic.stock s ON s.material_id = m.id "
-                 "AND s.stock_type = 'UNRESTRICTED'" + c.at_plant("s.plant") + " WHERE m.status <> 'BLOCKED' AND m.type = 'STOCK' GROUP BY m.id "
+                 "AND s.stock_type IN ('UNRESTRICTED', 'CONSIGNMENT')" + c.at_plant("s.plant") + " WHERE m.status <> 'BLOCKED' AND m.type = 'STOCK' GROUP BY m.id "
                  "HAVING coalesce(sum(s.qty), 0) <= 0 AND EXISTS (SELECT 1 FROM pic.demand_element d WHERE d.material_id = m.id AND d.qty > 0"
                  + c.at_plant("d.plant") + ")) x")
-    return count_of(n, {"definition": "stock materials with demand and no unrestricted stock"})
+    return count_of(n, {"definition": "stock materials with demand and no available (unrestricted or consignment) stock"})
 
 
 def m02_days_of_cover(c: Ctx) -> Result:
@@ -553,7 +553,7 @@ for _args, _kw in [
     (("FORECAST_MAPE", "M02", "Forecast accuracy (MAPE) %", "PCT", L, "mean |effective forecast − actual| / actual over closed forecast periods", "forecast", 20, 30), {"compute": m02_mape, "scopes": ("TENANT", "PLANT")}),
     (("EXCEPTION_BACKLOG", "M02", "Open MRP exceptions", "COUNT", L, "MRP exceptions with status OPEN", "mrp_exception", 20, 50), {"compute": m02_exception_backlog, "point_in_time": True}),
     (("PO_CONVERSION_LEAD", "M02", "Planned-order conversion lead time (days)", "DAYS", L, "mean time from planned order creation to the requisition it became", "planned_order, requisition", 3, 7), {"compute": m02_conversion_lead, "scopes": ("TENANT", "PLANT")}),
-    (("STOCKOUTS", "M02", "Stock-out incidents", "COUNT", L, "materials with open demand and no unrestricted stock", "material, stock, demand_element", 0, 3), {"compute": m02_stockouts, "scopes": ("TENANT", "PLANT"), "point_in_time": True}),
+    (("STOCKOUTS", "M02", "Stock-out incidents", "COUNT", L, "stock materials with open demand and no available (unrestricted or consignment) stock", "material, stock, demand_element", 0, 3), {"compute": m02_stockouts, "scopes": ("TENANT", "PLANT"), "point_in_time": True}),
     (("DAYS_OF_COVER", "M02", "Inventory days of cover", "DAYS", L, "unrestricted stock value / (annual demand value / 365)", "stock, material", 45, 75), {"compute": m02_days_of_cover, "scopes": ("TENANT", "PLANT"), "point_in_time": True}),
     (("REQUEST_CYCLE", "M03", "Material request cycle time (days)", "DAYS", L, "mean time from material request to the created material", "material_request, material", 3, 5), {"compute": m03_request_cycle}),
     (("DUPLICATE_RATE", "M03", "Duplicate rate %", "PCT", L, "requests blocked as duplicates or merged / requests", "material_request", 5, 10), {"compute": m03_duplicate_rate}),

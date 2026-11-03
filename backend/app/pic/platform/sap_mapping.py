@@ -12,6 +12,12 @@ Assumptions (confirm against the customer's system at onboarding; they are the *
   GOODS_RECEIPT         API_MATERIAL_DOCUMENT_SRV     A_MaterialDocumentHeader (GoodsMovementCode 01) with
                         to_MaterialDocumentItem (movement type 101 against the PO item); reference in MaterialDocumentHeaderText
                         (25 chars); number = MaterialDocument.
+  STOCK_POSTING         API_MATERIAL_DOCUMENT_SRV     A_MaterialDocumentHeader (GoodsMovementCode 03/04/05) with to_MaterialDocumentItem for the
+                        inventory documents PIC posts: stock postings (311/301 transfer, 343/344 unblock/block, 551 scrap), physical-inventory
+                        differences (701/702) and reservation issues (201); reference in MaterialDocumentHeaderText (25 chars) and
+                        ReferenceDocument (the PIC document number, 16 chars); number = MaterialDocument. One material document has one goods
+                        movement code, so a document that needs two (a count with gains and losses) is sent as two material documents. VALIDATED
+                        AGAINST THE MOCK ONLY: confirm every field of this block in a real SAP sandbox before go-live (docs/runbooks/inventory_operations.md 7).
   SUPPLIER_MASTER       API_BUSINESS_PARTNER          A_BusinessPartner (category 2 = organisation) with roles FLVN00/FLVN01,
                         tax number IN3 (GSTIN), bank, address, e-mail; reference in SearchTerm1 (20 chars); number = BusinessPartner.
                         Changes PATCH the partner (tax number, address, e-mail).
@@ -37,13 +43,14 @@ SERVICES = {
     "SUPPLIER_INVOICE": "API_SUPPLIERINVOICE_PROCESS_SRV",
     "SUPPLIER_CREDIT_MEMO": "API_SUPPLIERINVOICE_PROCESS_SRV",
     "GOODS_RECEIPT": "API_MATERIAL_DOCUMENT_SRV",
+    "STOCK_POSTING": "API_MATERIAL_DOCUMENT_SRV",
     "SUPPLIER_MASTER": "API_BUSINESS_PARTNER",
     "MATERIAL_MASTER": "API_PRODUCT_SRV",
 }
 MESSAGE_TYPES = ("PURCHASE_REQUISITION", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO",
-                 "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
+                 "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT", "STOCK_POSTING")
 # message type -> (IDoc basic type, message type)
-IDOC_TYPES = {"PURCHASE_ORDER": ("PORDCR105", "PORDCR1"), "GOODS_RECEIPT": ("MBGMCR03", "MBGMCR"), "SUPPLIER_INVOICE": ("INVOIC02", "INVOIC"),
+IDOC_TYPES = {"PURCHASE_ORDER": ("PORDCR105", "PORDCR1"), "GOODS_RECEIPT": ("MBGMCR03", "MBGMCR"), "STOCK_POSTING": ("MBGMCR03", "MBGMCR"), "SUPPLIER_INVOICE": ("INVOIC02", "INVOIC"),
               "SUPPLIER_CREDIT_MEMO": ("INVOIC02", "INVOIC"), "SUPPLIER_MASTER": ("CREMAS05", "CREMAS"),
               "MATERIAL_MASTER": ("MATMAS05", "MATMAS"), "PAYMENT": ("FIDCCP02", "FIDCCH")}
 
@@ -159,6 +166,115 @@ def goods_receipt(p: dict, ctx: dict, items: list[dict]) -> Spec:
                 select="MaterialDocument,MaterialDocumentYear")
 
 
+# ---------------------------------------------------------------- inventory documents (STOCK_POSTING): material documents
+# PIC movement type -> SAP goods movement code of the material document (BAPI_GOODSMVT_CREATE GM_CODE / OData GoodsMovementCode):
+# 03 goods issue (MB1A), 04 transfer posting (MB1B), 05 other goods receipt (MB1C). 701/702 are physical-inventory differences: SAP normally posts
+# them from a physical-inventory document (MI07 / API_PHYSICALINVENTORYDOC_SRV); posting them as goods movements is an ASSUMPTION to confirm in the
+# customer's sandbox (the alternative is a count document in SAP).
+STOCK_GM_CODE = {"311": "04", "301": "04", "343": "04", "344": "04", "551": "03", "201": "03", "702": "03", "701": "05"}
+STOCK_MOVEMENT_TEXT = {"311": "transfer, storage location to storage location", "301": "transfer, plant to plant", "343": "unblock", "344": "block",
+                       "551": "scrapping", "201": "goods issue to cost object", "701": "inventory difference, gain", "702": "inventory difference, loss"}
+# PIC stock type -> SAP stock type of the item. Unrestricted is SAP's default and is not sent. The OData codes and the IDoc codes are ASSUMPTIONS to
+# confirm (setting PIC_ERP_SAP_S4_STOCK_TYPE_MAP overrides them): OData InventoryStockType 02/03, BAPI STCK_TYPE X/S.
+STOCK_TYPE_ODATA = {"QUALITY": "02", "BLOCKED": "03"}
+STOCK_TYPE_IDOC = {"QUALITY": "X", "BLOCKED": "S"}
+STOCK_OBJECTS = {"STOCK_POSTING": "posting", "PHYSICAL_INVENTORY": "inventory", "STOCK_RESERVATION": "reservation"}
+
+
+def stock_number(object_type: str, p: dict) -> str:
+    """The PIC document number of an inventory message (stock posting, physical inventory or reservation)."""
+    return str(p.get(STOCK_OBJECTS.get(object_type, "posting")) or "")
+
+
+def stock_items(object_type: str, p: dict, uoms: dict, ctx: dict) -> list[dict]:
+    """The material-document items of an inventory message, in the order of its lines. ``uoms`` maps material number -> unit of measure.
+    Raises ValueError for a line the SAP mapping cannot express (unknown movement, stock type that has no SAP code, a movement that needs
+    an account assignment and has none)."""
+    number = stock_number(object_type, p)
+    reason = p.get("reasonCode")
+    items = []
+    for line in p.get("lines") or []:
+        movement = str(line.get("movement") or "")
+        if movement not in STOCK_GM_CODE:
+            raise ValueError(f"movement type {movement or '?'} has no SAP goods movement mapping")
+        material = line.get("material")
+        if material not in uoms:
+            raise ValueError(f"material {material} is unknown, so its unit of measure cannot be sent")
+        stock_type = line.get("fromStockType") or "UNRESTRICTED"
+        if stock_type not in ("UNRESTRICTED", "QUALITY", "BLOCKED"):
+            raise ValueError(f"stock type {stock_type} cannot be posted as a goods movement")
+        if movement in ("343", "344"):
+            stock_type = "UNRESTRICTED"        # the movement type itself says which stock the goods leave; no stock type is sent
+        qty = Decimal(str(line.get("qty") or 0))
+        item = {"movement": movement, "material": material, "plant": line.get("fromPlant") or p.get("plant"),
+                "sloc": line.get("fromStorageLocation") or p.get("storageLocation"), "batch": line.get("batch") or "", "qty": quantity(abs(qty)),
+                "uom": uoms[material], "stockType": stock_type, "toPlant": None, "toSloc": None, "toBatch": None, "costCenter": None, "wbs": None,
+                "reasonCode": None, "text": trim(" ".join(x for x in (number, reason if movement == "551" else None) if x), 50)}
+        if movement in ("311", "301"):
+            item.update(toPlant=line.get("toPlant") if movement == "301" else None, toSloc=line.get("toStorageLocation"), toBatch=line.get("batch") or None)
+        if movement in ("551", "201"):
+            kind, _, code = str(p.get("costObject") or "").partition(":")
+            if code and kind.upper() == "WBS":
+                item["wbs"] = code
+            elif code:
+                item["costCenter"] = code
+            elif ctx.get("stock_cost_center"):
+                item["costCenter"] = ctx["stock_cost_center"]
+            else:
+                raise ValueError(f"movement {movement} ({STOCK_MOVEMENT_TEXT[movement]}) needs a cost centre: the document names none and "
+                                 "PIC_ERP_SAP_S4_SCRAP_COST_CENTER is not set")
+            item["reasonCode"] = (ctx.get("reason_map") or {}).get(reason) if movement == "551" else None
+        items.append(item)
+    if not items:
+        raise ValueError("the document has no lines")
+    return items
+
+
+def stock_groups(items: list[dict]) -> list[tuple[str, list[dict]]]:
+    """[(goods movement code, items)] in code order: one material document per code (a count with gains and losses is two documents)."""
+    groups: dict[str, list[dict]] = {}
+    for item in items:
+        groups.setdefault(STOCK_GM_CODE[item["movement"]], []).append(item)
+    return sorted(groups.items())
+
+
+def stock_codes(p: dict) -> list[str]:
+    """The goods movement codes (one material document each) a message's lines need, from the payload alone (no database)."""
+    return sorted({STOCK_GM_CODE.get(str(line.get("movement") or "")) or "00" for line in p.get("lines") or []})
+
+
+def stock_reference(reference: str, code: str, documents: int) -> str:
+    """PIC reference written into the material document (header text, 25 characters): the key itself, with the goods movement code appended
+    when the message needs more than one document, so each can be found again."""
+    return reference if documents == 1 else f"{reference[:22]}-{code}"
+
+
+def stock_posting(object_type: str, p: dict, ctx: dict, items: list[dict]) -> list[Spec]:
+    """OData bodies of an inventory message: one ``A_MaterialDocumentHeader`` deep insert per goods movement code (``Spec.code``)."""
+    v, groups = ctx["version"], stock_groups(items)
+    codes = ctx.get("stock_type_codes") or STOCK_TYPE_ODATA
+    posted = date.fromisoformat(p["postingDate"]) if p.get("postingDate") else ctx["today"]
+    specs = []
+    for code, rows in groups:
+        out = []
+        for it in rows:
+            row = {"Material": it["material"], "Plant": it["plant"], "StorageLocation": it["sloc"], "Batch": it["batch"] or None,
+                   "GoodsMovementType": it["movement"], "InventoryStockType": codes.get(it["stockType"]), "QuantityInEntryUnit": it["qty"],
+                   "EntryUnit": it["uom"], "IssuingOrReceivingPlant": it["toPlant"], "IssuingOrReceivingStorageLoc": it["toSloc"],
+                   "IssgOrRcvgBatch": it["toBatch"], "CostCenter": it["costCenter"], "WBSElement": it["wbs"],
+                   "GoodsMovementReasonCode": it["reasonCode"], "MaterialDocumentItemText": it["text"]}
+            out.append({k: x for k, x in row.items() if x not in (None, "")})
+        reference = stock_reference(ctx["reference"], code, len(groups))
+        body = {"PostingDate": odata_date(posted, v), "DocumentDate": odata_date(posted, v), "GoodsMovementCode": code,
+                "MaterialDocumentHeaderText": trim(reference, 25), "ReferenceDocument": trim(stock_number(object_type, p), 16),
+                "to_MaterialDocumentItem": {"results": out} if v == 2 else out}
+        spec = Spec(SERVICES["STOCK_POSTING"], "A_MaterialDocumentHeader", body, "MaterialDocumentHeaderText", trim(reference, 25), "MaterialDocument",
+                    select="MaterialDocument,MaterialDocumentYear")
+        spec.code = code
+        specs.append(spec)
+    return specs
+
+
 def business_partner(p: dict, ctx: dict, supplier: dict) -> Spec:
     """supplier: {"code","name","gstin","bank":{"account","ifsc","holder"},"email","address":{...},"terms"} with *plain* values."""
     v = ctx["version"]
@@ -247,6 +363,19 @@ def idoc_xml(message_type: str, p: dict, ctx: dict, data: dict) -> str:
             body += _seg("E1BP2017_GM_ITEM_CREATE", {"MATERIAL": line["material"], "PLANT": line["plant"], "STGE_LOC": line.get("storageLocation"),
                                                      "MOVE_TYPE": "101", "ENTRY_QNT": quantity(line["qty"]), "ENTRY_UOM": line.get("uom") or "EA",
                                                      "PO_NUMBER": line["po"], "PO_ITEM": item_number(line["poItem"]), "MVT_IND": "B"})
+    elif message_type == "STOCK_POSTING":
+        # data: {"code": goods movement code, "items": stock_items(...), "objectType": PIC object type}; ctx["reference"] is this document's reference
+        codes = ctx.get("stock_type_codes") or STOCK_TYPE_IDOC
+        posted = date.fromisoformat(p["postingDate"]) if p.get("postingDate") else today
+        body = _seg("E1BP2017_GM_HEAD_01", {"PSTNG_DATE": _ymd(posted), "DOC_DATE": _ymd(posted),
+                                            "REF_DOC_NO": trim(stock_number(data.get("objectType", ""), p), 16), "HEADER_TXT": trim(ref, 25)})
+        body += _seg("E1BP2017_GM_CODE", {"GM_CODE": data["code"]})
+        for it in data["items"]:
+            body += _seg("E1BP2017_GM_ITEM_CREATE", {"MATERIAL": it["material"], "PLANT": it["plant"], "STGE_LOC": it["sloc"], "BATCH": it["batch"],
+                                                     "MOVE_TYPE": it["movement"], "STCK_TYPE": codes.get(it["stockType"]), "ENTRY_QNT": it["qty"],
+                                                     "ENTRY_UOM": it["uom"], "MOVE_PLANT": it["toPlant"], "MOVE_STLOC": it["toSloc"],
+                                                     "MOVE_BATCH": it["toBatch"], "COSTCENTER": it["costCenter"], "WBS_ELEM": it["wbs"],
+                                                     "MOVE_REAS": it["reasonCode"], "ITEM_TEXT": it["text"]})
     elif message_type in ("SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO"):
         credit = message_type == "SUPPLIER_CREDIT_MEMO"
         number = p.get("creditNote") if credit else p.get("invoice")

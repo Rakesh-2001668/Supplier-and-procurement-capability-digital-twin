@@ -52,8 +52,9 @@ DOC_TYPES = {
     "PAYMENT_REVERSAL": ("ZR", 1500009000),
     # Supply-chain-finance election on a posted invoice (payment assigned to the financing programme; no external provider).
     "SCF_FINANCING": ("ZF", 5200000001),
-    # Material document of an inventory document (stock posting, physical-inventory difference, reservation issue); simulator only: a live
-    # connector that does not map it leaves the document posted in PIC and records ERP_NOT_MAPPED (services/stock_ledger.py).
+    # Material document of an inventory document (stock posting, physical-inventory difference, reservation issue). The simulator and the live SAP
+    # connector (platform/sap_mapping.py, API_MATERIAL_DOCUMENT_SRV / MBGMCR03) map it; any other connector leaves the document posted in PIC and
+    # records ERP_NOT_MAPPED (services/stock_ledger.py).
     "STOCK_POSTING": ("MB", 4900000001),
 }
 

@@ -80,9 +80,15 @@ _PO_COLUMNS = (PoLine.qty, PoLine.shipped_qty, PoLine.received_qty, PoLine.need_
 _ASN_COLUMNS = (AsnLine.qty, AsnLine.received_qty, Asn.expected_date, Asn.number)
 
 
+# Stock that planning counts as supply on hand: own unrestricted stock plus supplier-owned consignment stock (available to withdraw;
+# the liability arises only at withdrawal). Quality, blocked and subcontractor stock are not available. Product decision of 2 Nov 2026,
+# a deliberate extension of TD 9.1 ("on_hand_unrestricted"): without it a consignment receipt is neither open order nor on-hand supply.
+AVAILABLE_STOCK_TYPES = ("UNRESTRICTED", "CONSIGNMENT")
+
+
 def _supply(session: Session, material: Material, plant: str) -> dict:
     on_hand = session.execute(select(func.coalesce(func.sum(Stock.qty), 0)).where(
-        Stock.material_id == material.id, Stock.plant == plant, Stock.stock_type == "UNRESTRICTED")).scalar()
+        Stock.material_id == material.id, Stock.plant == plant, Stock.stock_type.in_(AVAILABLE_STOCK_TYPES))).scalar()
     po_rows = session.execute(select(*_PO_COLUMNS).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
         PoLine.material_id == material.id, PoLine.plant == plant, PurchaseOrder.status.in_(OPEN_PO_STATUSES))).all()
     asn_rows = session.execute(select(*_ASN_COLUMNS).join(Asn, Asn.id == AsnLine.asn_id).join(PoLine, PoLine.id == AsnLine.po_line_id)
@@ -169,7 +175,7 @@ class _BulkReads(_Reads):
                                                  DemandElement.material_id):
             self._demand[material_id].append((req_date, qty))
         self._on_hand = {material_id: qty for material_id, qty in scoped(
-            select(Stock.material_id, func.sum(Stock.qty)).where(Stock.plant == plant, Stock.stock_type == "UNRESTRICTED")
+            select(Stock.material_id, func.sum(Stock.qty)).where(Stock.plant == plant, Stock.stock_type.in_(AVAILABLE_STOCK_TYPES))
             .group_by(Stock.material_id), Stock.material_id)}
         self._po = defaultdict(list)
         for row in scoped(select(PoLine.material_id, *_PO_COLUMNS).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(

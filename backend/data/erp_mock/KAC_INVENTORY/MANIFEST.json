@@ -1,0 +1,27 @@
+{
+  "asOf": "2026-10-31",
+  "client": "Kaveri Auto Components Pvt Ltd",
+  "currency": "INR",
+  "fictional": true,
+  "file": "opening_stock.csv",
+  "flaggedMaterials": 48,
+  "label": "MOCK sample data (inventory_master)",
+  "rows": 1624,
+  "sha256": "8cf9a3092e21062c5004948e5688db60b5bf0d85f4d46f9011d5ec394abb684d",
+  "summary": {
+    "belowReorder": 8,
+    "belowSafety": 12,
+    "blocked": 3,
+    "consignment": 1,
+    "expiringLines30": 2,
+    "expiringLines60": 2,
+    "expiringLines90": 2,
+    "expiryManagedLines": 126,
+    "floorCapped": 34,
+    "materials": 1057,
+    "pairs": 1554,
+    "qualityHold": 3,
+    "rows": 1624,
+    "stockOut": 3
+  }
+}
