@@ -812,7 +812,10 @@ def test_16_tenant_isolation(client, login, env):
     assert not {p["invoice_number"] for p in axn_payments} & {J["inv1"], J["inv2"], J["inv4"], J["inv_m"]}
     ours = {p["id"] for p in client.get("/v1/payments?limit=200", headers=_h(login, "fin")).json()["items"]}
     assert ours and not ours & {p["id"] for p in axn_payments}
-    assert client.get("/v1/finance/periods", headers=axn).json()["items"] == []
+    # AXN may have periods of its own (the finance_ops dataset closes April-October 2026); none of this tenant's rows may show up there
+    axn_periods = {x["id"] for x in client.get("/v1/finance/periods", headers=axn).json()["items"]}
+    our_periods = {x["id"] for x in client.get("/v1/finance/periods", headers=_h(login, "fin")).json()["items"]}
+    assert our_periods and not our_periods & axn_periods
     ours = client.get("/v1/invoices?limit=200", headers=_h(login, "ap1")).json()["items"]
     assert ours and all(not i["number"].startswith("INV-TF-") for i in ours)
     # worklist filters (INV-01)
@@ -991,7 +994,7 @@ def test_20_bank_statement_import_and_erp_reversal(client, login, env):
     money = lambda minor, sep=".": f"{minor / 100:.2f}".replace(".", sep)  # noqa: E731
     files = {}
     for run in (J["run17"], J["run19"]):
-        r = client.post(f"/v1/payments/runs/{run}/file", json={"format": "NEFT_CSV"}, headers=fin)
+        r = client.post(f"/v1/payments/runs/{run}/file", json={"format": "ISO20022_PAIN001"}, headers=fin)  # run 17 holds the USD payment: NEFT is rupee-only (D31b)
         assert r.status_code == 201, r.text
         files[run] = r.json()["number"]
     camt = _statement("camt053_sample.xml", STMT="STMT-FIN-001", PAY_OK=J["pay_g"], PAY_RET=J["pay_f"], AMT_OK=money(amounts[J["pay_g"]]), AMT_RET=money(amounts[J["pay_f"]]))

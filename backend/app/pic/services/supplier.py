@@ -447,13 +447,29 @@ def dispose_screening(session: Session, supplier: Supplier, decision: str, note:
 
 
 # ---------------------------------------------------------------- MDM-04 bank change (F8-04)
-def request_bank_change(session: Session, supplier: Supplier, *, bank_account: str, ifsc: str, holder_name: str,
-                        in_onboarding: bool = False) -> BankChangeRequest:
+def request_bank_change(session: Session, supplier: Supplier, *, bank_account: str, ifsc: Optional[str], holder_name: str,
+                        in_onboarding: bool = False, country: str = "IN", swift_bic: Optional[str] = None, intermediary_bic: Optional[str] = None,
+                        charge_bearer: Optional[str] = None, purpose_code: Optional[str] = None) -> BankChangeRequest:
     p = principal(session)
     tenant_id = current_tenant(session)
+    country = (country or "IN").upper()
+    if country == "IN":
+        if not ifsc:
+            raise Problem(422, "VALIDATION_FAILED", "An Indian bank account needs the IFSC of the branch", rule_ref="MDM-04")
+        if any((swift_bic, intermediary_bic, charge_bearer, purpose_code)):
+            raise Problem(422, "VALIDATION_FAILED", "SWIFT, intermediary, charge bearer and purpose code belong to a foreign bank account (country other than IN)",
+                          rule_ref="MDM-04")
+    else:
+        from app.pic.services import bank_files
+        problem = bank_files.foreign_account_problem(SupplierBankAccount(country=country, swift_bic=swift_bic, intermediary_bic=intermediary_bic,
+                                                                         charge_bearer=charge_bearer, purpose_code=purpose_code))
+        if problem:
+            raise Problem(422, "VALIDATION_FAILED", problem, rule_ref="MDM-04")
     account = SupplierBankAccount(
         tenant_id=tenant_id, supplier_id=supplier.id, account_enc=crypto.encrypt(tenant_id, "bank", bank_account),
-        account_masked=crypto.mask(bank_account), ifsc=ifsc, holder_name=holder_name, active=False, created_by=p.user_id,
+        account_masked=crypto.mask(bank_account), ifsc=ifsc or "", holder_name=holder_name, active=False, created_by=p.user_id,
+        country=country, swift_bic=(swift_bic or None) and swift_bic.upper(), intermediary_bic=(intermediary_bic or None) and intermediary_bic.upper(),
+        charge_bearer=charge_bearer, purpose_code=(purpose_code or None) and purpose_code.upper(),
     )
     session.add(account)
     session.flush()
@@ -466,7 +482,9 @@ def request_bank_change(session: Session, supplier: Supplier, *, bank_account: s
     # SOD-02: the person changing bank details may not approve payments or post invoices for this supplier.
     sod.record(session, "SUPPLIER_BANK_CHANGE", {"supplier_id": supplier.id})
     audit.record(session, "SUPPLIER", supplier.id, "BANK_CHANGE_REQUESTED", object_ref=supplier.code,
-                 after={"request": change.number, "account": account.account_masked, "ifsc": ifsc})
+                 after={"request": change.number, "account": account.account_masked, "ifsc": ifsc,
+                        **({"country": country, "swiftBic": account.swift_bic, "intermediaryBic": account.intermediary_bic,
+                            "chargeBearer": charge_bearer, "purposeCode": account.purpose_code} if country != "IN" else {})})
     if not in_onboarding:
         workflow.start(session, PROCESS, "BANK_CHANGE", change.id, change.number)
     return change
@@ -789,6 +807,15 @@ def unblock(session: Session, supplier: Supplier, reason: str) -> dict:
         lifted.append(invoice.number)
         audit.record(session, "INVOICE", invoice.id, "PAYMENT_BLOCK_LIFTED", object_ref=invoice.number, reason=reason,
                      before={"paymentBlock": True}, after={"paymentBlock": False, "cause": "SUPPLIER_UNBLOCKED"})
+    # Payment blocks that came with the ERP load (no BLOCKED audit event lists them) are lifted the same way: posted, unpaid, nothing else explains them.
+    for invoice in session.execute(select(Invoice).where(Invoice.supplier_id == supplier.id, Invoice.status == "POSTED", Invoice.payment_status == "UNPAID",
+                                                         Invoice.payment_block.is_(True), Invoice.duplicate_of.is_(None))).scalars().all():
+        if session.execute(select(InvoiceException.id).where(InvoiceException.invoice_id == invoice.id, InvoiceException.status == "OPEN")).first():
+            continue
+        invoice.payment_block = False
+        lifted.append(invoice.number)
+        audit.record(session, "INVOICE", invoice.id, "PAYMENT_BLOCK_LIFTED", object_ref=invoice.number, reason=reason,
+                     before={"paymentBlock": True}, after={"paymentBlock": False, "cause": "SUPPLIER_UNBLOCKED_ERP_BLOCK"})
     audit.record(session, "SUPPLIER", supplier.id, "UNBLOCKED", object_ref=supplier.code, before={"status": "BLOCKED"},
                  after={"status": restored, "paymentBlockLifted": lifted}, reason=reason)
     outbox.emit(session, "supplier.status.changed", "SUPPLIER", supplier.id, supplier.code,

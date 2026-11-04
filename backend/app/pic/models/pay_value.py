@@ -66,6 +66,17 @@ class Invoice(TenantScoped, Base):
     fx_date: Mapped[Optional[date]] = mapped_column(Date)
     gross_group_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
     posting_date: Mapped[Optional[date]] = mapped_column(Date)  # the accounting date the ERP document was posted on (open posting period)
+    # Finance second pass (migration 0020). GST: place of supply (state code) and the tax heads of the invoice (CGST + SGST inside the state, IGST between
+    # states); reverse charge: the supplier charges no GST, the buyer self-assesses ``rcm_tax_minor``. TCS (s.206C(1H) style, rule TDS.tcs, off by default).
+    place_of_supply: Mapped[Optional[str]] = mapped_column(String(2))
+    cgst_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    sgst_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    igst_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    reverse_charge: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    rcm_tax_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    tcs_section: Mapped[Optional[str]] = mapped_column(String(20))
+    tcs_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 3))
+    tcs_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
 
 
 class InvoiceLine(TenantScoped, Base):
@@ -82,6 +93,7 @@ class InvoiceLine(TenantScoped, Base):
     tax_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     match_status: Mapped[Optional[str]] = mapped_column(String(15))
     match_detail: Mapped[dict] = mapped_column(JSONB, default=dict)
+    tax_split: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")  # tax heads the supplier charged: cgst / sgst / igst (minor)
 
 
 class InvoiceException(TenantScoped, Base):
@@ -139,6 +151,13 @@ class Payment(TenantScoped, Base):
     tds_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 3))        # rate applied at payment (certificate rate when s.197 applied)
     tds_certificate: Mapped[Optional[str]] = mapped_column(String(40))         # s.197 certificate number used, if any
     reversal_doc: Mapped[Optional[str]] = mapped_column(String(40))            # ERP reversal document of a returned payment
+    # Migration 0020: base taxed at the s.197 certificate rate (counts against the certificate's cap), TCS paid to the supplier, and the realised
+    # exchange difference of a foreign-currency payment (rate on the payment date against the invoice rate; positive = gain).
+    tds_cert_base_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    tcs_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    fx_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 8))
+    amount_group_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    fx_gain_loss_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
     __table_args__ = (
         CheckConstraint("bank_status IN ('NOT_SENT','SENT','CREDITED','RETURNED')", name="bank_status"),
         # One live payment per invoice: blocks double payment at the database level.

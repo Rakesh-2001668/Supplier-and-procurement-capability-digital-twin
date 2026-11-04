@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant, tenant_tx
 from app.pic.models import ActionLog, SodMitigation, SodRule, SodViolation, Task
-from app.pic.platform import audit, clock, outbox, workflow
+from app.pic.platform import audit, batch, clock, outbox, workflow
 from app.pic.platform.errors import Problem, not_found
 
 MITIGATION_KIND = "SOD_MITIGATION"
@@ -51,9 +51,18 @@ def record(session: Session, action: str, refs: dict, actor_id: Optional[uuid.UU
         created_by=principal.user_id,
     ))
     session.flush()
+    if batch.active(session):  # keep the batch's remembered "what the actor already did" current
+        for scope, value in refs.items():
+            seen = batch.peek(session, ("sod-did", actor_id or principal.user_id, action, scope))
+            if seen is not None and value is not None:
+                seen.add(str(value))
 
 
 def _did(session: Session, actor_id: uuid.UUID, action: str, scope: str, scope_value: str) -> bool:
+    if batch.active(session):  # one query per (actor, action, scope) for the whole batch; record() keeps the set current
+        values = batch.memo(session, ("sod-did", actor_id, action, scope), lambda: set(session.execute(
+            select(ActionLog.refs[scope].astext).where(ActionLog.actor_id == actor_id, ActionLog.action == action).distinct()).scalars()))
+        return scope_value in values
     return session.execute(
         select(ActionLog.id).where(
             ActionLog.actor_id == actor_id, ActionLog.action == action,
@@ -71,7 +80,7 @@ def _sole_evaluator(session: Session, actor_id: uuid.UUID, event_id: str) -> boo
 
 def conflicts(session: Session, action: str, refs: dict, actor_id: uuid.UUID) -> list[SodRule]:
     hits = []
-    rules = session.execute(select(SodRule).where(SodRule.active.is_(True))).scalars()
+    rules = batch.memo(session, "sod-rules", lambda: session.execute(select(SodRule).where(SodRule.active.is_(True))).scalars().all())
     for rule in rules:
         if action not in (rule.action_a, rule.action_b):
             continue

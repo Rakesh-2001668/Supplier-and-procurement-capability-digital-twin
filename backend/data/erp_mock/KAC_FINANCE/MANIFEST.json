@@ -1,0 +1,84 @@
+{
+  "client": "Kaveri Auto Components Pvt Ltd",
+  "currency": "INR",
+  "fictional": true,
+  "files": {
+    "camt053_hdfc_20260921.xml": {
+      "bytes": 7470,
+      "sha256": "511de39083a079e26b5f90c20996a42f43805118a20ac05d6cbcb752e90ba810"
+    },
+    "camt053_hdfc_20261005.xml": {
+      "bytes": 11199,
+      "sha256": "7355c99184c6d3a85956b3a55f1016b6affc2bb5ce40f413ca849e28a45a983a"
+    },
+    "camt053_hdfc_20261019.xml": {
+      "bytes": 17626,
+      "sha256": "84b2fbf1db96caeaf57f0d1dfa680f2cd54ce883e1c1f7812953c34333be1a45"
+    },
+    "mt940_icic_20261026.sta": {
+      "bytes": 5650,
+      "sha256": "5f31edc267f52e94fe86ade876b764591af229143a9993bb37b188ee369f09fa"
+    },
+    "mt940_icic_20261031.sta": {
+      "bytes": 5621,
+      "sha256": "4b0104336cb20fb1961bf04713a90a863a3605d29ba2fd4cad78a17efd992ef3"
+    }
+  },
+  "label": "MOCK sample data (finance_ops)",
+  "planSha256": "badecd752409781ae873a7a156d4c4a1c6c979d63a5adc2a8bd25f15508ea35f",
+  "statements": [
+    {
+      "account": "MOCK-CA-0001",
+      "ambiguous": [],
+      "day": "2026-09-21",
+      "format": "camt053",
+      "key": "S1",
+      "returned": [],
+      "run": "PRUN-2612"
+    },
+    {
+      "account": "MOCK-CA-0001",
+      "ambiguous": [
+        "PAY-880036",
+        "PAY-880037"
+      ],
+      "day": "2026-10-05",
+      "format": "camt053",
+      "key": "S2",
+      "returned": [],
+      "run": "PRUN-2613"
+    },
+    {
+      "account": "MOCK-CA-0001",
+      "ambiguous": [],
+      "day": "2026-10-19",
+      "format": "camt053",
+      "key": "S3",
+      "returned": [
+        "PAY-880076"
+      ],
+      "run": "PRUN-2615"
+    },
+    {
+      "account": "MOCK-CA-0002",
+      "ambiguous": [],
+      "day": "2026-10-26",
+      "format": "mt940",
+      "key": "S4",
+      "returned": [
+        "PAY-880095",
+        "PAY-880141"
+      ],
+      "run": "PRUN-2616"
+    },
+    {
+      "account": "MOCK-CA-0002",
+      "ambiguous": [],
+      "day": "2026-10-31",
+      "format": "mt940",
+      "key": "S5",
+      "returned": [],
+      "run": "PRUN-2617"
+    }
+  ]
+}

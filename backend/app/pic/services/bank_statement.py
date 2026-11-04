@@ -1,4 +1,4 @@
-"""Bank statement import (F7-09): camt.053 (ISO 20022 XML) and a basic MT940 turned into the per-payment bank results of
+"""Bank statement import (F7-09): camt.053 / camt.054 (ISO 20022 XML) and MT940 turned into the per-payment bank results of
 ``bank_files.record_bank_results`` (credited with the bank reference as UTR, or returned with the reason).
 
 Matching is by payment number: the bank echoes the EndToEndId of our pain.001 (or the reference of the NEFT file) in the entry, so every
@@ -68,7 +68,28 @@ def _day(text: str) -> Optional[date]:
         return None
 
 
-# ---------------------------------------------------------------- camt.053
+# ---------------------------------------------------------------- camt.053 (statement), camt.054 (debit / credit notification), camt.052 (report)
+def _entry_from(scope: ET.Element, ntry: ET.Element, *, split: bool) -> Optional[dict]:
+    """One bank entry read from ``scope``: the whole <Ntry> or, for a batch booking, one <TxDtls> of it (its own amount, references and return data)."""
+    names = ("EndToEndId", "InstrId", "TxId", "AcctSvcrRef", "Ref")
+    refs = [t.text.strip() for name in names for t in _all(scope, name) if t.text and t.text.strip()]
+    texts = ("Ustrd", "AddtlTxInf") if split else ("AcctSvcrRef", "NtryRef", "Ustrd", "AddtlTxInf", "AddtlNtryInf")
+    refs += [t.text.strip() for name in texts for t in _all(scope, name) if t.text and t.text.strip()]
+    entry_ref = next((c.text.strip() for c in ntry if _local(c.tag) in ("AcctSvcrRef", "NtryRef") and c.text and c.text.strip()), "")
+    own = next((t.text.strip() for name in ("AcctSvcrRef", "TxId") for t in _all(scope, name) if t.text and t.text.strip()), "") if split else ""
+    bank_ref = own or next((t.text.strip() for name in ("AcctSvcrRef", "TxId", "NtryRef") for t in _all(ntry, name) if t.text and t.text.strip()), "")
+    entry_returned = _text(ntry, "RvslInd").lower() == "true" or any((t.text or "").strip().upper() in ("RTRN", "RRTN", "RFND") for t in _all(ntry, "SubFmlyCd"))
+    returned = entry_returned or bool(_all(scope, "RtrInf"))
+    reasons = [t.text.strip() for name in ("Cd", "Prtry") for r in _all(scope, "Rsn") for t in _all(r, name) if t.text and t.text.strip()]
+    reasons += [t.text.strip() for r in _all(scope, "RtrInf") for t in _all(r, "AddtlInf") if t.text and t.text.strip()]
+    amount = (_text(scope, "AmtDtls", "TxAmt", "Amt") or _text(scope, "Amt")) if split else _text(ntry, "Amt")
+    if not amount:
+        return None
+    return {"amountMinor": _minor(amount), "direction": "D" if _text(ntry, "CdtDbtInd") == "DBIT" else "C", "returned": returned,
+            "bankRef": bank_ref, "text": " ".join(refs), "reason": "; ".join(dict.fromkeys(reasons)) or "Returned by the bank",
+            "valueDate": (_day(_text(ntry, "ValDt", "Dt")) or _day(_text(ntry, "BookgDt", "Dt")) or date.min).isoformat(), "batchRef": entry_ref or None}
+
+
 def parse_camt053(data: bytes) -> dict:
     lowered = data[:200_000].lower()
     if b"<!doctype" in lowered or b"<!entity" in lowered:
@@ -77,33 +98,32 @@ def parse_camt053(data: bytes) -> dict:
         root = ET.fromstring(data)
     except ET.ParseError as exc:
         raise _invalid(f"the XML cannot be read: {exc}")
-    statements = _all(root, "Stmt")
+    notification = bool(_all(root, "Ntfctn"))
+    statements = _all(root, "Ntfctn") if notification else (_all(root, "Stmt") or _all(root, "Rpt"))
     if not statements:
-        raise _invalid("no Stmt element: this is not a camt.053 bank-to-customer statement")
+        raise _invalid("no Stmt or Ntfctn element: this is not a camt.053 statement or a camt.054 notification")
     first = statements[0]
-    statement_id = _text(first, "Id") or _text(root, "BkToCstmrStmt", "GrpHdr", "MsgId")
+    statement_id = _text(first, "Id") or _text(root, "GrpHdr", "MsgId")
     if not statement_id:
         raise _invalid("the statement has no Id")
     account = _text(first, "Acct", "Id", "IBAN") or _text(first, "Acct", "Id", "Othr", "Id")
     entries = []
     for stmt in statements:
         for ntry in [e for e in stmt if _local(e.tag) == "Ntry"]:
-            details = _all(ntry, "TxDtls") or [ntry]
-            refs = [t.text.strip() for d in details for name in ("EndToEndId", "InstrId", "TxId", "AcctSvcrRef", "Ref")
-                    for t in _all(d, name) if t.text and t.text.strip()]
-            refs += [t.text.strip() for name in ("AcctSvcrRef", "NtryRef", "Ustrd", "AddtlTxInf", "AddtlNtryInf") for t in _all(ntry, name) if t.text and t.text.strip()]
-            bank_ref = next((t.text.strip() for name in ("AcctSvcrRef", "TxId", "NtryRef") for t in _all(ntry, name) if t.text and t.text.strip()), "")
-            returned = _text(ntry, "RvslInd").lower() == "true" or bool(_all(ntry, "RtrInf")) or any(
-                (t.text or "").strip().upper() in ("RTRN", "RRTN", "RFND") for t in _all(ntry, "SubFmlyCd"))
-            reasons = [t.text.strip() for name in ("Cd", "Prtry") for r in _all(ntry, "Rsn") for t in _all(r, name) if t.text and t.text.strip()]
-            reasons += [t.text.strip() for r in _all(ntry, "RtrInf") for t in _all(r, "AddtlInf") if t.text and t.text.strip()]
-            amount = _text(ntry, "Amt")
-            if not amount:
-                continue
-            entries.append({"amountMinor": _minor(amount), "direction": "D" if _text(ntry, "CdtDbtInd") == "DBIT" else "C", "returned": returned,
-                            "bankRef": bank_ref, "text": " ".join(refs), "reason": "; ".join(dict.fromkeys(reasons)) or "Returned by the bank",
-                            "valueDate": (_day(_text(ntry, "ValDt", "Dt")) or _day(_text(ntry, "BookgDt", "Dt")) or date.min).isoformat()})
-    return {"format": "CAMT053", "statementId": statement_id[:60], "account": account[:60], "entries": entries}
+            details = [d for d in _all(ntry, "TxDtls")]
+            amounts = [_text(d, "AmtDtls", "TxAmt", "Amt") or _text(d, "Amt") for d in details]
+            if len(details) > 1 and all(amounts):
+                # batch booking: one entry per transaction, each with its own amount; the entry total must be what the transactions add up to
+                parts = [_entry_from(d, ntry, split=True) for d in details]
+                total = _minor(_text(ntry, "Amt")) if _text(ntry, "Amt") else None
+                if total is not None and total != sum(x["amountMinor"] for x in parts):
+                    raise _invalid(f"batch entry {_text(ntry, 'AcctSvcrRef') or '?'}: the transactions add up to {_inr(sum(x['amountMinor'] for x in parts))}, the entry says {_inr(total)}")
+                entries.extend(parts)
+            else:
+                entry = _entry_from(ntry, ntry, split=False)
+                if entry is not None:
+                    entries.append(entry)
+    return {"format": "CAMT054" if notification else "CAMT053", "statementId": statement_id[:60], "account": account[:60], "entries": entries}
 
 
 # ---------------------------------------------------------------- MT940
@@ -160,11 +180,49 @@ def parse(data: bytes) -> dict:
 
 # ---------------------------------------------------------------- analysis and apply
 def _candidates(text: str) -> set[str]:
-    return set(re.findall(r"[A-Z0-9][A-Z0-9\-/]{3,34}", text.upper()))
+    """Strings of the entry that can be a payment number. A payment number may itself contain slashes (PAY/2027/0001), and a structured MT940 :86: line
+    glues tags to values (/EREF/PAY-2027-0001/REMI/...), so each token is also tried as every run of up to six of its slash-separated parts."""
+    found = set()
+    for token in re.findall(r"[A-Z0-9][A-Z0-9\-/]{3,34}", text.upper()):
+        found.add(token)
+        parts = [x for x in token.split("/") if x]
+        for start in range(len(parts)):
+            for end in range(start + 1, min(start + 6, len(parts)) + 1):
+                found.add("/".join(parts[start:end]))
+    return found
+
+
+def _inr(minor: int) -> str:
+    return f"INR {minor / 100:,.2f}"
+
+
+def _judge(item: dict, pay: Payment, action: Optional[str], amount: int, e: dict, files: dict) -> dict:
+    """The state of one entry (or one part of a batch entry) matched to one payment."""
+    item.update(payment=pay.number, action=action)
+    file = files.get(pay.run_ref)
+    if action is None:
+        item.update(state="IGNORED", detail="a credit that is not a return of a payment")
+    elif amount != pay.amount_minor:
+        item.update(state="AMOUNT_MISMATCH", detail=f"bank {_inr(amount)} vs payment {_inr(pay.amount_minor)}")
+    elif action == "CREDITED" and not e["bankRef"]:
+        item.update(state="NO_REFERENCE", detail="the entry carries no bank reference (UTR)")
+    elif file is None or file.status not in ("SENT", "ACKNOWLEDGED"):
+        item.update(state="FILE_NOT_SENT", detail=f"the bank file of {pay.run_ref} is {file.status.lower() if file else 'missing'}: mark it sent first")
+    elif pay.bank_status == action and (action == "RETURNED" or pay.bank_utr == e["bankRef"]):
+        item.update(state="UNCHANGED", detail="already recorded")
+    elif pay.bank_status in ("CREDITED", "RETURNED"):
+        item.update(state="CONFLICT", detail=f"the payment is already {pay.bank_status.lower()}"
+                    + (f" under UTR {pay.bank_utr}" if pay.bank_utr else ""))
+    elif pay.status != "COMPLETED":
+        item.update(state="CONFLICT", detail=f"the payment is {pay.status.lower()}")
+    else:
+        item.update(state="READY", detail="will be recorded", file=file.number, reason=e["reason"] if action == "RETURNED" else None)
+    return item
 
 
 def analyse(session: Session, statement: dict) -> dict:
-    """Match every entry to a payment and decide what applying it would do. Nothing is written."""
+    """Match every entry to a payment and decide what applying it would do. Nothing is written. An entry that names several payments is a batch
+    booking when their amounts add up to the entry amount: each payment is then judged on its own (``batch`` true); otherwise it is AMBIGUOUS."""
     tokens = set().union(*[_candidates(e["text"]) for e in statement["entries"]]) if statement["entries"] else set()
     by_number: dict[str, Payment] = {}
     if tokens:  # payment numbers are matched case-insensitively
@@ -174,33 +232,21 @@ def analyse(session: Session, statement: dict) -> dict:
     out = []
     for n, e in enumerate(statement["entries"], start=1):
         hits = [by_number[t] for t in sorted(_candidates(e["text"])) if t in by_number]
-        item = {"line": n, "amountMinor": e["amountMinor"], "bankRef": e["bankRef"], "valueDate": e["valueDate"], "returned": e["returned"], "payment": None,
-                "action": None, "state": "UNMATCHED", "detail": "no payment number found in the entry"}
+        base = {"line": n, "amountMinor": e["amountMinor"], "bankRef": e["bankRef"], "valueDate": e["valueDate"], "returned": e["returned"], "payment": None,
+                "action": None, "state": "UNMATCHED", "detail": "no payment number found in the entry", "batch": False,
+                "entry": e.get("batchRef") or e["bankRef"] or None}  # the bank entry the line belongs to: a batch entry is split into several lines
+        action = "RETURNED" if e["returned"] else ("CREDITED" if e["direction"] == "D" else None)
         if len(hits) > 1:
-            item.update(state="AMBIGUOUS", detail=f"the entry names {len(hits)} payments: {', '.join(h.number for h in hits)}")
+            total = sum(h.amount_minor for h in hits)
+            if action is not None and total == e["amountMinor"]:
+                for part, pay in enumerate(hits, start=1):
+                    out.append(_judge({**base, "batch": True, "part": part}, pay, action, pay.amount_minor, e, files))
+                continue
+            base.update(state="AMBIGUOUS", detail=f"the entry names {len(hits)} payments ({', '.join(h.number for h in hits)}) totalling {_inr(total)}, "
+                        f"the entry is {_inr(e['amountMinor'])}")
         elif hits:
-            pay = hits[0]
-            action = "RETURNED" if e["returned"] else ("CREDITED" if e["direction"] == "D" else None)
-            item.update(payment=pay.number, action=action)
-            file = files.get(pay.run_ref)
-            if action is None:
-                item.update(state="IGNORED", detail="a credit that is not a return of a payment")
-            elif e["amountMinor"] != pay.amount_minor:
-                item.update(state="AMOUNT_MISMATCH", detail=f"bank {e['amountMinor']} vs payment {pay.amount_minor} (paise)")
-            elif action == "CREDITED" and not e["bankRef"]:
-                item.update(state="NO_REFERENCE", detail="the entry carries no bank reference (UTR)")
-            elif file is None or file.status not in ("SENT", "ACKNOWLEDGED"):
-                item.update(state="FILE_NOT_SENT", detail=f"the bank file of {pay.run_ref} is {file.status.lower() if file else 'missing'}: mark it sent first")
-            elif pay.bank_status == action and (action == "RETURNED" or pay.bank_utr == e["bankRef"]):
-                item.update(state="UNCHANGED", detail="already recorded")
-            elif pay.bank_status in ("CREDITED", "RETURNED"):
-                item.update(state="CONFLICT", detail=f"the payment is already {pay.bank_status.lower()}"
-                            + (f" under UTR {pay.bank_utr}" if pay.bank_utr else ""))
-            elif pay.status != "COMPLETED":
-                item.update(state="CONFLICT", detail=f"the payment is {pay.status.lower()}")
-            else:
-                item.update(state="READY", detail="will be recorded", file=file.number, reason=e["reason"] if action == "RETURNED" else None)
-        out.append(item)
+            _judge(base, hits[0], action, e["amountMinor"], e, files)
+        out.append(base)
     counts: dict[str, int] = {}
     for item in out:
         counts[item["state"]] = counts.get(item["state"], 0) + 1

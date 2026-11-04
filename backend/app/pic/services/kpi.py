@@ -433,12 +433,18 @@ def m10_exception_cycle(c: Ctx) -> Result:
 
 
 def m10_duplicates(c: Ctx) -> Result:
-    return count_of(c.scalar("SELECT count(*) FROM pic.invoice_exception WHERE type = 'DUPLICATE'" + c.when("created_at")))
+    """Duplicates held for review that were not released as "not a duplicate", plus duplicates refused outright at capture (same supplier invoice number
+    or IRN: the request is rejected, the audit event DUPLICATE_BLOCKED is the evidence)."""
+    held = c.scalar("SELECT count(*) FROM pic.invoice_exception WHERE type = 'DUPLICATE' AND coalesce(resolution, '') <> 'NOT_DUPLICATE'" + c.when("created_at"))
+    refused = c.scalar("SELECT count(*) FROM pic.audit_event WHERE action = 'DUPLICATE_BLOCKED'" + c.when("ts"))
+    return count_of((held or 0) + (refused or 0), {"held": held or 0, "refusedAtCapture": refused or 0})
 
 
 def _payables(c: Ctx) -> dict:
+    from app.pic.platform import batch
     from app.pic.services import payables
-    return payables.insights(c.session)
+    # three KPIs read the same payables insight: computed once per request (kpi.read opens the batch)
+    return batch.memo(c.session, ("payables-insights", c.period, c.plant), lambda: payables.insights(c.session))
 
 
 def m10_discount(c: Ctx) -> Result:
@@ -447,9 +453,29 @@ def m10_discount(c: Ctx) -> Result:
 
 
 def m10_dpo(c: Ctx) -> Result:
-    row = c.one("SELECT sum(extract(epoch FROM (p.value_date::timestamp - i.invoice_date::timestamp)) / 86400 * p.amount_minor), sum(p.amount_minor) "
-                "FROM pic.payment p JOIN pic.invoice i ON i.id = p.invoice_id WHERE p.status = 'COMPLETED'" + c.when("p.value_date"))
+    # weighted by the amount in the company-code currency (a foreign-currency payment counts at the invoice's exchange rate), like payables.insights
+    row = c.one("SELECT sum(extract(epoch FROM (p.value_date::timestamp - i.invoice_date::timestamp)) / 86400 * p.amount_minor * coalesce(i.fx_rate, 1)), "
+                "sum(p.amount_minor * coalesce(i.fx_rate, 1)) FROM pic.payment p JOIN pic.invoice i ON i.id = p.invoice_id WHERE p.status = 'COMPLETED'"
+                + c.when("p.value_date"))
     return mean(row[0], row[1])
+
+
+def m10_touchless(c: Ctx) -> Result:
+    row = c.one("SELECT count(*) FILTER (WHERE i.first_pass_matched AND NOT EXISTS (SELECT 1 FROM pic.credit_note n WHERE n.invoice_id = i.id) "
+                "AND NOT EXISTS (SELECT 1 FROM pic.debit_note d WHERE d.invoice_id = i.id) "
+                "AND NOT EXISTS (SELECT 1 FROM pic.invoice_exception e WHERE e.invoice_id = i.id)), count(*) "
+                "FROM pic.invoice i WHERE i.status IN ('POSTED', 'PAID') AND coalesce(i.channel, '') NOT IN ('RETENTION', 'ERS', 'ADVANCE')" + c.when("i.invoice_date"))
+    return pct(row[0], row[1], {"definition": "matched first time with no exception, credit note or debit note, over invoices posted or paid (approval stays a human four-eyes step)"})
+
+
+def m10_msme_on_time(c: Ctx) -> Result:
+    data = _payables(c)["msme"]
+    return pct(data["paidInvoices"] - data["paidLate"], data["paidInvoices"], {"overdueUnpaid": data["overdueInvoices"]})
+
+
+def m10_exception_ageing(c: Ctx) -> Result:
+    ageing = _payables(c)["exceptionAgeing"]
+    return count_of(ageing["8-30"] + ageing["30+"], {"buckets": ageing})
 
 
 # ---------------------------------------------------------------- M11 savings
@@ -592,6 +618,9 @@ for _args, _kw in [
     (("DUPLICATES_PREVENTED", "M10", "Duplicate invoices prevented", "COUNT", I, "invoices held as duplicates", "invoice_exception"), {"compute": m10_duplicates}),
     (("DISCOUNT_CAPTURE", "M10", "Discount capture %", "PCT", H, "early-payment discount captured / available", "payment, invoice, supplier", 80, 50), {"compute": m10_discount, "point_in_time": True}),
     (("DPO", "M10", "DPO (days)", "DAYS", H, "payment-weighted days from invoice date to payment", "payment, invoice", 45, 30), {"compute": m10_dpo}),
+    (("TOUCHLESS_INVOICE", "M10", "Touchless invoice %", "PCT", H, "invoices matched first time with no exception, credit or debit note / invoices posted or paid", "invoice", 50, 30), {"compute": m10_touchless}),
+    (("MSME_ON_TIME", "M10", "MSME payment compliance %", "PCT", H, "payments to MSME suppliers made by their due date (MSMED Act s.15) / completed MSME payments", "payment, invoice, supplier", 98, 90), {"compute": m10_msme_on_time, "point_in_time": True}),
+    (("EXCEPTION_AGEING", "M10", "Open exceptions older than 7 days", "COUNT", L, "open invoice exceptions raised more than 7 days ago", "invoice_exception", 5, 20), {"compute": m10_exception_ageing, "point_in_time": True}),
     (("NEGOTIATED_SAVINGS", "M11", "Negotiated savings (minor units)", "MINOR", I, "sum of NEGOTIATED ledger entries", "savings_ledger_entry"), {"compute": m11_negotiated}),
     (("REALISED_SAVINGS", "M11", "Realised savings (minor units)", "MINOR", I, "sum of REALISED ledger entries", "savings_ledger_entry"), {"compute": m11_realised}),
     (("REALISATION_RATE", "M11", "Realisation rate %", "PCT", H, "realised / negotiated savings", "savings_ledger_entry", 70, 50), {"compute": m01_realisation_rate}),
@@ -695,14 +724,16 @@ def read(session: Session, module: Optional[str] = None, period: Optional[str] =
          with_trend: bool = True, include_other_templates: bool = False) -> list[dict]:
     if period and not (len(period) == 7 and period[4] == "-" and period[:4].isdigit() and period[5:].isdigit() and 1 <= int(period[5:]) <= 12):
         raise Problem(422, "INVALID_PERIOD", "period must be YYYY-MM")
+    from app.pic.platform import batch
     out = []
-    for definition in applicable(session, module, None, include_other_templates):
-        if plant and "PLANT" not in definition.scopes:
-            continue
-        item = evaluate(session, definition, period, plant)
-        if with_trend:
-            item["trend"] = history(session, definition.code, 6)
-        out.append(item)
+    with batch.reading(session):
+        for definition in applicable(session, module, None, include_other_templates):
+            if plant and "PLANT" not in definition.scopes:
+                continue
+            item = evaluate(session, definition, period, plant)
+            if with_trend:
+                item["trend"] = history(session, definition.code, 6)
+            out.append(item)
     return out
 
 

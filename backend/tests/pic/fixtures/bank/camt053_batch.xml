@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
+  <BkToCstmrStmt>
+    <GrpHdr><MsgId>MSG-{{STMT}}</MsgId><CreDtTm>2027-03-04T08:00:00+05:30</CreDtTm></GrpHdr>
+    <Stmt>
+      <Id>{{STMT}}</Id>
+      <ElctrncSeqNb>1</ElctrncSeqNb>
+      <Acct><Id><Othr><Id>50200011223399</Id></Othr></Id><Ccy>INR</Ccy></Acct>
+      <Ntry>
+        <Amt Ccy="INR">{{BATCH_TOTAL}}</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-03-04</Dt></BookgDt>
+        <ValDt><Dt>2027-03-04</Dt></ValDt>
+        <AcctSvcrRef>HDFCBATCH2027030400001</AcctSvcrRef>
+        <NtryDtls>
+          <TxDtls>
+            <Refs><EndToEndId>{{PAY1}}</EndToEndId><TxId>HDFCBTX0001</TxId></Refs>
+            <AmtDtls><TxAmt><Amt Ccy="INR">{{AMT1}}</Amt></TxAmt></AmtDtls>
+          </TxDtls>
+          <TxDtls>
+            <Refs><EndToEndId>{{PAY2}}</EndToEndId><TxId>HDFCBTX0002</TxId></Refs>
+            <AmtDtls><TxAmt><Amt Ccy="INR">{{AMT2}}</Amt></TxAmt></AmtDtls>
+          </TxDtls>
+        </NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">{{AMT3}}</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <RvslInd>true</RvslInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-03-05</Dt></BookgDt>
+        <AcctSvcrRef>HDFCRTNB2027030500002</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>{{PAY3}}</EndToEndId></Refs>
+          <RtrInf><Rsn><Cd>AC04</Cd></Rsn><AddtlInf>Beneficiary account closed</AddtlInf></RtrInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">{{TOTAL_ONLY}}</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-03-04</Dt></BookgDt>
+        <AcctSvcrRef>HDFCBATCH2027030400003</AcctSvcrRef>
+        <NtryDtls><TxDtls><RmtInf><Ustrd>Bulk credit {{PAY4}} {{PAY5}}</Ustrd></RmtInf></TxDtls></NtryDtls>
+      </Ntry>
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>

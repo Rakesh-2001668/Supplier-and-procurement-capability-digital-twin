@@ -51,6 +51,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/invoices', label: 'Invoices & payments' },
     { href: '/pic/invoices/reconciliation', label: 'Posting & reconciliation', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
     { href: '/pic/invoices/insights', label: 'Payables insights', roles: ['AP_CLERK', 'FINANCE_CONTROLLER', 'CPO', 'PROCUREMENT_HEAD'] },
+    { href: '/pic/invoices/tax', label: 'TDS, Form 16A & MSME', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
     { href: '/pic/industry', label: 'Industry controls' },
   ] },
   { group: 'Govern', items: [

@@ -166,7 +166,7 @@ def test_fx_reference_rates(pack, sc):
         rates = {(r.from_ccy, r.to_ccy): r for r in s.execute(select(FxRate).where(FxRate.valid_from == date(2026, 10, 28))).scalars()}
         assert rates[("USD", "INR")].rate == Decimal("95.22780000") and rates[("USD", "INR")].source.startswith("FBIL")
         assert rates[("JPY", "INR")].rate == Decimal("0.60310000")  # FBIL quotes INR per 100 JPY
-        assert len(rates) == 4
+        assert {("USD", "INR"), ("EUR", "INR"), ("GBP", "INR"), ("JPY", "INR")} <= set(rates)   # the finance pack adds CNY to the same series
     from app.pic.services import admin
     with sc.act("category.head", at(date(2027, 3, 31), 9)) as s:
         assert admin.convert(s, 100_00, "USD", "INR")[0] == 9522_78

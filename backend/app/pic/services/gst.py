@@ -89,3 +89,54 @@ def check(session: Session, code: Optional[str], rate, on: Optional[date] = None
     return {"hsn": code, "gstRate": str(Decimal(str(rate)).normalize()), "allowedRates": [str(r.normalize()) for r in found["rates"]],
             "masterEntries": [f"{e['ref']} ({e['notification']}) {e['rate']}%" for e in found["entries"]][:4],
             "ruleSetVersion": rule.ref}
+
+
+# ---------------------------------------------------------------- tax heads (CGST / SGST / IGST) and reverse charge
+RCM_RULE_KEY = "GST-RCM"
+
+
+def supplier_state(session: Session, supplier) -> Optional[str]:
+    """The supplier's GST state code (master data, else the first two digits of its GSTIN); None for a foreign supplier."""
+    from app.pic.platform import crypto
+    if (supplier.country or "IN").upper() != "IN":
+        return None
+    if supplier.state_code:
+        return supplier.state_code
+    from app.pic.services import finance_controls
+    gstin = finance_controls.supplier_gstin(session, supplier)
+    return gstin[:2] if len(gstin) == 15 else None
+
+
+def place_of_supply(session: Session, company_code: str, plant: Optional[str]) -> Optional[str]:
+    """State code of the place of supply of goods delivered to a plant (the plant's state), else the registered state of the company code (GSTIN)."""
+    from sqlalchemy import select
+    from app.pic.models import CompanyCode, Plant
+    if plant:
+        state = session.execute(select(Plant.state_code).where(Plant.code == plant)).scalar_one_or_none()
+        if state:
+            return state
+    gstin = session.execute(select(CompanyCode.gstin).where(CompanyCode.code == company_code)).scalar_one_or_none()
+    return gstin[:2] if gstin and len(gstin) == 15 else None
+
+
+def split_tax(tax_minor: int, supply: Optional[str]) -> dict:
+    """The tax heads of an amount: CGST and SGST (half each, the odd paisa to SGST) inside the state, IGST between states; {} when unknown."""
+    if supply == "INTRA":
+        cgst = tax_minor // 2
+        return {"cgst": cgst, "sgst": tax_minor - cgst, "igst": 0}
+    if supply == "INTER":
+        return {"cgst": 0, "sgst": 0, "igst": tax_minor}
+    return {}
+
+
+def reverse_charge(session: Session, supplier, hsn_code: Optional[str], on: Optional[date] = None) -> bool:
+    """Whether GST on this supply is paid by the buyer under reverse charge (rule set GST-RCM, tenant data: ``hsnPrefixes`` of the notified goods and
+    services, ``unregisteredSupplier`` for a supplier without a GSTIN). Without the rule no supply is reverse charge."""
+    try:
+        body = rules.resolve(session, RCM_RULE_KEY, on).body
+    except Problem:
+        return False
+    digits = digits_of(hsn_code)
+    if digits and any(digits.startswith(str(prefix)) for prefix in body.get("hsnPrefixes") or []):
+        return True
+    return bool(body.get("unregisteredSupplier")) and not supplier.gstin_enc

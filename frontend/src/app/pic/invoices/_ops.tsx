@@ -1,13 +1,15 @@
 'use client';
 
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, Card, DataTable, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label } from '@/lib/pic/format';
-import { useApi, useCommand } from '@/lib/pic/hooks';
+import { useApi, useCommand, useList } from '@/lib/pic/hooks';
 import { downloadFile } from '../purchase-orders/[ref]/_ops';
 import { today } from './_components';
+import { ImportedStatements, StatementDialog, StatementImport } from './_statement';
 
 // ---------------------------------------------------------------- GST e-invoice verification (TD §12.3)
 type Check = { code: string; ok: boolean; detail: string };
@@ -96,6 +98,7 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
   const [status, setStatus] = useState<PaymentFile | null>(null);
   const [results, setResults] = useState<PaymentFile | null>(null);
   const [importing, setImporting] = useState(false);
+  const [opened, setOpened] = useState<string | null>(null);
   const [downloadError, setDownloadError] = useState<Error | null>(null);
   const generate = useCommand((run: string) => api.post<PaymentFile>(`/payments/runs/${encodeURIComponent(run)}/file`, { format: formats[run] ?? 'ISO20022_PAIN001' }), {
     success: (f) => `${f.fileName} generated · ${f.payments} payment(s) · ${inr(f.totalMinor)}`,
@@ -108,10 +111,15 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
           <p className="text-sm text-slate-600">
             Each payment run is sent to the bank once, as an ISO 20022 pain.001 credit-transfer file or a NEFT bulk file. Creditor accounts are decrypted only
             into the file; every download is audited. {files.data?.bankConnector.detail}.
+            A run with foreign-currency payments needs the pain.001 file (one payment block per currency; the beneficiary bank must be complete); NEFT is for rupee payments only.
           </p>
+          <ProblemBox error={generate.error} />
           {!runs.data?.length ? <Empty title="No payment runs yet" /> : (
             <DataTable<Run> rows={runs.data.map((r) => ({ ...r, id: r.run }))} columns={[
-              { key: 'run', header: 'Run', render: (r) => <span className="font-mono">{r.run}</span> },
+              { key: 'run', header: 'Run', render: (r) => (
+                <button type="button" onClick={() => setOpened(r.run)} aria-label={`Open payment run ${r.run}`}
+                  className="font-mono font-medium text-[#1A56DB] hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB]">{r.run}</button>
+              ) },
               { key: 'valueDate', header: 'Value date', render: (r) => date(r.valueDate) },
               { key: 'payments', header: 'Payments', align: 'right' },
               { key: 'totalMinor', header: 'Amount', align: 'right', render: (r) => inr(r.totalMinor) },
@@ -130,7 +138,7 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
           <div>
             <h3 className="mb-2 text-sm font-semibold text-slate-900">Generated files</h3>
             <ProblemBox error={downloadError} />
-            <DataTable<PaymentFile> rows={files.data?.items ?? []} empty="No payment files generated" columns={[
+            <DataTable<PaymentFile> rows={files.data?.items ?? []} empty="No payment files generated" caption="Generated payment files" columns={[
               { key: 'number', header: 'File', render: (f) => <span className="font-mono">{f.number}</span> },
               { key: 'run', header: 'Run' },
               { key: 'format', header: 'Format', render: (f) => label(f.format) },
@@ -149,8 +157,15 @@ export function PaymentFilesCard({ canManage }: { canManage: boolean }) {
               ) : null },
             ]} />
           </div>
+          {canManage && (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold text-slate-900">Imported bank statements</h3>
+              <ImportedStatements />
+            </div>
+          )}
         </div>
       )}
+      {opened && <RunDialog run={opened} onClose={() => setOpened(null)} />}
       {status && <FileStatusDialog file={status} onClose={() => setStatus(null)} />}
       {results && <BankResultsDialog file={results} onClose={() => setResults(null)} />}
       {importing && <StatementDialog onClose={() => setImporting(false)} />}
@@ -186,77 +201,49 @@ function FileStatusDialog({ file, onClose }: { file: PaymentFile; onClose: () =>
   );
 }
 
-// ---------------------------------------------------------------- bank statement import (camt.053 / MT940)
-type StatementItem = { line: number; amountMinor: number; bankRef: string; valueDate: string; payment: string | null; action: string | null; state: string; detail: string };
-type StatementResult = { statementId: string; format: string; account: string; entries: number; counts: Record<string, number>; items: StatementItem[]; dryRun: boolean;
-  alreadyImported?: boolean; replayed?: boolean; applied?: number; credited?: number; returned?: number };
+// ---------------------------------------------------------------- one payment run: its payments and what the bank answered
+type RunPayment = { id: string; number: string; invoice_id: string; invoice_number: string | null; supplier_code: string | null; value_date: string; status: string;
+  amount_minor: number; currency: string; bank_status: string; bank_utr: string | null; return_reason: string | null; tds_minor: number; tcs_minor?: number;
+  tds_certificate?: string | null; fx_rate?: string | number | null; fx_gain_loss_minor?: number | null; reversal_doc?: string | null; debit_note_id?: string | null };
 
-/** Upload a bank statement: the dry run shows what each entry would do to which payment, then it is applied (idempotent per statement id). */
-export function StatementImport({ onDone }: { onDone?: () => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<StatementResult | null>(null);
-  const send = (dryRun: boolean) => {
-    const form = new FormData();
-    form.append('file', file as File);
-    return api.upload<StatementResult>(`/bank-statements/import?dry_run=${dryRun}`, form);
-  };
-  const analyse = useCommand(() => send(true), { onSuccess: setResult });
-  const apply = useCommand(() => send(false), {
-    success: (r) => (r.replayed ? `Statement ${r.statementId} was imported before: nothing changed` : `${r.applied ?? 0} result(s) recorded from ${r.statementId}`),
-    onSuccess: (r) => { setResult(r); onDone?.(); },
-  });
-  const ready = result?.counts?.READY ?? 0;
+const money = (minor: number, currency: string) => (currency && currency !== 'INR' ? `${currency} ${(minor / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : inr(minor));
+
+function RunDialog({ run, onClose }: { run: string; onClose: () => void }) {
+  const list = useList<RunPayment>(`/payments?run=${encodeURIComponent(run)}&limit=200`);
+  const totals = list.items.reduce<Record<string, number>>((t, p) => (p.status === 'CANCELLED' ? t : { ...t, [p.currency || 'INR']: (t[p.currency || 'INR'] ?? 0) + p.amount_minor }), {});
+  const byBank = list.items.reduce<Record<string, number>>((t, p) => ({ ...t, [p.bank_status]: (t[p.bank_status] ?? 0) + 1 }), {});
+  const reversals = list.items.filter((p) => p.bank_status === 'RETURNED');
   return (
-    <div className="space-y-3">
-      <Field label="Bank statement (camt.053 XML or MT940)" hint="Entries are matched to payments by payment number; a statement id is applied once.">
-        {(id) => <input id={id} type="file" accept=".xml,.sta,.mt940,.txt,text/xml,text/plain" className="block w-full text-sm"
-          onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); }} />}
-      </Field>
-      <ProblemBox error={analyse.error ?? apply.error} />
-      {result && (
-        <div className="space-y-2">
-          <p className="text-sm">
-            {result.format} · statement <span className="font-mono">{result.statementId}</span> · {result.entries} entr{result.entries === 1 ? 'y' : 'ies'}
-            {' · '}{Object.entries(result.counts).map(([k, v]) => `${v} ${k.replace(/_/g, ' ').toLowerCase()}`).join(', ')}
-            {result.alreadyImported ? ' · already imported' : ''}
+    <Dialog open title={`Payment run ${run}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <p className="text-sm">
+          {list.items.length}{list.hasNextPage ? '+' : ''} payment{list.items.length === 1 ? '' : 's'} loaded · {Object.entries(totals).map(([c, v]) => money(v, c)).join(' · ') || '–'} live
+        </p>
+        <ul className="flex flex-wrap gap-2" aria-label="Bank status counts">
+          {Object.entries(byBank).map(([k, v]) => <li key={k} className="flex items-center gap-1 text-xs"><StatusChip status={k} /><span className="tabular-nums">{v}</span></li>)}
+        </ul>
+        {reversals.length > 0 && (
+          <p role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {reversals.length} payment{reversals.length === 1 ? ' was' : 's were'} returned by the bank. The invoice is payable again; the ERP clearing document of a returned payment is reversed in the ERP{reversals.some((p) => p.reversal_doc) ? ` (reversal documents: ${reversals.filter((p) => p.reversal_doc).map((p) => p.reversal_doc).join(', ')})` : ''};
+            a reversal that does not post is listed on the posting and reconciliation screen until it does.
           </p>
-          <div className="max-h-64 overflow-auto rounded-lg border border-slate-200">
-            <table className="min-w-full text-xs">
-              <thead className="bg-slate-50 text-left uppercase tracking-wide text-slate-500">
-                <tr><th className="px-2 py-1.5">#</th><th className="px-2 py-1.5">Payment</th><th className="px-2 py-1.5">Result</th><th className="px-2 py-1.5 text-right">Amount</th>
-                  <th className="px-2 py-1.5">Bank ref.</th><th className="px-2 py-1.5">State</th></tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {result.items.map((i) => (
-                  <tr key={i.line}>
-                    <td className="px-2 py-1.5">{i.line}</td>
-                    <td className="px-2 py-1.5 font-mono">{i.payment ?? '–'}</td>
-                    <td className="px-2 py-1.5">{i.action ? label(i.action) : '–'}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{inr(i.amountMinor)}</td>
-                    <td className="px-2 py-1.5 font-mono">{i.bankRef || '–'}</td>
-                    <td className="px-2 py-1.5"><StatusChip status={i.state} /><span className="ml-1 text-slate-500">{i.detail}</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-      <div className="flex justify-end gap-2">
-        <Button disabled={!file} busy={analyse.isPending} onClick={() => analyse.mutate()}>Analyse (dry run)</Button>
-        <Button variant="primary" disabled={!file || !result || !result.dryRun || ready === 0} busy={apply.isPending} onClick={() => apply.mutate()}>
-          Apply {ready ? `${ready} result${ready === 1 ? '' : 's'}` : ''}
-        </Button>
+        )}
+        <DataTable<RunPayment> rows={list.items} loading={list.isLoading} error={list.error} hasMore={list.hasNextPage} onLoadMore={() => list.fetchNextPage()}
+          loadingMore={list.isFetchingNextPage} empty="No payments in this run" caption={`Payments of run ${run}`} columns={[
+            { key: 'number', header: 'Payment', render: (p) => <span className="font-mono text-xs">{p.number}</span> },
+            { key: 'invoice_number', header: 'Invoice', render: (p) => <Link href={`/pic/invoices/${p.invoice_id}`} className="font-medium text-[#1A56DB] hover:underline">{p.invoice_number ?? 'open'}</Link> },
+            { key: 'supplier_code', header: 'Supplier', render: (p) => p.supplier_code ?? '–' },
+            { key: 'value_date', header: 'Value date', render: (p) => date(p.value_date) },
+            { key: 'status', header: 'Status', render: (p) => <StatusChip status={p.status} /> },
+            { key: 'bank_status', header: 'Bank', render: (p) => <span><StatusChip status={p.bank_status} />{p.bank_utr ? <span className="ml-1 font-mono text-xs text-slate-500">{p.bank_utr}</span> : null}
+              {p.return_reason ? <span className="block text-xs text-slate-500">{p.return_reason}</span> : null}</span> },
+            { key: 'tds_minor', header: 'TDS', align: 'right', render: (p) => (p.tds_minor ? <>{inr(p.tds_minor)}{p.tds_certificate ? <span className="block text-xs text-slate-500">s.197 {p.tds_certificate}</span> : null}</> : '–') },
+            { key: 'tcs_minor', header: 'TCS', align: 'right', render: (p) => (p.tcs_minor ? inr(p.tcs_minor) : '–') },
+            { key: 'fx', header: 'FX gain / loss', align: 'right', render: (p) => (p.fx_gain_loss_minor ? <span className={p.fx_gain_loss_minor > 0 ? 'text-emerald-700' : 'text-red-700'}>{inr(p.fx_gain_loss_minor)}</span> : '–') },
+            { key: 'amount_minor', header: 'Amount', align: 'right', render: (p) => money(p.amount_minor, p.currency) },
+          ]} />
+        <div className="flex justify-end"><Button onClick={onClose}>Close</Button></div>
       </div>
-    </div>
-  );
-}
-
-function StatementDialog({ onClose }: { onClose: () => void }) {
-  return (
-    <Dialog open title="Import bank statement" onClose={onClose}>
-      <StatementImport />
-      <div className="mt-4 flex justify-end"><Button onClick={onClose}>Close</Button></div>
     </Dialog>
   );
 }

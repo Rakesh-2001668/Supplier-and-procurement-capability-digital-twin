@@ -35,7 +35,7 @@ def test_materials_cards_and_requisitions(mfg):
         for card in cards[:2]:
             pr = s.get(Requisition, card.requisition_id)
             assert (pr.origin, pr.origin_ref, pr.purpose_code) == ("MRP", card.number, "KANBAN_REPLENISHMENT") and pr.status in ("APPROVED", "ORDERED")
-        tie = s.execute(select(PlanningParameter)).scalar_one()
+        tie = s.execute(select(PlanningParameter).join(Material, Material.id == PlanningParameter.material_id).where(Material.number == summary["materials"]["tie"])).scalar_one()
         assert (tie.reorder_point, tie.max_stock, tie.plant) == (Decimal(400), Decimal(2000), "P100")
 
 

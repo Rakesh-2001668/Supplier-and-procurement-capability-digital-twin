@@ -42,6 +42,8 @@ STREAM_ONLY = {
     "payment.returned": "A payment returned by the beneficiary bank; finance reverses the ERP clearing document (reconciliation lists it).",
     "finance.period.closed": "Cut-off of a posting period; subscribers (ERP, controlling) freeze their own period.",
     "finance.period.reopened": "A closed posting period was reopened with a reason; the audit trail holds who and why.",
+    "msme.interest.accrued": "Interest owed to an MSME supplier for a late payment (MSMED Act s.16) was recorded; treasury and the ERP posting read the stream.",
+    "tds.challan.recorded": "A TDS deposit challan (BSR code, serial, deposit date) was recorded; the tax team's reconciliation reads the stream.",
     "stock_posting.submitted": "Approval tasks and the audit trail already carry it; subscribers use it for the inventory approval backlog.",
     "stock_posting.approved": "The posting is posted by a stock poster; the audit trail holds the approver and the rule version.",
     "stock_posting.posted": "The stock movements are in the ledger and the ERP material document is queued; subscribers (planning, BI) read the stream.",

@@ -93,7 +93,8 @@ def verify(session: Session, *, supplier: Supplier, company_code: str, supplier_
            irn: Optional[str], signed_qr: Optional[str] = None, doc_type: str = "INV") -> dict:
     from app.pic.services.payables import expected_irn
     checks: list[dict] = []
-    seller = crypto.decrypt(supplier.tenant_id, "gstin", supplier.gstin_enc) if supplier.gstin_enc else ""
+    from app.pic.services import finance_controls
+    seller = finance_controls.supplier_gstin(session, supplier)
     company = session.execute(select(CompanyCode).where(CompanyCode.code == company_code)).scalar_one_or_none()
     buyer = company.gstin if company else None
     fiscal_year = clock.fiscal_year(invoice_date)

@@ -32,6 +32,13 @@ class Rule:
 
 def resolve(session: Session, key: str, on: Optional[date] = None, **scope: Optional[str]) -> Rule:
     on = on or clock.today()
+    from app.pic.platform import batch
+    if batch.active(session):  # a batch operation (platform/batch.py) resolves each key and scope once
+        return batch.memo(session, ("rule", key, on, tuple(sorted(scope.items(), key=lambda kv: kv[0]))), lambda: _resolve(session, key, on, scope))
+    return _resolve(session, key, on, scope)
+
+
+def _resolve(session: Session, key: str, on: date, scope: dict) -> Rule:
     candidates = session.execute(
         select(RuleSet).where(
             RuleSet.key == key,

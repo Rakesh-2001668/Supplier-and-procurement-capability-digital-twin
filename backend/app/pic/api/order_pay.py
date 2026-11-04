@@ -17,7 +17,7 @@ from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.core import check_if_match, etag
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
-from app.pic.services import debit_notes, early_payment, order, payables, po_controls, receiving
+from app.pic.services import debit_notes, early_payment, finance_scope, order, payables, po_controls, receiving
 from app.pic.services.common import by_ref
 
 router = APIRouter(prefix="/v1")
@@ -316,13 +316,16 @@ class InvoiceLineIn(BaseModel):
     unit_price: Decimal = Field(gt=0)
     gst_rate: Optional[Decimal] = None
     hsn: Optional[str] = None
-    tax_minor: Optional[int] = None
+    tax_minor: Optional[int] = Field(default=None, ge=0)
+    cgst_minor: Optional[int] = Field(default=None, ge=0)   # tax heads the supplier charged (their sum must be tax_minor); omitted: derived from the place of supply
+    sgst_minor: Optional[int] = Field(default=None, ge=0)
+    igst_minor: Optional[int] = Field(default=None, ge=0)
     description: Optional[str] = None
 
 
 class InvoiceIn(BaseModel):
     supplier: Optional[str] = None
-    supplier_invoice_no: str
+    supplier_invoice_no: str = Field(min_length=1, max_length=120)
     invoice_date: date
     channel: str = Field(pattern="^(PORTAL|PDF_OCR|E_INVOICE|EDI)$")
     irn: Optional[str] = None
@@ -350,7 +353,7 @@ def capture_invoice(body: InvoiceIn, p: Principal = Depends(require_any("invoice
 @router.get("/invoices/{ref}", tags=["F7 Invoice"])
 def get_invoice(ref: str, response: Response, p: Principal = Depends(require_any(READ, "supplier:portal"))):
     with uow(p) as s:
-        invoice = by_ref(s, Invoice, ref)
+        invoice = finance_scope.guard_invoice_read(s, by_ref(s, Invoice, ref), ref)
         if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
             raise not_found("Invoice", ref)
         response.headers["ETag"] = etag(invoice)
@@ -365,7 +368,7 @@ def _locked_invoice(s, ref: str, if_match: Optional[str]) -> Invoice:
     when PIC_REQUIRE_IF_MATCH is on."""
     if if_match is None and get_settings().if_match_required:
         raise Problem(428, "PRECONDITION_REQUIRED", "Send If-Match with the ETag of GET /v1/invoices/{ref}")
-    invoice = by_ref(s, Invoice, ref, lock=True)
+    invoice = finance_scope.guard_invoice_read(s, by_ref(s, Invoice, ref, lock=True), ref)
     check_if_match(invoice, if_match)
     return invoice
 
@@ -394,7 +397,7 @@ class CreditNoteIn(BaseModel):
 def credit_note(ref: str, body: CreditNoteIn, p: Principal = Depends(require_any("invoice:submit", "invoice:capture")),
                 key: Optional[str] = Depends(idempotency_key)):
     with uow(p) as s:
-        invoice = by_ref(s, Invoice, ref, lock=True)
+        invoice = finance_scope.guard_invoice_read(s, by_ref(s, Invoice, ref, lock=True), ref)
         if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
             raise not_found("Invoice", ref)
         idem = idempotent(s, f"POST /v1/invoices/{ref}/credit-notes", key, body)
@@ -423,6 +426,17 @@ def resolve(ref: str, exception_id: uuid.UUID, body: ResolveIn, p: Principal = D
 
 class RejectIn(BaseModel):
     reason: str
+
+
+class ReleaseBlockIn(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+
+@router.post("/invoices/{ref}/payment-block/release", tags=["F7 Invoice"])
+def release_payment_block(ref: str, body: ReleaseBlockIn, p: Principal = Depends(require("payment:run")), if_match: Optional[str] = IfMatch):
+    """Finance lifts the payment block of a posted, unpaid invoice that no exception explains (for example one loaded from the ERP). Audited."""
+    with uow(p) as s:
+        return row(payables.release_payment_block(s, _locked_invoice(s, ref, if_match), body.reason))
 
 
 @router.post("/invoices/{ref}/reject", tags=["F7 Invoice"])
@@ -497,7 +511,7 @@ def release_retention(ref: str, body: RetentionReleaseIn, p: Principal = Depends
 
 # ---------------------------------------------------------------- M10 debit notes
 def _own_invoice(s, p: Principal, ref: str, lock: bool = False) -> Invoice:
-    invoice = by_ref(s, Invoice, ref, lock=lock)
+    invoice = finance_scope.guard_invoice_read(s, by_ref(s, Invoice, ref, lock=lock), ref)
     if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
         raise not_found("Invoice", ref)
     return invoice
@@ -738,7 +752,7 @@ def delete_receipt_tolerance(tolerance_id: uuid.UUID, p: Principal = Depends(req
 @router.get("/grir", tags=["F7 Invoice"])
 def grir(p: Principal = Depends(require(READ))):
     with uow(p) as s:
-        return payables.grir(s)
+        return payables.grir(s, company_codes=finance_scope.companies(s))
 
 
 # ---------------------------------------------------------------- P08 special stocks: subcontracting, consignment, lots (BP §22, §23)

@@ -98,7 +98,8 @@ def submit(session: Session, invoice: Invoice, *, supplier_debit_note_no: str, n
     if invoice.match_type == "RETENTION":
         raise rule_violation(f"{invoice.number} is a retention release; a debit note is raised against the supplier's invoice", KEY)
     from app.pic.services import finance_controls
-    finance_controls.assert_open(session, invoice.company_code, clock.today(), f"debit note against {invoice.number}")
+    for day in dict.fromkeys((clock.today(), note_date)):  # the day it is posted and the date the document carries (D42)
+        finance_controls.assert_open(session, invoice.company_code, day, f"debit note against {invoice.number} dated {note_date.isoformat()}")
     if len((reason or "").strip()) < 3:
         raise Problem(422, "REASON_REQUIRED", "Give the reason for the debit note", rule_ref=KEY)
     if not lines:
@@ -316,7 +317,8 @@ def post(session: Session, note: DebitNote) -> dict:
     from app.pic.platform import connectors
     connectors.require_mapped(target, MESSAGE_TYPE)
     from app.pic.services import finance_controls
-    finance_controls.assert_open(session, invoice.company_code, clock.today(), f"debit note {note.number}")  # cut-off
+    for day in dict.fromkeys((clock.today(), note.note_date)):
+        finance_controls.assert_open(session, invoice.company_code, day, f"debit note {note.number} dated {note.note_date.isoformat()}")  # cut-off
     sod.record(session, "INVOICE_POST", {"supplier_id": note.supplier_id})
     supplier = session.get(Supplier, note.supplier_id)
     if note.posting_key is None:  # TDS on the additional taxable value is fixed once, at the first posting attempt (a retry sends the same payload)
@@ -403,6 +405,8 @@ def view(session: Session, note: DebitNote) -> dict:
 
 
 def by_ref(session: Session, ref: str, lock: bool = False) -> DebitNote:
+    from app.pic.platform.http import unescape_ref
+    ref = unescape_ref(str(ref))
     query = select(DebitNote)
     try:
         query = query.where(DebitNote.id == uuid.UUID(str(ref)))

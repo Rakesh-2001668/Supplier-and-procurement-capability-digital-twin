@@ -1,11 +1,12 @@
 """F1 MRP, F2 requisitions, F9 material governance, F8 supplier onboarding."""
+import re
 import uuid
 from datetime import date
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 
 from app.pic import views
@@ -353,9 +354,21 @@ def submit_profile(code: str, body: ProfileIn, p: Principal = Depends(require_an
 
 
 class BankChangeIn(BaseModel):
-    bank_account: str = Field(pattern=r"^[0-9]{9,18}$")
-    ifsc: str = Field(min_length=11, max_length=11, pattern=IFSC_PATTERN)
+    bank_account: str = Field(pattern=r"^[0-9A-Za-z]{5,34}$")   # domestic: 9 to 18 digits (checked below); foreign: account number or IBAN
+    ifsc: Optional[str] = Field(default=None, min_length=11, max_length=11, pattern=IFSC_PATTERN)
     holder_name: str = Field(min_length=3, max_length=200)
+    # Foreign beneficiary bank (country other than IN): SWIFT/BIC, optional intermediary bank, ISO 20022 charge bearer and the RBI purpose code.
+    country: str = Field(default="IN", pattern=r"^[A-Za-z]{2}$")
+    swift_bic: Optional[str] = Field(default=None, max_length=11)
+    intermediary_bic: Optional[str] = Field(default=None, max_length=11)
+    charge_bearer: Optional[str] = Field(default=None, pattern="^(DEBT|CRED|SHAR)$")
+    purpose_code: Optional[str] = Field(default=None, max_length=10)
+
+    @model_validator(mode="after")
+    def _domestic_account_is_digits(self):
+        if self.country.upper() == "IN" and not re.fullmatch(r"[0-9]{9,18}", self.bank_account):
+            raise ValueError("an Indian bank account number is 9 to 18 digits")
+        return self
 
 
 @router.post("/suppliers/{code}/bank-changes", status_code=201, tags=["F8 Supplier"])

@@ -3,14 +3,15 @@
 import { useState } from 'react';
 import { Button, Card, DataTable, Dialog, Empty, Facts, Field, Input, Loading, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
-import { date } from '@/lib/pic/format';
+import { date, inr, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { hasRole, today, useSessionUser } from '../../invoices/_components';
 
 type Certificate = { certificateNo: string; section: string | null; ratePct: string; validFrom: string; validTo: string; status: string; validNow: boolean;
-  note: string | null; revokedReason: string | null };
+  note: string | null; revokedReason: string | null; maxBaseMinor: number | null; consumedBaseMinor: number; remainingBaseMinor: number | null };
+type Tcs = { enabled?: boolean; section?: string; ratePct?: number | string; annualThresholdMinor?: number | null; addToPayable?: boolean };
 type FinanceView = { supplier: string; name: string; msmeClass: string | null; udyamNo: string | null; tdsSection: string | null; panOnFile: boolean;
-  panFromGstin: string | null; gstinOnFile: boolean; isMsme: boolean; etag: string; certificates: Certificate[];
+  panFromGstin: string | null; gstinOnFile: boolean; isMsme: boolean; msmeWrittenAgreement: boolean | null; etag: string; certificates: Certificate[];
   tdsSections: Record<string, { label: string | null; ratePct: number }> };
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -22,6 +23,8 @@ export function SupplierFinanceCard({ code }: { code: string }) {
   const user = useSessionUser();
   const canEdit = hasRole(user, 'SUPPLIER_MANAGER', 'FINANCE_CONTROLLER');
   const { data, isLoading, error } = useApi<FinanceView>(`/suppliers/${encodeURIComponent(code)}/finance`);
+  const controls = useApi<{ tds: { tcs?: Tcs } }>('/finance/controls');
+  const tcs = controls.data?.tds.tcs;
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
   const revoke = useCommand((c: Certificate) => api.post(`/suppliers/${encodeURIComponent(code)}/tds-certificates/${encodeURIComponent(c.certificateNo)}/revoke`,
@@ -31,10 +34,15 @@ export function SupplierFinanceCard({ code }: { code: string }) {
       {isLoading ? <Loading /> : error ? <ProblemBox error={error} /> : data && (
         <div className="space-y-4">
           <Facts items={[
-            ['MSME class', data.msmeClass ? `${data.msmeClass.toLowerCase()}${data.isMsme ? ' · paid within 45 days of acceptance' : ' · outside the 45-day rule'}` : 'not an MSME'],
+            ['MSME class', data.msmeClass ? `${data.msmeClass.toLowerCase()}${data.isMsme ? (data.msmeWrittenAgreement === false ? ' · paid within 15 days of acceptance' : ' · paid within 45 days of acceptance') : ' · outside the 45-day rule'}` : 'not an MSME'],
             ['Udyam number', data.udyamNo ?? '–'],
+            ...(data.msmeClass ? [['Written payment agreement', data.msmeWrittenAgreement === false
+              ? 'none: MSMED Act s.15 limits the period to 15 days from acceptance' : 'on file: the period agreed in writing, at most 45 days'] as [string, string]] : []),
             ['PAN', data.panOnFile ? (data.panFromGstin ? `on file (${data.panFromGstin} in the GSTIN)` : 'on file') : 'not on file: TDS at the higher no-PAN rate'],
             ['TDS section', data.tdsSection ? `${data.tdsSection}${data.tdsSections[data.tdsSection]?.label ? ` · ${data.tdsSections[data.tdsSection].label}` : ''}` : 'none: nothing is withheld'],
+            ['TCS (tenant rule)', !tcs ? '–' : tcs.enabled
+              ? `${tcs.section ?? 'TCS'} · ${tcs.ratePct}% of the invoice${tcs.annualThresholdMinor ? ` above ${inr(tcs.annualThresholdMinor)} a year` : ''}${tcs.addToPayable ? ' · paid to the supplier with the invoice' : ' · carried to the ERP only'}`
+              : 'off: no TCS is collected on this supplier\'s invoices'],
           ]} />
           <div>
             <div className="mb-2 flex items-center justify-between">
@@ -46,6 +54,13 @@ export function SupplierFinanceCard({ code }: { code: string }) {
                 { key: 'certificateNo', header: 'Certificate', render: (c) => <span className="font-mono text-xs">{c.certificateNo}</span> },
                 { key: 'section', header: 'Section', render: (c) => c.section ?? 'all' },
                 { key: 'ratePct', header: 'Rate %', align: 'right' },
+                { key: 'cap', header: 'Amount cap (taxable base)', align: 'right', render: (c) => c.maxBaseMinor === null ? <span className="text-slate-500">no cap</span> : (
+                  <><p>{inr(c.maxBaseMinor)}</p>
+                    <p className="text-xs text-slate-500">consumed {inr(c.consumedBaseMinor)} · remaining {inr(c.remainingBaseMinor ?? 0)}</p>
+                    <div className="mt-1 h-1.5 w-32 rounded bg-slate-100" role="img" aria-label={`${Math.min(100, Math.round((c.consumedBaseMinor / c.maxBaseMinor) * 100))} percent of the cap consumed`}>
+                      <div className={`h-1.5 rounded ${c.consumedBaseMinor >= c.maxBaseMinor ? 'bg-red-500' : 'bg-[#1A56DB]'}`} style={{ width: `${Math.min(100, (c.consumedBaseMinor / c.maxBaseMinor) * 100)}%` }} />
+                    </div></>
+                ) },
                 { key: 'validFrom', header: 'Valid', render: (c) => `${date(c.validFrom)} – ${date(c.validTo)}` },
                 { key: 'status', header: 'Status', render: (c) => <StatusChip status={c.status === 'ACTIVE' && !c.validNow ? 'EXPIRED' : c.status} /> },
                 { key: 'action', header: '', render: (c) => canEdit && c.status === 'ACTIVE' ? <Button variant="danger" busy={revoke.isPending} onClick={() => revoke.mutate(c)}>Revoke</Button> : null },
@@ -65,6 +80,7 @@ function EditDialog({ code, view, onClose }: { code: string; view: FinanceView; 
   const [udyam, setUdyam] = useState(view.udyamNo ?? '');
   const [pan, setPan] = useState('');
   const [section, setSection] = useState(view.tdsSection ?? '');
+  const [agreement, setAgreement] = useState(view.msmeWrittenAgreement !== false);
   const [reason, setReason] = useState('');
   const problems = [
     udyam.trim() && !UDYAM_RE.test(udyam.trim().toUpperCase()) ? 'Udyam number looks like UDYAM-KA-03-0012345' : '',
@@ -75,6 +91,7 @@ function EditDialog({ code, view, onClose }: { code: string; view: FinanceView; 
   const save = useCommand(() => api.put(`/suppliers/${encodeURIComponent(code)}/finance`, {
     msmeClass: msme || undefined, udyamNo: udyam.trim() ? udyam.trim().toUpperCase() : undefined, tdsSection: section || undefined,
     pan: pan.trim() ? pan.trim().toUpperCase() : undefined, reason: reason.trim(),
+    msmeWrittenAgreement: msme && agreement !== (view.msmeWrittenAgreement !== false) ? agreement : undefined,
   }, { ifMatch: view.etag }), { success: 'Finance attributes saved', onSuccess: onClose });
   return (
     <Dialog open title={`Finance attributes · ${view.supplier}`} onClose={onClose}>
@@ -86,6 +103,15 @@ function EditDialog({ code, view, onClose }: { code: string; view: FinanceView; 
         </Field>
         <Field label="TDS section">{(id) => <Select id={id} value={section} onChange={(e) => setSection(e.target.value)}
           options={[{ value: '', label: 'None: nothing is withheld' }, ...Object.entries(view.tdsSections).map(([k, v]) => ({ value: k, label: `${k}${v.label ? ` · ${v.label}` : ''} · ${v.ratePct}%` }))]} />}</Field>
+        {msme && (
+          <div className="md:col-span-2">
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[#1A56DB]" checked={agreement} onChange={(e) => setAgreement(e.target.checked)} />
+              <span>A written agreement fixes the payment period (at most 45 days from acceptance)
+                <span className="block text-xs text-slate-500">MSMED Act s.15: clear this when there is no written agreement; the supplier is then due 15 days from acceptance.</span></span>
+            </label>
+          </div>
+        )}
         <div className="md:col-span-2"><Field label="Reason (audited)">{(id) => <Input id={id} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field></div>
       </div>
       {problems.length > 0 && <ul className="mt-2 list-disc pl-5 text-xs text-amber-800">{problems.map((p) => <li key={p}>{p}</li>)}</ul>}
@@ -104,9 +130,12 @@ function CertificateDialog({ code, sections, onClose }: { code: string; sections
   const [from, setFrom] = useState(today());
   const [to, setTo] = useState('');
   const [note, setNote] = useState('');
-  const valid = no.trim().length >= 6 && rate.trim() !== '' && Number(rate) >= 0 && Number(rate) <= 100 && !!from && !!to && to >= from;
+  const [cap, setCap] = useState('');
+  const valid = no.trim().length >= 6 && rate.trim() !== '' && Number(rate) >= 0 && Number(rate) <= 100 && !!from && !!to && to >= from
+    && (cap.trim() === '' || (Number.isFinite(Number(cap)) && Number(cap) > 0));
   const save = useCommand(() => api.post(`/suppliers/${encodeURIComponent(code)}/tds-certificates`, {
     certificateNo: no.trim(), section: section || undefined, ratePct: rate, validFrom: from, validTo: to, note: note.trim() || undefined,
+    maxBaseMinor: cap.trim() ? rupeesToMinor(cap) : undefined,
   }), { success: 'Certificate recorded', onSuccess: onClose });
   return (
     <Dialog open title="Lower-deduction certificate (s.197)" onClose={onClose}>
@@ -115,12 +144,15 @@ function CertificateDialog({ code, sections, onClose }: { code: string; sections
         <Field label="Section">{(id) => <Select id={id} value={section} onChange={(e) => setSection(e.target.value)}
           options={[{ value: '', label: 'All sections of the supplier' }, ...sections.map((s) => ({ value: s, label: s }))]} />}</Field>
         <Field label="Rate %" hint="0 for a nil-deduction certificate">{(id) => <Input id={id} type="number" min={0} max={100} step="0.001" value={rate} onChange={(e) => setRate(e.target.value)} />}</Field>
-        <div />
+        <Field label="Amount cap in rupees (optional)" hint="Taxable base the certificate covers; beyond it the section rate applies">
+          {(id, d) => <Input id={id} aria-describedby={d} inputMode="decimal" value={cap} onChange={(e) => setCap(e.target.value)} />}
+        </Field>
         <Field label="Valid from">{(id) => <Input id={id} type="date" value={from} onChange={(e) => setFrom(e.target.value)} />}</Field>
         <Field label="Valid to">{(id) => <Input id={id} type="date" value={to} onChange={(e) => setTo(e.target.value)} />}</Field>
         <div className="md:col-span-2"><Field label="Note">{(id) => <Input id={id} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />}</Field></div>
       </div>
-      <p className="mt-2 text-xs text-slate-500">While the certificate is valid on the payment date its rate replaces the section rate for this supplier&apos;s payments.</p>
+      <p className="mt-2 text-xs text-slate-500">While the certificate is valid on the payment date its rate replaces the section rate for this supplier&apos;s payments, up to its amount cap when it has one.</p>
+      <ProblemBox error={save.error} />
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!valid} busy={save.isPending} onClick={() => save.mutate()}>Record certificate</Button>

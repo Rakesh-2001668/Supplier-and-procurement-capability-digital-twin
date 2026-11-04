@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:credit_note.received",
+  "title": "credit_note.received",
+  "description": "Payload (outbox_event.payload) of credit_note.received on CREDIT_NOTE. Produced by services/payables.py (submit_credit_note); consumed by the spend cube (services/spend_feed.py).",
+  "type": "object",
+  "properties": {
+    "creditNoteId": {"type": "string"},
+    "invoiceId": {"type": "string"},
+    "invoice": {"type": "string"},
+    "grossMinor": {},
+    "noteDate": {"type": "string"}
+  },
+  "required": ["creditNoteId", "invoiceId", "invoice", "grossMinor", "noteDate"],
+  "additionalProperties": true
+}

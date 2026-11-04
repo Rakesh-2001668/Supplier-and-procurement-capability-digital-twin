@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:tds.challan.recorded",
+  "title": "tds.challan.recorded",
+  "description": "Payload (outbox_event.payload) of tds.challan.recorded on TDS_CHALLAN. Produced by services/tds_returns.py.",
+  "type": "object",
+  "properties": {
+    "companyCode": {},
+    "fiscalYear": {},
+    "quarter": {},
+    "section": {},
+    "amountMinor": {}
+  },
+  "required": [
+    "companyCode",
+    "fiscalYear",
+    "quarter",
+    "section",
+    "amountMinor"
+  ],
+  "additionalProperties": true
+}

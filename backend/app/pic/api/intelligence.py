@@ -16,7 +16,7 @@ from app.pic.platform import clock
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row
-from app.pic.services import forecasting, payables, risk, savings, spend
+from app.pic.services import finance_scope, forecasting, payables, risk, savings, spend
 from app.pic.services.common import by_ref, supplier_ref
 
 router = APIRouter(prefix="/v1")
@@ -360,13 +360,17 @@ class ReconcileIn(BaseModel):
 @router.post("/reconciliation/runs", status_code=201, tags=["M10 Invoice"])
 def run_reconciliation(body: ReconcileIn, p: Principal = Depends(require_any("invoice:post", "payment:run"))):
     with uow(p) as s:
+        finance_scope.guard_company(s, body.company_code)
         return payables.reconcile(s, body.company_code)
 
 
 @router.get("/reconciliation/runs", tags=["M10 Invoice"])
 def reconciliation_runs(p: Principal = Depends(require(READ))):
     with uow(p) as s:
-        runs = s.execute(select(ReconciliationRun).order_by(ReconciliationRun.as_of.desc()).limit(20)).scalars().all()
+        runs_query = select(ReconciliationRun).order_by(ReconciliationRun.as_of.desc()).limit(20)
+        if (allowed := finance_scope.companies(s)) is not None:
+            runs_query = runs_query.where(ReconciliationRun.company_code.in_(allowed))
+        runs = s.execute(runs_query).scalars().all()
         return [payables.reconciliation_view(s, r) for r in runs]
 
 
@@ -383,7 +387,7 @@ def resolve_item(item_id: uuid.UUID, body: ResolveItemIn, p: Principal = Depends
 @router.get("/payables/insights", tags=["M10 Invoice"])
 def payables_insights(p: Principal = Depends(require(READ))):
     with uow(p) as s:
-        return payables.insights(s)
+        return payables.insights(s, company_codes=finance_scope.companies(s))
 
 
 # ---------------------------------------------------------------- M11 initiatives (SAV-01)

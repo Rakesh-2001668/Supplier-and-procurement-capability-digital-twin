@@ -408,9 +408,10 @@ def apply(tenant_code: str, password: str) -> dict:
         ers_id, ers_no, ers_status = ers.id, ers.number, ers.status
     if ers_status != "MATCHED":
         raise RuntimeError(f"{ers_no} did not match: {ers_status}")
-    with sc.act("ap.clerk", _june(30, 18, 30)) as s:
+    with sc.act("finance.controller", _june(30, 18, 30)) as s:   # SOD-08: whoever captured the self-billing document does not approve it
+        payables.approve(s, s.get(Invoice, ers_id))
+    with sc.act("ap.clerk", _june(30, 18, 40)) as s:
         invoice = s.get(Invoice, ers_id)
-        payables.approve(s, invoice)
         payables.post(s, invoice, payables.posting_key(s, invoice))
     sc.note(f"C1 {c1_pr} → {c1_po} → {c1_gr} 20,000 into consignment stock; withdrawals 6,000 + 5,500 + 4,000 (411K) → "
             f"{ers_no} self-billing for 15,500 matched ERS and posted; 4,500 remain supplier-owned")

@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
@@ -17,6 +17,38 @@ from app.pic.models import (CompanyCode, CreditNote, GoodsReceipt, GrLine, Invoi
 from app.pic.platform import audit, clock, finance_defaults, outbox, rules
 from app.pic.platform.errors import Problem
 from app.pic.services.common import principal
+
+# ---------------------------------------------------------------- encrypted supplier fields
+def supplier_gstin(session: Session, supplier: Supplier) -> str:
+    """The supplier's GSTIN, decrypted. A key that cannot open it (PIC_FIELD_KEY differs from the one the data was written under) is a clear 503
+    problem, audited once per supplier, never a bare 500 and never the ciphertext."""
+    if not supplier.gstin_enc:
+        return ""
+    from app.pic.platform import crypto
+    try:
+        return crypto.decrypt(supplier.tenant_id, "gstin", supplier.gstin_enc)
+    except Exception:  # noqa: BLE001 - InvalidToken or an unknown key id: the stored value cannot be opened with this configuration
+        _audit_key_mismatch(session, supplier)
+        raise Problem(503, "FIELD_KEY_MISMATCH", f"The encrypted GSTIN of supplier {supplier.code} cannot be read with the configured PIC_FIELD_KEY: it differs from "
+                      "the key the data was encrypted with. Restore the original key (or re-encrypt with tools/reencrypt.py); no data was changed", rule_ref="SEC-FIELD")
+
+
+def _audit_key_mismatch(session: Session, supplier: Supplier) -> None:
+    from app.pic.db import tenant_tx
+    from app.pic.models import AuditEvent
+    p = session.info.get("principal")
+    if p is None:
+        return
+    try:
+        with tenant_tx(p.tenant_id, p.user_id, p) as s:
+            s.execute(text("SET LOCAL lock_timeout = '1500ms'"))
+            if s.execute(select(AuditEvent.seq).where(AuditEvent.object_type == "SUPPLIER", AuditEvent.object_id == supplier.id,
+                                                      AuditEvent.action == "FIELD_KEY_MISMATCH").limit(1)).first() is None:
+                audit.record(s, "SUPPLIER", supplier.id, "FIELD_KEY_MISMATCH", object_ref=supplier.code, after={"field": "gstin"},
+                             reason="encrypted field cannot be read with the configured PIC_FIELD_KEY")
+    except Exception:  # noqa: BLE001
+        pass
+
 
 # ---------------------------------------------------------------- duplicate variants (OCR / formatting)
 _OCR = str.maketrans({"O": "0", "I": "1", "L": "1"})
@@ -86,8 +118,45 @@ def due_date(session: Session, invoice: Invoice, terms_days: int) -> tuple[date,
     supplier = session.get(Supplier, invoice.supplier_id)
     if supplier is None or not is_msme(session, supplier):
         return contractual, False, accepted
-    cap = accepted + timedelta(days=int(rule_body(session, "MSME", MSME_DEFAULT).get("maxDays", 45)))
+    body = rule_body(session, "MSME", MSME_DEFAULT)
+    # s.15(1): within the agreed period, at most 45 days from acceptance; without a written agreement within 15 days of acceptance.
+    days = int(body.get("maxDays", 45)) if supplier.msme_written_agreement is not False else int(body.get("noAgreementDays", 15))
+    cap = accepted + timedelta(days=days)
     return (cap, True, accepted) if cap < contractual else (contractual, False, accepted)
+
+
+def accrue_msme_interest(session: Session, payment, invoice: Invoice, supplier: Supplier, interest_minor: Optional[int], paid_on: date):
+    """Record the interest owed on a late payment to an MSME supplier (MSMED Act s.16) when the tenant publishes the bank rate: one MsmeInterest
+    row per payment, an audit event and msme.interest.accrued. None without a rate or when the payment is not late."""
+    from app.pic.models import MsmeInterest
+    if not interest_minor or interest_minor <= 0 or invoice.due_date is None or paid_on <= invoice.due_date:
+        return None
+    body = rule_body(session, "MSME", MSME_DEFAULT)
+    rate = Decimal(str(body["bankRatePct"])) * Decimal(str(body.get("interestMultiple", 3)))
+    row = MsmeInterest(tenant_id=invoice.tenant_id, invoice_id=invoice.id, payment_id=payment.id, supplier_id=supplier.id, company_code=invoice.company_code,
+                       due_date=invoice.due_date, paid_on=paid_on, days_late=(paid_on - invoice.due_date).days, principal_minor=payment.amount_minor,
+                       rate_pct=rate, interest_minor=interest_minor, status="ACCRUED", created_by=principal(session).user_id)
+    session.add(row)
+    session.flush()
+    audit.record(session, "INVOICE", invoice.id, "MSME_INTEREST_ACCRUED", object_ref=invoice.number,
+                 after={"payment": payment.number, "dueDate": invoice.due_date.isoformat(), "paidOn": paid_on.isoformat(), "daysLate": row.days_late,
+                        "interestMinor": interest_minor, "ratePct": str(rate)}, reason="MSMED Act s.16: interest on delayed payment")
+    outbox.emit(session, "msme.interest.accrued", "INVOICE", invoice.id, invoice.number,
+                {"supplier": supplier.code, "payment": payment.number, "interestMinor": interest_minor, "daysLate": row.days_late})
+    return row
+
+
+def msme_interest_register(session: Session, supplier: Optional[str] = None, company_codes: Optional[list[str]] = None) -> dict:
+    from app.pic.models import MsmeInterest
+    query = select(MsmeInterest, Supplier, Invoice).join(Supplier, Supplier.id == MsmeInterest.supplier_id).join(Invoice, Invoice.id == MsmeInterest.invoice_id)
+    if supplier:
+        query = query.where(Supplier.code == supplier)
+    if company_codes is not None:
+        query = query.where(MsmeInterest.company_code.in_(company_codes))
+    items = [{"id": str(r.id), "supplier": s.code, "invoice": i.number, "dueDate": r.due_date.isoformat(), "paidOn": r.paid_on.isoformat(), "daysLate": r.days_late,
+              "principalMinor": r.principal_minor, "ratePct": str(r.rate_pct), "interestMinor": r.interest_minor, "status": r.status}
+             for r, s, i in session.execute(query.order_by(MsmeInterest.paid_on.desc()).limit(500)).all()]
+    return {"items": items, "totalMinor": sum(x["interestMinor"] for x in items if x["status"] == "ACCRUED")}
 
 
 def msme_interest_minor(session: Session, amount_minor: int, due: date, paid_on: date) -> Optional[int]:
@@ -170,10 +239,58 @@ def compute_tds(session: Session, invoice: Invoice, supplier: Supplier) -> dict:
     if not section:
         return {}
     spec, rate, no_pan, _ = _section_spec(session, supplier, section, invoice.company_code)
-    base = invoice.net_minor - _credit_net(session, invoice)
+    base = max(invoice.net_minor - _credit_net(session, invoice) - advance_taxed_minor(session, invoice), 0)
     prior_total, prior_taxed = _prior(session, supplier, section, invoice.fiscal_year, exclude_invoice=invoice.id)
     return {"section": section, "label": spec.get("label"), "ratePct": rate, "noPan": no_pan,
             **_determine(spec, base, prior_total, prior_taxed, rate)}
+
+
+def tcs_spec(session: Session, company_code: str) -> dict:
+    return rule_body(session, "TDS", TDS_DEFAULT, company_code=company_code).get("tcs") or {}
+
+
+def compute_tcs(session: Session, invoice: Invoice, supplier: Supplier) -> dict:
+    """TCS the supplier collects on this invoice (rule TDS.tcs, off by default): ``ratePct`` of the gross value, only on the part of the supplier's
+    cumulative gross in the fiscal year that is above ``annualThresholdMinor`` when one is set. {} when the rule is off or nothing is taxable."""
+    spec = tcs_spec(session, invoice.company_code)
+    if not spec.get("enabled"):
+        return {}
+    rate = Decimal(str(spec.get("ratePct", 1)))
+    threshold = spec.get("annualThresholdMinor")
+    gross = int(invoice.gross_minor)
+    if threshold is None:
+        taxable = gross
+    else:
+        prior = int(session.execute(select(func.coalesce(func.sum(Invoice.gross_minor), 0)).where(
+            Invoice.supplier_id == supplier.id, Invoice.fiscal_year == invoice.fiscal_year, Invoice.id != invoice.id, Invoice.status.in_(("POSTED", "PAID")),
+            func.coalesce(Invoice.match_type, "").notin_(("RETENTION", "ERS")))).scalar() or 0)
+        taxable = max(prior + gross - int(threshold), 0) - max(prior - int(threshold), 0)
+    tcs = int((Decimal(taxable) * rate / 100).quantize(Decimal(1), ROUND_HALF_UP))
+    if tcs <= 0:
+        return {}
+    return {"section": spec.get("section") or "206C(1H)", "ratePct": rate, "baseMinor": taxable, "tcsMinor": tcs}
+
+
+def tcs_payable(session: Session, invoice: Invoice) -> bool:
+    """Whether the TCS of the invoice is paid to the supplier with it (rule TDS.tcs.addToPayable); otherwise it is only carried to the ERP posting."""
+    return bool(invoice.tcs_minor) and bool(tcs_spec(session, invoice.company_code).get("addToPayable"))
+
+
+def advance_taxed_minor(session: Session, invoice: Invoice) -> int:
+    """Base of this running bill on which TDS was already deducted when the advance was paid: the advance recovered from the bill (net of GST) times
+    the share of the advance document that was taxed. The bill's TDS is on its value less that amount (D30: the recovered advance was taxed twice)."""
+    from app.pic.models import AdvancePayment, AdvanceRecovery
+    total = Decimal(0)
+    for recovery, advance, document in session.execute(
+            select(AdvanceRecovery, AdvancePayment, Invoice).join(AdvancePayment, AdvancePayment.id == AdvanceRecovery.advance_id)
+            .join(Invoice, Invoice.id == AdvancePayment.invoice_id)
+            .where(AdvanceRecovery.invoice_id == invoice.id, AdvanceRecovery.status.in_(("PLANNED", "APPLIED")))).all():
+        if not advance.gross_minor or not advance.net_minor:
+            continue
+        net_share = Decimal(recovery.amount_minor) * Decimal(advance.net_minor) / Decimal(advance.gross_minor)
+        taxed_share = min(Decimal(document.tds_base_minor or 0) / Decimal(advance.net_minor), Decimal(1))
+        total += net_share * taxed_share
+    return int(total.quantize(Decimal(1), ROUND_HALF_UP))
 
 
 def compute_note_tds(session: Session, invoice: Invoice, note) -> dict:
@@ -201,17 +318,61 @@ def valid_certificate(session: Session, supplier_id, section: Optional[str], on:
     return None
 
 
-def at_payment_detail(session: Session, invoice: Invoice, on: Optional[date] = None) -> dict:
-    """TDS to keep back at payment time: the base fixed at posting, reduced for credit notes that arrived after the posting, at the rate of a
-    valid s.197 certificate on the payment date (else the section rate fixed at posting). Migrated withholding without a section is kept as it is."""
+def certificate_consumed(session: Session, cert) -> int:
+    """Base already taxed at the certificate's rate on live payments (counts against its amount cap)."""
+    from app.pic.models import Payment
+    return int(session.execute(select(func.coalesce(func.sum(Payment.tds_cert_base_minor), 0)).where(
+        Payment.supplier_id == cert.supplier_id, Payment.tds_certificate == cert.certificate_no, Payment.status != "CANCELLED")).scalar() or 0)
+
+
+def payment_tds(session: Session, invoice: Invoice, notes: Optional[list] = None, on: Optional[date] = None, used: Optional[dict] = None,
+                include_invoice: bool = True) -> dict:
+    """TDS to keep back from one payment: the invoice base fixed at posting (reduced for credit notes that arrived after posting) plus the TDS base of
+    the debit notes netted into it, at the rate of a valid s.197 certificate on the payment date. A certificate with an amount cap (``max_base_minor``)
+    applies its rate only to the base left under the cap (consumed by earlier live payments, plus ``used`` for the payments of the same proposal);
+    the rest is taxed at the section rate fixed at posting. Migrated withholding without a section is kept as it is.
+    Returns tdsMinor, baseMinor (invoice + notes), certBaseMinor (taxed at the certificate rate), ratePct (the certificate rate, the section rate, or
+    the blended rate when the cap splits the payment), certificate (number, only when it was used)."""
+    notes = notes or []
     if not invoice.tds_section or invoice.tds_rate is None:
-        return {"tdsMinor": max(int(invoice.withholding_tax_minor or 0), 0), "ratePct": None, "certificate": None, "baseMinor": 0}
-    late = _credit_net(session, invoice, since=invoice.posted_at) if invoice.posted_at else 0
-    taxable = max(int(invoice.tds_base_minor or 0) - late, 0)
+        legacy = max(int(invoice.withholding_tax_minor or 0), 0) if include_invoice else 0
+        return {"tdsMinor": legacy, "ratePct": None, "certificate": None, "baseMinor": 0, "certBaseMinor": 0}
+    parts = []
+    if include_invoice:
+        late = _credit_net(session, invoice, since=invoice.posted_at) if invoice.posted_at else 0
+        parts.append(max(int(invoice.tds_base_minor or 0) - late, 0))
+    parts += [int(n.tds_base_minor or 0) for n in notes]
     cert = valid_certificate(session, invoice.supplier_id, invoice.tds_section, on or clock.today())
-    rate = Decimal(cert.rate_pct) if cert is not None else Decimal(invoice.tds_rate)
-    return {"tdsMinor": int((Decimal(taxable) * rate / 100).quantize(Decimal(1), ROUND_HALF_UP)), "ratePct": rate,
-            "certificate": cert.certificate_no if cert is not None else None, "baseMinor": taxable}
+    normal = Decimal(invoice.tds_rate)
+    remaining = None
+    if cert is not None and cert.max_base_minor is not None:
+        remaining = max(int(cert.max_base_minor) - certificate_consumed(session, cert) - int((used or {}).get(cert.certificate_no, 0)), 0)
+    money = lambda base, rate: int((Decimal(base) * Decimal(rate) / 100).quantize(Decimal(1), ROUND_HALF_UP))  # noqa: E731
+    tds, cert_base = 0, 0
+    for base in parts:
+        if cert is None:
+            taken = 0
+        elif remaining is None:
+            taken = base
+        else:
+            taken = min(base, remaining)
+            remaining -= taken
+        tds += (money(taken, cert.rate_pct) if taken else 0) + money(base - taken, normal)
+        cert_base += taken
+    total = sum(parts)
+    if cert is not None and cert_base and cert_base == total:
+        rate = Decimal(cert.rate_pct)
+    elif cert_base == 0 or total == 0:
+        rate = normal
+    else:
+        rate = (Decimal(tds) * 100 / Decimal(total)).quantize(Decimal("0.001"))
+    return {"tdsMinor": tds, "ratePct": rate, "certificate": cert.certificate_no if cert is not None and cert_base else None, "baseMinor": total,
+            "certBaseMinor": cert_base}
+
+
+def at_payment_detail(session: Session, invoice: Invoice, on: Optional[date] = None) -> dict:
+    """TDS of the invoice alone at payment time (see ``payment_tds``)."""
+    return payment_tds(session, invoice, [], on)
 
 
 def at_payment(session: Session, invoice: Invoice, on: Optional[date] = None) -> int:
@@ -226,7 +387,7 @@ def note_tds_at_payment(note, rate: Optional[Decimal]) -> int:
 
 
 def add_certificate(session: Session, supplier: Supplier, *, certificate_no: str, rate_pct: Decimal, valid_from: date, valid_to: date,
-                    section: Optional[str], note: Optional[str]):
+                    section: Optional[str], note: Optional[str], max_base_minor: Optional[int] = None):
     from app.pic.models import TdsCertificate
     if "supplier:manage" not in principal(session).scopes and "payment:run" not in principal(session).scopes:
         raise Problem(403, "FORBIDDEN", "Lower-deduction certificates are recorded by supplier management or finance")
@@ -235,6 +396,8 @@ def add_certificate(session: Session, supplier: Supplier, *, certificate_no: str
         raise Problem(422, "VALIDATION_FAILED", "The certificate number is 6 to 40 letters, digits, / or -")
     if valid_to < valid_from:
         raise Problem(422, "VALIDATION_FAILED", "The certificate is valid to a date before it starts")
+    if max_base_minor is not None and max_base_minor <= 0:
+        raise Problem(422, "VALIDATION_FAILED", "The amount cap of the certificate must be positive")
     if section:
         sections = rule_body(session, "TDS", TDS_DEFAULT).get("sections") or {}
         if section not in sections:
@@ -243,11 +406,13 @@ def add_certificate(session: Session, supplier: Supplier, *, certificate_no: str
         raise Problem(409, "DUPLICATE_CERTIFICATE", f"Certificate {certificate_no} is already recorded for {supplier.code}")
     p = principal(session)
     cert = TdsCertificate(tenant_id=current_tenant(session), supplier_id=supplier.id, certificate_no=certificate_no, section=section or None,
-                          rate_pct=rate_pct, valid_from=valid_from, valid_to=valid_to, status="ACTIVE", note=note, created_by=p.user_id)
+                          rate_pct=rate_pct, valid_from=valid_from, valid_to=valid_to, status="ACTIVE", note=note, max_base_minor=max_base_minor,
+                          created_by=p.user_id)
     session.add(cert)
     session.flush()
     audit.record(session, "SUPPLIER", supplier.id, "TDS_CERTIFICATE_ADDED", object_ref=supplier.code, reason=note,
-                 after={"certificate": certificate_no, "ratePct": str(rate_pct), "section": section, "validFrom": valid_from.isoformat(), "validTo": valid_to.isoformat()})
+                 after={"certificate": certificate_no, "ratePct": str(rate_pct), "section": section, "validFrom": valid_from.isoformat(), "validTo": valid_to.isoformat(),
+                        "maxBaseMinor": max_base_minor})
     return cert
 
 
@@ -271,14 +436,17 @@ def certificates_of(session: Session, supplier: Supplier) -> list[dict]:
     today = clock.today()
     return [{"certificateNo": c.certificate_no, "section": c.section, "ratePct": str(c.rate_pct), "validFrom": c.valid_from.isoformat(),
              "validTo": c.valid_to.isoformat(), "status": c.status, "validNow": c.status == "ACTIVE" and c.valid_from <= today <= c.valid_to,
-             "note": c.note, "revokedReason": c.revoked_reason}
+             "note": c.note, "revokedReason": c.revoked_reason, "maxBaseMinor": c.max_base_minor,
+             "consumedBaseMinor": certificate_consumed(session, c),
+             "remainingBaseMinor": None if c.max_base_minor is None else max(c.max_base_minor - certificate_consumed(session, c), 0)}
             for c in session.execute(select(TdsCertificate).where(TdsCertificate.supplier_id == supplier.id)
                                      .order_by(TdsCertificate.valid_from.desc(), TdsCertificate.certificate_no)).scalars()]
 
 
 # ---------------------------------------------------------------- foreign-currency invoices
 def company_currency(session: Session, company_code: str) -> str:
-    row = session.execute(select(CompanyCode.currency).where(CompanyCode.code == company_code)).scalar()
+    from app.pic.platform import batch
+    row = batch.memo(session, ("company-currency", company_code), lambda: session.execute(select(CompanyCode.currency).where(CompanyCode.code == company_code)).scalar())
     return (row or "INR").upper()
 
 
@@ -296,6 +464,26 @@ def fx_for(session: Session, invoice: Invoice) -> Optional[tuple[Decimal, date, 
                       "(ADM reference data, fx_rate) before posting", rule_ref="P14")
     rate, rate_date = found
     return rate, rate_date, int((Decimal(invoice.gross_minor) * rate).quantize(Decimal(1), ROUND_HALF_UP))
+
+
+def fx_at_payment(session: Session, invoice: Invoice, amount_minor: int, paid_on: date) -> Optional[dict]:
+    """Realised exchange difference of a foreign-currency payment: the amount in the company-code currency at the rate on the payment date against
+    the rate fixed on the invoice (a payable that costs more home currency than booked is a loss). None for a home-currency invoice; raises
+    409 FX_RATE_MISSING when the tenant has no rate for the payment date."""
+    home = company_currency(session, invoice.company_code)
+    currency = (invoice.currency or "INR").upper()
+    if currency == home or invoice.fx_rate is None:
+        return None
+    from app.pic.services import spend_cube
+    found = spend_cube._rate(session, currency, home, paid_on)
+    if found is None:
+        raise Problem(409, "FX_RATE_MISSING", f"No {currency}->{home} exchange rate is valid on {paid_on.isoformat()}: load it before paying", rule_ref="P14")
+    rate, rate_date = found
+    booked = Decimal(amount_minor) * Decimal(invoice.fx_rate)
+    paid = Decimal(amount_minor) * Decimal(rate)
+    return {"fxRate": rate, "rateDate": rate_date, "amountGroupMinor": int(paid.quantize(Decimal(1), ROUND_HALF_UP)),
+            "bookedGroupMinor": int(booked.quantize(Decimal(1), ROUND_HALF_UP)),
+            "gainLossMinor": int((booked - paid).quantize(Decimal(1), ROUND_HALF_UP))}
 
 
 def group_minor(invoice: Invoice, amount_minor: int) -> int:
@@ -318,8 +506,27 @@ def is_closed(session: Session, company_code: str, on: date) -> bool:
                                                           PostingPeriod.status == "CLOSED")).first() is not None
 
 
+def _record_refusal(session: Session, company_code: str, on: date, what: str) -> None:
+    """The refusal rolls the request back, so the evidence (who tried to post what into which closed period) is written in its own transaction,
+    like an ABAC denial or a SoD violation."""
+    from app.pic.db import tenant_tx
+    from sqlalchemy import text
+    p = session.info.get("principal")
+    row = session.execute(select(PostingPeriod).where(PostingPeriod.company_code == company_code, PostingPeriod.period == period_of(on))).scalar_one_or_none()
+    if p is None or row is None:
+        return
+    try:
+        with tenant_tx(p.tenant_id, p.user_id, p) as s:
+            s.execute(text("SET LOCAL lock_timeout = '1500ms'"))
+            audit.record(s, "POSTING_PERIOD", row.id, "POSTING_REFUSED", object_ref=f"{company_code}/{period_of(on)}",
+                         after={"what": what, "documentDate": on.isoformat(), "attemptedBy": p.name}, reason="posting period is closed (cut-off)")
+    except Exception:  # noqa: BLE001 - the evidence must never turn the refusal into a 500
+        pass
+
+
 def assert_open(session: Session, company_code: str, on: date, what: str) -> None:
     if is_closed(session, company_code, on):
+        _record_refusal(session, company_code, on, what)
         raise Problem(409, "PERIOD_CLOSED", f"Posting period {period_of(on)} of company code {company_code} is closed: {what} cannot be "
                       "posted or dated into it. Reopen rule: finance (scope period:close) reopens the period with an audited reason of at least 10 "
                       "characters and closes it again afterwards; otherwise date the document in the open period", rule_ref="CUT-OFF",
@@ -346,6 +553,8 @@ def cutoff_snapshot(session: Session, company_code: str, period: str) -> dict:
 
 def close_period(session: Session, company_code: str, period: str, reason: Optional[str] = None) -> PostingPeriod:
     _require_finance(session)
+    from app.pic.platform import abac
+    abac.guard(session, "PERIOD_CLOSE", None, company_code=company_code)
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", period or ""):
         raise Problem(422, "VALIDATION_FAILED", "period must be YYYY-MM")
     if _period_end(period) >= clock.today():
@@ -401,6 +610,8 @@ def grir_snapshots(session: Session, period: Optional[str] = None, company_code:
 
 def reopen_period(session: Session, company_code: str, period: str, reason: str) -> PostingPeriod:
     _require_finance(session)
+    from app.pic.platform import abac
+    abac.guard(session, "PERIOD_CLOSE", None, company_code=company_code)
     if len((reason or "").strip()) < 10:
         raise Problem(422, "REASON_REQUIRED", "Give the reason for reopening the period (at least 10 characters)")
     row = session.execute(select(PostingPeriod).where(PostingPeriod.company_code == company_code, PostingPeriod.period == period)
@@ -420,21 +631,34 @@ def periods(session: Session, company_code: Optional[str] = None) -> list[dict]:
     query = select(PostingPeriod).order_by(PostingPeriod.company_code, PostingPeriod.period.desc())
     if company_code:
         query = query.where(PostingPeriod.company_code == company_code)
+    from app.pic.models import AuditEvent
+    rows = session.execute(query).scalars().all()
+    refused: dict = {}  # POSTING_REFUSED events per period (visible to finance without the audit scope): count, last actor, last time
+    if rows:
+        for event in session.execute(select(AuditEvent).where(AuditEvent.object_type == "POSTING_PERIOD", AuditEvent.action == "POSTING_REFUSED",
+                                                              AuditEvent.object_id.in_([r.id for r in rows])).order_by(AuditEvent.seq)).scalars():
+            entry = refused.setdefault(event.object_id, {"count": 0, "lastActor": None, "lastAt": None})
+            entry["count"] += 1
+            entry["lastActor"], entry["lastAt"] = (event.after or {}).get("attemptedBy") or event.actor, event.ts.isoformat()
     return [{"id": str(r.id), "companyCode": r.company_code, "period": r.period, "status": r.status,
              "closedAt": r.closed_at.isoformat() if r.closed_at else None, "reopenedAt": r.reopened_at.isoformat() if r.reopened_at else None,
-             "reason": r.reason, "cutoff": r.cutoff} for r in session.execute(query).scalars()]
+             "reason": r.reason, "cutoff": r.cutoff,
+             "refusedAttempts": refused.get(r.id, {"count": 0, "lastActor": None, "lastAt": None})} for r in rows]
 
 
 # ---------------------------------------------------------------- TDS register (Form 26Q source)
-def tds_register(session: Session, fiscal_year: Optional[str] = None, supplier: Optional[str] = None) -> dict:
+def tds_register(session: Session, fiscal_year: Optional[str] = None, supplier: Optional[str] = None, company_codes: Optional[list[str]] = None) -> dict:
     """TDS withheld on paid invoices by supplier and section: the source of the quarterly TDS return."""
     from app.pic.models import Payment
     query = (select(Payment, Invoice, Supplier).join(Invoice, Invoice.id == Payment.invoice_id).join(Supplier, Supplier.id == Payment.supplier_id)
              .where(Payment.status == "COMPLETED", Payment.tds_minor > 0).order_by(Payment.value_date, Payment.number))
     if fiscal_year:
-        query = query.where(Invoice.fiscal_year == fiscal_year)
+        first, last = fiscal_year_range(fiscal_year)
+        query = query.where(Payment.value_date >= first, Payment.value_date <= last)  # deducted in the year of the payment (D25)
     if supplier:
         query = query.where(Supplier.code == supplier)
+    if company_codes is not None:
+        query = query.where(Invoice.company_code.in_(company_codes))
     rows, totals = [], {}
     for payment, invoice, sup in session.execute(query).all():
         rows.append({"payment": payment.number, "invoice": invoice.number, "supplier": sup.code, "section": invoice.tds_section,
@@ -461,13 +685,21 @@ def quarter_range(fiscal_year: str, quarter: str) -> tuple[date, date]:
     return date(year, first, 1), following - timedelta(days=1)
 
 
+def fiscal_year_range(fiscal_year: str) -> tuple[date, date]:
+    """First and last day of an Indian fiscal year written YYYY-YY (2026-27 is 1 April 2026 to 31 March 2027)."""
+    if not re.fullmatch(r"\d{4}-\d{2}", fiscal_year or ""):
+        raise Problem(422, "VALIDATION_FAILED", "Give fiscal_year as YYYY-YY")
+    year = int(fiscal_year[:4])
+    return date(year, 4, 1), date(year + 1, 3, 31)
+
+
 def _safe(cell) -> str:
     """CSV cells that start with a formula character are quoted as text (spreadsheet formula injection)."""
     text = "" if cell is None else str(cell)
     return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") and not re.fullmatch(r"-?\d+(\.\d+)?", text) else text
 
 
-def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26Q") -> dict:
+def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26Q", company_codes: Optional[list[str]] = None) -> dict:
     """Deducted TDS of a quarter as CSV. 26Q: one line per payment with TDS or a certificate (deductee, section, amount, rate, tax, dates, s.197
     certificate). 16A: one line per deductee and section with the quarter's totals (the figures of the TDS certificate). The PAN is the one
     inside the supplier's GSTIN; a supplier without GSTIN is exported as PANNOTAVBL."""
@@ -482,11 +714,13 @@ def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26
     first, last = quarter_range(fiscal_year, quarter)
     rows = session.execute(
         select(Payment, Invoice, Supplier).join(Invoice, Invoice.id == Payment.invoice_id).join(Supplier, Supplier.id == Payment.supplier_id)
-        .where(Payment.status == "COMPLETED", Payment.value_date >= first, Payment.value_date <= last, Invoice.fiscal_year == fiscal_year,
-               (Payment.tds_minor > 0) | Payment.tds_certificate.is_not(None)).order_by(Supplier.code, Payment.value_date, Payment.number)).all()
+        .where(Payment.status == "COMPLETED", Payment.value_date >= first, Payment.value_date <= last,  # the quarter of the payment, not of the invoice (D25)
+               (Payment.tds_minor > 0) | Payment.tds_certificate.is_not(None),
+               *([Invoice.company_code.in_(company_codes)] if company_codes is not None else []))
+        .order_by(Supplier.code, Payment.value_date, Payment.number)).all()
     lines = []
     for payment, invoice, supplier in rows:
-        gstin = crypto.decrypt(supplier.tenant_id, "gstin", supplier.gstin_enc) if supplier.gstin_enc else ""
+        gstin = supplier_gstin(session, supplier)
         pan = gstin[2:12] if len(gstin) == 15 else "PANNOTAVBL"
         base = int(payment.tds_base_minor or 0)
         note = session.get(DebitNote, payment.debit_note_id) if payment.debit_note_id else None
@@ -525,3 +759,46 @@ def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26
     audit.record(session, "TDS_EXPORT", uuid.uuid5(uuid.NAMESPACE_URL, f"tds-export:{current_tenant(session)}:{fiscal_year}:{quarter}"), "EXPORTED",
                  object_ref=f"{fiscal_year}/{quarter}/{kind}", after={"rows": len(lines), "totalTdsMinor": sum(l["tds"] for l in lines), "sha256": sha})
     return {"content": content, "sha256": sha, "rows": len(lines), "fileName": f"TDS_{kind}_{fiscal_year}_{quarter}.csv"}
+
+
+# ---------------------------------------------------------------- supplier finance attributes (MSME class, Udyam, TDS section, PAN)
+UDYAM_RE = re.compile(r"^UDYAM-[A-Z]{2}-\d{2}-\d{7}$")
+
+
+def set_supplier_finance(session: Session, supplier: Supplier, *, msme_class: Optional[str], udyam_no: Optional[str], tds_section: Optional[str],
+                         pan: Optional[str], msme_written_agreement: Optional[bool], reason: str) -> dict:
+    """Maintain the finance attributes of a supplier: the MSME class needs the Udyam number (format UDYAM-KA-03-0012345), the TDS section must exist in rule set
+    TDS, a PAN must be well formed and the one inside the supplier's GSTIN (kept as a hash, only the masked value is audited). Returns {"before", "after"}.
+    The caller holds the row lock and has checked If-Match."""
+    from app.pic.platform import crypto
+    from app.pic.services import master_changes
+    if tds_section:
+        sections = rule_body(session, "TDS", TDS_DEFAULT).get("sections") or {}
+        if tds_section not in sections:
+            raise Problem(422, "TDS_SECTION_UNKNOWN", f"TDS section {tds_section} is not defined in rule set TDS ({', '.join(sorted(sections))})")
+    errors = []
+    udyam = (udyam_no or "").strip().upper() or None
+    if udyam and not UDYAM_RE.match(udyam):
+        errors.append("Udyam registration number must look like UDYAM-KA-03-0012345 (state, district, seven digits)")
+    if msme_class and not (udyam or supplier.udyam_no):
+        raise Problem(422, "UDYAM_REQUIRED", "An MSME class needs the Udyam registration number")
+    pan = (pan or "").strip().upper() or None
+    if pan:
+        errors += master_changes.pan_errors(pan)
+        gstin = supplier_gstin(session, supplier)
+        if len(gstin) == 15 and gstin[2:12] != pan:
+            errors.append("the PAN must be the one inside the supplier's GSTIN")
+    if errors:
+        raise Problem(422, "VALIDATION_FAILED", "; ".join(errors), rule_ref="MDM-04", errors=errors)
+    before = {"msmeClass": supplier.msme_class, "udyamNo": supplier.udyam_no, "tdsSection": supplier.tds_section, "panOnFile": supplier.pan_hash is not None,
+              "msmeWrittenAgreement": supplier.msme_written_agreement}
+    supplier.msme_class, supplier.udyam_no, supplier.tds_section = msme_class, udyam or (supplier.udyam_no if msme_class else None), tds_section
+    if msme_written_agreement is not None:
+        supplier.msme_written_agreement = msme_written_agreement
+    if pan:
+        supplier.pan_hash = crypto.blind_index(supplier.tenant_id, pan)
+    session.flush()
+    after = {"msmeClass": supplier.msme_class, "udyamNo": supplier.udyam_no, "tdsSection": supplier.tds_section, "panOnFile": supplier.pan_hash is not None,
+             "msmeWrittenAgreement": supplier.msme_written_agreement, **({"panSet": crypto.mask(pan)} if pan else {})}
+    audit.record(session, "SUPPLIER", supplier.id, "FINANCE_ATTRIBUTES_CHANGED", object_ref=supplier.code, before=before, after=after, reason=reason)
+    return {"before": before, "after": after}

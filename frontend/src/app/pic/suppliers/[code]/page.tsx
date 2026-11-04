@@ -20,7 +20,8 @@ type Twin = { id: string; category: string; capability: Record<string, string> |
 type Scorecard = { id: string; period: string; receipts: number; on_time_in_full: number; qty_received: string; qty_rejected: string; invoices: number;
   invoices_first_pass: number; otif_pct: string | null; ppm: string | null; invoice_accuracy_pct: string | null };
 type Certificate = { id: string; type: string; number: string; issued_on: string; expires_on: string; mandatory_for: string[] | null; verified: boolean; status: string };
-type BankAccount = { id: string; account_masked: string; ifsc: string; holder_name: string; active: boolean; verified_on: string | null; payable_from: string | null };
+type BankAccount = { id: string; account_masked: string; ifsc: string; holder_name: string; active: boolean; verified_on: string | null; payable_from: string | null;
+  country?: string; swift_bic?: string | null; intermediary_bic?: string | null; charge_bearer?: string | null; purpose_code?: string | null };
 type Qualification = { id: string; category: string; status: string; questionnaire: Record<string, unknown> | null; questionnaire_score: string | null;
   audit_score: string | null; sample_approval: string | null; decision: string | null; decision_reason: string | null; created_at: string };
 type Supplier360 = {
@@ -86,7 +87,7 @@ export default function Supplier360Page() {
               const acct = s.bankAccounts.find((b) => b.id === c.bank_account_id);
               return (
                 <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
-                  <span><span className="font-mono">{c.number}</span> · {acct ? `${acct.account_masked} · ${acct.ifsc} · ${acct.holder_name}` : 'new account'} · requested {dateTime(c.created_at)}</span>
+                  <span><span className="font-mono">{c.number}</span> · {acct ? `${acct.account_masked} · ${acct.country && acct.country !== 'IN' ? `${acct.country} ${acct.swift_bic ?? ''}` : acct.ifsc} · ${acct.holder_name}` : 'new account'} · requested {dateTime(c.created_at)}</span>
                   <Button variant="primary" onClick={() => setDialog({ kind: 'callback', id: c.number })}>Verify call-back</Button>
                 </li>
               );
@@ -205,7 +206,11 @@ export default function Supplier360Page() {
               <div>
                 <DataTable<BankAccount> rows={s.bankAccounts} empty="No bank account on file" columns={[
                   { key: 'account_masked', header: 'Account', render: (b) => <span className="font-mono">{b.account_masked}</span> },
-                  { key: 'ifsc', header: 'IFSC', render: (b) => <span className="font-mono">{b.ifsc}</span> },
+                  { key: 'ifsc', header: 'Bank', render: (b) => !b.country || b.country === 'IN' ? <span className="font-mono">{b.ifsc}</span> : (
+                    <span className="text-xs"><span className="font-semibold">{b.country}</span> · SWIFT <span className="font-mono">{b.swift_bic ?? '–'}</span>
+                      {b.intermediary_bic ? <> · via <span className="font-mono">{b.intermediary_bic}</span></> : null} · charges {b.charge_bearer ?? '–'} · purpose {b.purpose_code ?? '–'}
+                      {b.ifsc ? <> · IFSC <span className="font-mono">{b.ifsc}</span></> : null}</span>
+                  ) },
                   { key: 'holder_name', header: 'Holder' },
                   { key: 'active', header: 'Status', render: (b) => <StatusChip status={b.active ? 'ACTIVE' : 'PENDING'} /> },
                   { key: 'verified_on', header: 'Verified', render: (b) => date(b.verified_on) },
@@ -371,24 +376,74 @@ function UnblockDialog({ supplier, onClose }: { supplier: Supplier360; onClose: 
   );
 }
 
+const BIC_RE = /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/;
+const CHARGE_BEARERS = [{ value: '', label: 'Choose who bears the bank charges' }, { value: 'SHAR', label: 'SHAR · shared: each side pays its own bank' },
+  { value: 'DEBT', label: 'DEBT · we pay all charges' }, { value: 'CRED', label: 'CRED · the supplier pays all charges' }];
+
 function BankChangeDialog({ supplier, onClose }: { supplier: Supplier360; onClose: () => void }) {
+  const [country, setCountry] = useState('IN');
   const [account, setAccount] = useState('');
   const [ifsc, setIfsc] = useState('');
   const [holder, setHolder] = useState(supplier.legal_name);
-  const accountOk = /^[0-9]{9,18}$/.test(account);
+  const [swift, setSwift] = useState('');
+  const [intermediary, setIntermediary] = useState('');
+  const [chargeBearer, setChargeBearer] = useState('');
+  const [purpose, setPurpose] = useState('');
+  const countryCode = country.trim().toUpperCase();
+  const domestic = countryCode === 'IN';
+  const countryOk = /^[A-Z]{2}$/.test(countryCode);
+  const accountOk = domestic ? /^[0-9]{9,18}$/.test(account) : /^[0-9A-Za-z]{5,34}$/.test(account);
   const ifscOk = /^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc);
+  const foreignProblems = domestic ? [] : [
+    !BIC_RE.test(swift) && 'SWIFT/BIC: 8 or 11 characters, e.g. DEUTDEFF or CITIUS33XXX',
+    intermediary && !BIC_RE.test(intermediary) && 'Intermediary BIC: 8 or 11 characters',
+    !chargeBearer && 'Choose the charge bearer',
+    !/^[A-Z][0-9]{4}$/.test(purpose) && 'RBI purpose code: a letter and four digits, e.g. P0802',
+    ifsc && !ifscOk && 'IFSC, if given, looks like SBIN0001234',
+  ].filter(Boolean) as string[];
+  const problems = [
+    !countryOk && 'Country is a two-letter ISO code, IN for India',
+    !accountOk && (domestic ? 'An Indian account number is 9 to 18 digits' : 'Account number or IBAN: 5 to 34 letters and digits'),
+    domestic && !ifscOk && 'IFSC looks like SBIN0001234',
+    holder.trim().length < 3 && 'Enter the account holder',
+    ...foreignProblems,
+  ].filter(Boolean) as string[];
   const request = useCommand(() => api.post<{ number: string }>(`/suppliers/${encodeURIComponent(supplier.code)}/bank-changes`, {
-    bank_account: account, ifsc, holder_name: holder.trim() }), {
+    bank_account: account, holder_name: holder.trim(), country: countryCode, ifsc: ifsc || undefined,
+    ...(domestic ? {} : { swift_bic: swift, intermediary_bic: intermediary || undefined, charge_bearer: chargeBearer, purpose_code: purpose }) }), {
     success: (r) => `${r.number} requested – another supplier manager verifies the call-back, then two finance controllers approve`, onSuccess: onClose });
   return (
     <Dialog open title={`Request bank change – ${supplier.code}`} onClose={onClose}>
       <p className="mb-3 text-sm text-slate-600">MDM-04: the new account is used only after an independent call-back, approval by two different finance controllers and the cooling-off period. You cannot verify or approve your own request.</p>
       <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Account number" hint={account && !accountOk ? '9–18 digits' : undefined}>{(id) => <Input id={id} inputMode="numeric" autoComplete="off" value={account} onChange={(e) => setAccount(e.target.value.replace(/\s/g, ''))} />}</Field>
-        <Field label="IFSC" hint={ifsc && !ifscOk ? 'e.g. SBIN0001234' : undefined}>{(id) => <Input id={id} value={ifsc} onChange={(e) => setIfsc(e.target.value.toUpperCase().trim())} maxLength={11} />}</Field>
-        <div className="md:col-span-2"><Field label="Account holder">{(id) => <Input id={id} value={holder} onChange={(e) => setHolder(e.target.value)} />}</Field></div>
+        <Field label="Country of the bank" hint="IN for a domestic account; any other country is a foreign beneficiary paid by SWIFT">
+          {(id, d) => <Input id={id} aria-describedby={d} value={country} maxLength={2} onChange={(e) => setCountry(e.target.value.toUpperCase().trim())} />}
+        </Field>
+        <Field label={domestic ? 'Account number' : 'Account number or IBAN'} hint={account && !accountOk ? (domestic ? '9–18 digits' : '5–34 letters and digits') : undefined}>
+          {(id, d) => <Input id={id} aria-describedby={d} inputMode={domestic ? 'numeric' : 'text'} autoComplete="off" value={account} onChange={(e) => setAccount(e.target.value.replace(/\s/g, ''))} />}
+        </Field>
+        <Field label={domestic ? 'IFSC' : 'IFSC (optional for a foreign account)'} hint={ifsc && !ifscOk ? 'e.g. SBIN0001234' : undefined}>
+          {(id, d) => <Input id={id} aria-describedby={d} value={ifsc} onChange={(e) => setIfsc(e.target.value.toUpperCase().trim())} maxLength={11} />}
+        </Field>
+        <Field label="Account holder">{(id) => <Input id={id} value={holder} onChange={(e) => setHolder(e.target.value)} />}</Field>
+        {!domestic && (
+          <>
+            <Field label="SWIFT/BIC of the beneficiary bank" hint={swift && !BIC_RE.test(swift) ? '8 or 11 characters' : undefined}>
+              {(id, d) => <Input id={id} aria-describedby={d} value={swift} maxLength={11} onChange={(e) => setSwift(e.target.value.toUpperCase().trim())} />}
+            </Field>
+            <Field label="Intermediary bank BIC (optional)" hint={intermediary && !BIC_RE.test(intermediary) ? '8 or 11 characters' : undefined}>
+              {(id, d) => <Input id={id} aria-describedby={d} value={intermediary} maxLength={11} onChange={(e) => setIntermediary(e.target.value.toUpperCase().trim())} />}
+            </Field>
+            <Field label="Charge bearer (ISO 20022)">{(id) => <Select id={id} value={chargeBearer} onChange={(e) => setChargeBearer(e.target.value)} options={CHARGE_BEARERS} />}</Field>
+            <Field label="RBI purpose code" hint={purpose && !/^[A-Z][0-9]{4}$/.test(purpose) ? 'a letter and four digits, e.g. P0802' : 'Purpose of the remittance, e.g. P0802'}>
+              {(id, d) => <Input id={id} aria-describedby={d} value={purpose} maxLength={5} onChange={(e) => setPurpose(e.target.value.toUpperCase().trim())} />}
+            </Field>
+          </>
+        )}
       </div>
-      <Actions onClose={onClose}><Button variant="primary" disabled={!accountOk || !ifscOk || holder.trim().length < 3} busy={request.isPending} onClick={() => request.mutate()}>Request change</Button></Actions>
+      {account && problems.length > 0 && <p className="mt-2 text-xs text-amber-700" role="status">{problems[0]}</p>}
+      <div className="mt-3"><ProblemBox error={request.error} /></div>
+      <Actions onClose={onClose}><Button variant="primary" disabled={problems.length > 0} busy={request.isPending} onClick={() => request.mutate()}>Request change</Button></Actions>
     </Dialog>
   );
 }

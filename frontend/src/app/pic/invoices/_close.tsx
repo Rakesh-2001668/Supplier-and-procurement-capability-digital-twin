@@ -12,11 +12,11 @@ type Cutoff = { periodEnd: string; unpostedInvoices: number; unpostedGrossMinor:
 type Period = { id: string; companyCode: string; period: string; status: 'OPEN' | 'CLOSED'; closedAt: string | null; reopenedAt: string | null; reason: string | null;
   cutoff: Cutoff | Record<string, never> };
 
-/** The last twelve calendar months, most recent first, as YYYY-MM. */
+/** The last twelve completed calendar months, most recent first, as YYYY-MM (the current month cannot be closed before it ends). */
 function recentPeriods(): string[] {
   const now = new Date();
   return Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d = new Date(now.getFullYear(), now.getMonth() - i - 1, 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   });
 }
@@ -26,8 +26,14 @@ export function PostingPeriodsCard() {
   const user = useSessionUser();
   const canClose = hasRole(user, 'FINANCE_CONTROLLER');
   const periods = useApi<{ items: Period[] }>('/finance/periods');
+  // Refused attempts to post into a closed period are audited (POSTING_REFUSED); the audit explorer needs the audit scope, so only those users see the evidence.
+  const me = useApi<{ scopes: string[] }>('/me');
+  const canAudit = !!me.data?.scopes.includes('admin:audit');
+  const refusals = useApi<{ items: { objectRef: string; actor: string; ts: string; reason: string | null }[] }>(
+    canAudit ? '/audit?object_type=POSTING_PERIOD&action=POSTING_REFUSED&limit=500' : null);
+  const refused = (p: Period) => (refusals.data?.items ?? []).filter((e) => e.objectRef === `${p.companyCode}/${p.period}`);
   const [companyCode, setCompanyCode] = useState('1000');
-  const [period, setPeriod] = useState(recentPeriods()[1]);
+  const [period, setPeriod] = useState(recentPeriods()[0]);
   const [reason, setReason] = useState('');
   const [reopen, setReopen] = useState<Period | null>(null);
   const [cutoff, setCutoff] = useState<Cutoff | null>(null);
@@ -64,15 +70,21 @@ export function PostingPeriodsCard() {
               <p>GR/IR accrual {inr(cutoff.grirAccrualMinor)}</p>
             </div>
           )}
+          {!canAudit && <p className="text-xs text-slate-500">An attempt to post or date a document into a closed period is refused and audited with who tried what; the tenant administrator sees these in the audit explorer (action POSTING_REFUSED).</p>}
           {!periods.data?.items.length ? <Empty title="No period has been closed" hint="Every period is open." /> : (
             <DataTable<Period> rows={periods.data.items} columns={[
               { key: 'companyCode', header: 'Company' },
               { key: 'period', header: 'Period', render: (p) => <span className="font-mono">{p.period}</span> },
               { key: 'status', header: 'Status', render: (p) => <StatusChip status={p.status} /> },
               { key: 'closedAt', header: 'Closed', render: (p) => (p.closedAt ? dateTime(p.closedAt) : '–') },
+              { key: 'reopenedAt', header: 'Reopened', render: (p) => (p.reopenedAt ? dateTime(p.reopenedAt) : '–') },
               { key: 'cutoff', header: 'In flight at close', render: (p) => ('unpostedInvoices' in p.cutoff
                 ? `${p.cutoff.unpostedInvoices} invoice(s) · GR/IR ${inr(p.cutoff.grirAccrualMinor)}` : '–') },
-              { key: 'reason', header: 'Reason', render: (p) => p.reason ?? '–' },
+              { key: 'reason', header: 'Reason', className: 'min-w-[200px]', render: (p) => p.reason ?? '–' },
+              ...(canAudit ? [{ key: 'refused', header: 'Refused postings', render: (p: Period) => {
+                const hits = refused(p);
+                return hits.length ? <span className="text-amber-800" title={hits.map((h) => `${h.actor} ${dateTime(h.ts)}`).join('; ')}>{hits.length} · last {dateTime(hits[0].ts)} by {hits[0].actor}</span> : '0';
+              } }] : []),
               { key: 'action', header: '', render: (p) => canClose && p.status === 'CLOSED' ? <Button onClick={() => setReopen(p)}>Reopen</Button> : null },
             ]} />
           )}

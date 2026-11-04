@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:msme.interest.accrued",
+  "title": "msme.interest.accrued",
+  "description": "Payload (outbox_event.payload) of msme.interest.accrued on INVOICE. Produced by services/finance_controls.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "payment": {},
+    "interestMinor": {},
+    "daysLate": {}
+  },
+  "required": [
+    "supplier",
+    "payment",
+    "interestMinor",
+    "daysLate"
+  ],
+  "additionalProperties": true
+}

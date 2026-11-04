@@ -764,7 +764,7 @@ def test_payment_amount_keeps_back_the_withholding_tax():
     from app.pic.services import payables
     # the payment run takes the tax from finance_controls.at_payment, which keeps the withholding migrated from the ERP (no TDS section) as it is
     from app.pic.services import finance_controls
-    assert "finance_controls.at_payment_detail(session, invoice, run_date)" in inspect.getsource(payables)
+    assert "finance_controls.payment_tds(session, invoice, debit_list, run_date" in inspect.getsource(payables)
     assert finance_controls.at_payment(None, type("Migrated", (), {"tds_section": None, "tds_rate": None, "withholding_tax_minor": 2000})) == 2000
 
 

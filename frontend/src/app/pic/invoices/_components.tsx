@@ -43,7 +43,7 @@ export type PoLine = { id: string; line_no: number; description: string; qty: st
   received_qty: string; accepted_qty: string; rejected_qty: string; invoiced_qty: string; invoiced_minor: number; ses_approved_minor: number;
   gr_required: boolean; ses_required: boolean; quality_managed: boolean };
 export type PoDetail = { id: string; number: string; status: string; version: number; supplier: { code: string; name: string };
-  total_minor: number; payment_terms: string; lines: PoLine[] };
+  total_minor: number; payment_terms: string; company_code?: string; currency?: string; lines: PoLine[] };
 export type PoRow = { id: string; number: string; supplier_code: string; status: string; total_minor: number; created_at: string };
 
 export type InvoiceRow = { id: string; number: string; supplier_invoice_no: string; supplier_code: string; company_code: string; invoice_date: string;
@@ -52,7 +52,19 @@ export type InvoiceRow = { id: string; number: string; supplier_invoice_no: stri
   payment_status: string | null; open_exceptions: number };
 
 // ---------------------------------------------------------------- capture / submit invoice (INV-01, SLM-05)
-type DraftLine = { include: boolean; line: PoLine; qty: string; unit_price: string; gst_rate: string; hsn: string };
+type DraftLine = { include: boolean; line: PoLine; qty: string; unit_price: string; gst_rate: string; hsn: string; cgst: string; sgst: string; igst: string };
+
+/** Longest supplier invoice number the API accepts (invoice.supplier_invoice_no). */
+export const INVOICE_NO_MAX = 40;
+
+/** The line tax as the API computes it: round-half-up of net x rate (net in paise); the epsilon keeps a half-paisa case from rounding down in floating point. */
+function lineTaxMinor(l: Pick<DraftLine, 'qty' | 'unit_price' | 'gst_rate'>): number | null {
+  if (!isNumber(l.qty) || !isNumber(l.unit_price) || !isNumber(l.gst_rate)) return null;
+  const net = Math.round(Number(l.qty) * rupeesToMinor(l.unit_price));
+  return Math.round((net * Number(l.gst_rate)) / 100 + 1e-7);
+}
+const headMinor = (v: string) => (v.trim() === '' ? 0 : rupeesToMinor(v));
+const hasHeads = (l: Pick<DraftLine, 'cgst' | 'sgst' | 'igst'>) => [l.cgst, l.sgst, l.igst].some((v) => v.trim() !== '');
 
 /** What the document-capture engine read from an invoice PDF/image (POST /invoices/documents). Nothing is stored server-side. */
 type Extracted = {
@@ -80,6 +92,7 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
   const [irn, setIrn] = useState('');
   const [signedQr, setSignedQr] = useState('');
   const [extracted, setExtracted] = useState<Extracted | null>(null);
+  const [heads, setHeads] = useState(false);
 
   // Prefill lines from the chosen PO: open quantity (accepted − invoiced for goods, ordered − invoiced otherwise) at PO price,
   // overlaid with what was read from the invoice document for the same PO line.
@@ -91,7 +104,7 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
       const goods = l.gr_required && !l.ses_required;
       const open = goods ? minus(l.accepted_qty, l.invoiced_qty) : minus(l.qty, l.invoiced_qty);
       const base = { include: Number(open) > 0, line: l, qty: open === '0' ? minus(l.qty, l.invoiced_qty) : open,
-        unit_price: (l.unit_price_minor / 100).toFixed(2), gst_rate: l.gst_rate ?? '', hsn: l.hsn_code ?? '' };
+        unit_price: (l.unit_price_minor / 100).toFixed(2), gst_rate: l.gst_rate ?? '', hsn: l.hsn_code ?? '', cgst: '', sgst: '', igst: '' };
       if (!read.length) return base;
       const doc = read.find((x) => Number(x.po_line) === l.line_no);
       if (!doc) return { ...base, include: false };
@@ -119,24 +132,36 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
   });
 
   const chosen = lines.filter((l) => l.include);
-  const net = chosen.reduce((s, l) => s + (isNumber(l.qty) && isNumber(l.unit_price) ? Number(l.qty) * rupeesToMinor(l.unit_price) : 0), 0);
-  const tax = chosen.reduce((s, l) => s + (isNumber(l.qty) && isNumber(l.unit_price) && isNumber(l.gst_rate)
-    ? Math.round(Number(l.qty) * rupeesToMinor(l.unit_price) * Number(l.gst_rate) / 100) : 0), 0);
+  const net = chosen.reduce((s, l) => s + (isNumber(l.qty) && isNumber(l.unit_price) ? Math.round(Number(l.qty) * rupeesToMinor(l.unit_price)) : 0), 0);
+  const tax = chosen.reduce((s, l) => s + (lineTaxMinor(l) ?? 0), 0);
+  const normalisedNo = invoiceNo.trim().replace(/\s+/g, ' ');
+  // Tax heads as printed on the invoice: when entered, CGST + SGST + IGST of a line must add up to the line tax (the API refuses otherwise).
+  const headProblem = heads ? chosen.filter(hasHeads).map((l) => {
+    const expected = lineTaxMinor(l);
+    const entered = [l.cgst, l.sgst, l.igst];
+    if (entered.some((v) => v.trim() !== '' && (!isNumber(v) || Number(v) < 0))) return `Line ${l.line.line_no}: tax heads are amounts in rupees, zero or more`;
+    const sum = headMinor(l.cgst) + headMinor(l.sgst) + headMinor(l.igst);
+    return expected !== null && sum !== expected ? `Line ${l.line.line_no}: CGST + SGST + IGST is ${inr(sum)}, the line tax is ${inr(expected)}` : '';
+  }).find(Boolean) : '';
   const problems = [
     !poNumber && 'Choose a purchase order',
-    !invoiceNo.trim() && 'Enter the supplier invoice number',
+    !normalisedNo && 'Enter the supplier invoice number',
+    normalisedNo.length > INVOICE_NO_MAX && `The supplier invoice number is at most ${INVOICE_NO_MAX} characters (now ${normalisedNo.length})`,
     !invoiceDate && 'Enter the invoice date',
     channel === 'E_INVOICE' && !irn.trim() && 'An e-invoice needs its IRN',
     poNumber && !chosen.length && 'Include at least one line',
     chosen.some((l) => !isPositive(l.qty) || !isPositive(l.unit_price) || !isNumber(l.gst_rate)) && 'Every included line needs a quantity, unit price and GST rate',
+    headProblem,
   ].filter(Boolean) as string[];
 
   const capture = useCommand(() => api.post<{ id: string; number: string; status: string }>('/invoices', {
     supplier: supplierMode ? undefined : po.data?.supplier.code,
-    supplier_invoice_no: invoiceNo.trim(), invoice_date: invoiceDate, channel, irn: irn.trim() || undefined,
+    supplier_invoice_no: normalisedNo, invoice_date: invoiceDate, channel, irn: irn.trim() || undefined,
     signed_qr: channel === 'E_INVOICE' && signedQr.trim() ? signedQr.trim() : undefined,
+    company_code: po.data?.company_code || undefined,
     lines: chosen.map((l) => ({ po: poNumber, po_line: l.line.line_no, qty: l.qty, unit_price: l.unit_price, gst_rate: l.gst_rate,
-      hsn: l.hsn || undefined })),
+      hsn: l.hsn || undefined,
+      ...(heads && hasHeads(l) ? { cgst_minor: headMinor(l.cgst), sgst_minor: headMinor(l.sgst), igst_minor: headMinor(l.igst) } : {}) })),
   }), {
     success: (r) => `Invoice ${r.number} ${supplierMode ? 'submitted' : 'captured'} · ${r.status.replace(/_/g, ' ').toLowerCase()}`,
     onSuccess: (r) => { onCaptured?.(r); onClose(); },
@@ -179,8 +204,9 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
         <Field label="Supplier">
           {(id) => <Input id={id} readOnly value={supplierMode ? 'Your company (signed-in supplier)' : po.data ? `${po.data.supplier.code} · ${po.data.supplier.name}` : '–'} />}
         </Field>
-        <Field label="Supplier invoice number">
-          {(id) => <Input id={id} required value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} placeholder="e.g. INV-TF-8813" />}
+        <Field label="Supplier invoice number" hint={`${normalisedNo.length} of ${INVOICE_NO_MAX} characters`}
+          error={normalisedNo.length > INVOICE_NO_MAX ? `At most ${INVOICE_NO_MAX} characters: shorten it to the number printed on the invoice` : undefined}>
+          {(id, d) => <Input id={id} aria-describedby={d} required value={invoiceNo} onChange={(e) => setInvoiceNo(e.target.value)} placeholder="e.g. INV-TF-8813" />}
         </Field>
         <Field label="Invoice date">
           {(id) => <Input id={id} type="date" required value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />}
@@ -206,11 +232,24 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
         {poNumber && po.isLoading && <Loading text="Loading PO lines…" />}
         {po.data && !lines.length && <Empty title="This PO has no lines" />}
         {lines.length > 0 && (
+          <label className="mb-2 flex items-center gap-2 text-sm">
+            <input type="checkbox" className="h-4 w-4 accent-[#1A56DB]" checked={heads} onChange={(e) => setHeads(e.target.checked)} />
+            Enter the tax heads printed on the invoice (CGST, SGST, IGST)
+          </label>
+        )}
+        {heads && chosen.length > 0 && (
+          <p className="mb-2 text-xs text-slate-500">
+            Per line the three heads must add up to the line tax. Inside the state the supplier charges CGST and SGST (half each); between states IGST.
+            A line left empty has its heads derived from the place of supply.
+          </p>
+        )}
+        {lines.length > 0 && (
           <div className="overflow-x-auto rounded-lg border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr><th className="px-2 py-2">Bill</th><th className="px-2 py-2">PO line</th><th className="px-2 py-2">Qty</th>
-                  <th className="px-2 py-2">Unit price (₹)</th><th className="px-2 py-2">GST %</th><th className="px-2 py-2">HSN/SAC</th></tr>
+                  <th className="px-2 py-2">Unit price (₹)</th><th className="px-2 py-2">GST %</th><th className="px-2 py-2">HSN/SAC</th>
+                  {heads && <><th className="px-2 py-2">CGST (₹)</th><th className="px-2 py-2">SGST (₹)</th><th className="px-2 py-2">IGST (₹)</th><th className="px-2 py-2">Fill</th></>}</tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {lines.map((l, i) => (
@@ -229,6 +268,27 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
                     <td className="px-2 py-2"><Input aria-label={`Unit price line ${l.line.line_no}`} value={l.unit_price} disabled={!l.include} onChange={(e) => update(i, { unit_price: e.target.value })} className="w-28" /></td>
                     <td className="px-2 py-2"><Input aria-label={`GST rate line ${l.line.line_no}`} value={l.gst_rate} disabled={!l.include} onChange={(e) => update(i, { gst_rate: e.target.value })} className="w-16" /></td>
                     <td className="px-2 py-2"><Input aria-label={`HSN line ${l.line.line_no}`} value={l.hsn} disabled={!l.include} onChange={(e) => update(i, { hsn: e.target.value })} className="w-28" /></td>
+                    {heads && (
+                      <>
+                        <td className="px-2 py-2"><Input aria-label={`CGST line ${l.line.line_no}`} inputMode="decimal" value={l.cgst} disabled={!l.include} onChange={(e) => update(i, { cgst: e.target.value })} className="w-24" /></td>
+                        <td className="px-2 py-2"><Input aria-label={`SGST line ${l.line.line_no}`} inputMode="decimal" value={l.sgst} disabled={!l.include} onChange={(e) => update(i, { sgst: e.target.value })} className="w-24" /></td>
+                        <td className="px-2 py-2"><Input aria-label={`IGST line ${l.line.line_no}`} inputMode="decimal" value={l.igst} disabled={!l.include} onChange={(e) => update(i, { igst: e.target.value })} className="w-24" /></td>
+                        <td className="whitespace-nowrap px-2 py-2">
+                          {(() => {
+                            const t = lineTaxMinor(l);
+                            const fmt = (v: number) => (v / 100).toFixed(2);
+                            return (
+                              <span className="flex gap-1">
+                                <Button disabled={!l.include || t === null} aria-label={`Split line ${l.line.line_no} tax into CGST and SGST`}
+                                  onClick={() => t !== null && update(i, { cgst: fmt(Math.floor(t / 2)), sgst: fmt(t - Math.floor(t / 2)), igst: '' })}>CGST+SGST</Button>
+                                <Button disabled={!l.include || t === null} aria-label={`Charge line ${l.line.line_no} tax as IGST`}
+                                  onClick={() => t !== null && update(i, { cgst: '', sgst: '', igst: fmt(t) })}>IGST</Button>
+                              </span>
+                            );
+                          })()}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -245,6 +305,7 @@ export function CaptureInvoiceDialog({ supplierMode = false, onClose, onCaptured
         Differences outside tolerance raise exceptions and a payment block.
       </p>
       {problems.length > 0 && (poNumber || invoiceNo) && <p className="mt-2 text-xs text-amber-700" role="status">{problems[0]}</p>}
+      <div className="mt-2"><ProblemBox error={capture.error} /></div>
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={problems.length > 0} busy={capture.isPending} onClick={() => capture.mutate()}>

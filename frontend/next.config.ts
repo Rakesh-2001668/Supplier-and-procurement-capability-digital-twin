@@ -4,8 +4,13 @@ const isDev = process.env.NODE_ENV !== 'production';
 
 // Content Security Policy. Next.js App Router injects inline bootstrap scripts, so script-src needs 'unsafe-inline' unless a
 // per-request nonce is generated in the proxy (which forces every page to render dynamically). Dev additionally needs
-// 'unsafe-eval' (React Refresh) and websocket connections for HMR. All API calls go to the same origin (/api/pic), so
-// connect-src stays 'self'. form-action allows https: because an OCI punch-out posts a form to the supplier's catalogue.
+// 'unsafe-eval' (React Refresh) and websocket connections for HMR. All PIC API calls go to the same origin (/api/pic), so
+// connect-src is 'self' in production. The legacy prototype screens (mounted only outside production, PIC_ENABLE_LEGACY_DEMO) call the
+// API directly from the browser at http://localhost:8080 or http://127.0.0.1:8080, so development additionally allows those origins
+// (override with PIC_DEV_API_ORIGINS, space separated). Without this the browser blocks every such call and the screens show
+// "Network Error" / "Failed to fetch" with the API up. form-action allows https: because an OCI punch-out posts a form to the
+// supplier's catalogue.
+const devApiOrigins = process.env.PIC_DEV_API_ORIGINS || 'http://localhost:8080 http://127.0.0.1:8080';
 const csp = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ''}`,
@@ -13,7 +18,7 @@ const csp = [
   // Legacy demo screens use a world-map SVG from Wikimedia; it is harmless as an image source.
   "img-src 'self' data: blob: https://upload.wikimedia.org",
   "font-src 'self' data:",
-  `connect-src 'self'${isDev ? ' ws: wss:' : ''}`,
+  `connect-src 'self'${isDev ? ` ${devApiOrigins} ws: wss:` : ''}`,
   "frame-src 'none'",
   "frame-ancestors 'none'",
   "object-src 'none'",

@@ -1,0 +1,435 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
+  <BkToCstmrStmt>
+    <GrpHdr><MsgId>MSG-MOCK-HDFC-S3-20261019</MsgId><CreDtTm>2026-10-19T20:00:00+05:30</CreDtTm></GrpHdr>
+    <Stmt>
+      <Id>MOCK-HDFC-S3-20261019</Id>
+      <ElctrncSeqNb>1</ElctrncSeqNb>
+      <Acct><Id><Othr><Id>MOCK-CA-0001</Id></Othr></Id><Ccy>INR</Ccy><Ownr><Nm>MOCK sample data (finance_ops)</Nm></Ownr></Acct>
+      <Bal><Tp><CdOrPrtry><Cd>OPBD</Cd></CdOrPrtry></Tp><Amt Ccy="INR">26000000.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-10-19</Dt></Dt></Bal>
+      <Ntry>
+        <Amt Ccy="INR">2345122.95</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900001</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880059</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880059 100061 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">550054.24</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900002</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880060</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880060 100061 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">2409578.38</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900003</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880061</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880061 100035 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">335902.13</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900004</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880062</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880062 100075 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">377239.88</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900005</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880063</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880063 200090 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">2250650.16</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900006</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880064</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880064 200060 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">642702.10</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900007</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880065</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880065 100017 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">134101.23</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900008</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880066</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880066 200024 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">1289798.26</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900009</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880067</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880067 100099 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">149722.84</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900010</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880068</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880068 200078 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">525331.36</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900011</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880069</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880069 100062 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">1596077.29</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900012</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880070</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880070 200090 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">139054.48</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900013</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880071</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880071 200060 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">208549.15</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900014</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880072</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880072 200002 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">361498.07</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900015</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880073</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880073 100084 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">203326.79</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900016</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880074</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880074 100099 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">111163.47</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900017</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880075</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880075 200103 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">2360108.33</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <RvslInd>true</RvslInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-19</Dt></BookgDt>
+        <ValDt><Dt>2026-10-19</Dt></ValDt>
+        <AcctSvcrRef>MRTNHDFC26101900018</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880076</EndToEndId></Refs>
+          <RtrInf><Rsn><Cd>AC04</Cd></Rsn><AddtlInf>AC04 Beneficiary account closed</AddtlInf></RtrInf>
+          <RmtInf><Ustrd>Return of PAY-880076 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">827333.77</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900019</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880077</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880077 100100 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">101017.79</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900020</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880078</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880078 200094 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">501684.73</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900021</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880079</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880079 200058 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">280263.36</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900022</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880080</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880080 200002 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">110208.41</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900023</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880081</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880081 200202 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">1389993.70</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900024</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880082</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880082 100049 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">6305879.41</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900025</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880083</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880083 100011 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">158670.80</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900026</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880084</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880084 200090 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">582737.42</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900027</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880085</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880085 200007 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">321347.04</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900028</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880086</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880086 100015 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">231227.28</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900029</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880087</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880087 200043 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">853956.41</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900030</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880088</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880088 200002 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">108558.38</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900031</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880089</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880089 200042 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">245738.61</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900032</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880090</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880090 100076 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">219396.64</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900033</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880091</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880091 200049 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">18635.79</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900034</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880092</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880092 200012 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="INR">1673465.21</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2026-10-16</Dt></BookgDt>
+        <ValDt><Dt>2026-10-16</Dt></ValDt>
+        <AcctSvcrRef>MOCKHDFC26101900035</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PAY-880093</EndToEndId></Refs>
+          <RmtInf><Ustrd>PAY-880093 200118 MOCK sample data (finance_ops)</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Bal><Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp><Amt Ccy="INR">800120.80</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2026-10-19</Dt></Dt></Bal>
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>

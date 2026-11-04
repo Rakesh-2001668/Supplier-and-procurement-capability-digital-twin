@@ -305,9 +305,10 @@ def _settle(sc: Scenario, period_to: date, reference_no: str) -> str:
         invoice_id, number, status = invoice.id, invoice.number, invoice.status
     if status != "MATCHED":
         raise RuntimeError(f"{number}: {status}")
-    with sc.act("ap.clerk", when + timedelta(minutes=30)) as s:
+    with sc.act("finance.controller2", when + timedelta(minutes=30)) as s:   # SOD-09: finance.controller releases the payment run, so the approver is the deputy; SOD-08: whoever captured the document does not approve it
+        payables.approve(s, s.get(Invoice, invoice_id))
+    with sc.act("ap.clerk", when + timedelta(minutes=40)) as s:
         invoice = s.get(Invoice, invoice_id)
-        payables.approve(s, invoice)
         payables.post(s, invoice, payables.posting_key(s, invoice))
         sc.note(f"ERS {number}: {invoice.net_minor / 100:,.2f} + GST {invoice.tax_minor / 100:,.2f} for the implants used to {period_to.isoformat()}, posted")
     return number

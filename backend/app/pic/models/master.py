@@ -42,6 +42,8 @@ class Supplier(TenantScoped, Base):
     msme_class: Mapped[Optional[str]] = mapped_column(String(10))
     udyam_no: Mapped[Optional[str]] = mapped_column(String(30))
     tds_section: Mapped[Optional[str]] = mapped_column(String(20))
+    # MSMED Act s.15: without a written payment agreement the supplier is paid within 15 days of acceptance (rule MSME.noAgreementDays), with one within 45.
+    msme_written_agreement: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     twin_ref: Mapped[Optional[str]] = mapped_column(String(40))
     screening: Mapped[dict] = mapped_column(JSONB, default=dict)
     contact_email: Mapped[Optional[str]] = mapped_column(String(200))
@@ -97,6 +99,13 @@ class SupplierBankAccount(TenantScoped, Base):
     active: Mapped[bool] = mapped_column(Boolean, default=False)
     verified_on: Mapped[Optional[date]] = mapped_column(Date)
     payable_from: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))  # end of cooling-off
+    # Foreign beneficiary (migration 0020): ISO country of the bank, SWIFT/BIC, intermediary bank, ISO 20022 charge bearer (DEBT | CRED | SHAR | SLEV)
+    # and the RBI purpose code of the remittance. A domestic account is country IN with an IFSC and none of the others.
+    country: Mapped[str] = mapped_column(String(2), nullable=False, default="IN", server_default="IN")
+    swift_bic: Mapped[Optional[str]] = mapped_column(String(11))
+    intermediary_bic: Mapped[Optional[str]] = mapped_column(String(11))
+    charge_bearer: Mapped[Optional[str]] = mapped_column(String(4))
+    purpose_code: Mapped[Optional[str]] = mapped_column(String(10))
 
 
 class BankChangeRequest(TenantScoped, Base):

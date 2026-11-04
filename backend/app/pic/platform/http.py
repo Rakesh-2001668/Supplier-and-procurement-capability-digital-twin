@@ -139,6 +139,35 @@ class BodyTooLarge(Exception):
     pass
 
 
+ENCODED_SLASH_PREFIXES = ("/v1/invoices/", "/v1/debit-notes/")
+SLASH_TOKEN = "%2F"
+
+
+def unescape_ref(ref: str) -> str:
+    """A document number as the client wrote it: ``THT%2F27-28%2F0311`` (kept escaped by EncodedSlashMiddleware) is ``THT/27-28/0311``."""
+    return ref.replace(SLASH_TOKEN, "/").replace("%2f", "/") if "%2" in ref else ref
+
+
+class EncodedSlashMiddleware:
+    """Supplier invoice numbers contain slashes (THT/27-28/0311) and are the internal document number. A client sends them as one path
+    segment with ``%2F``; servers decode that to ``/`` before routing, so ``/v1/invoices/{ref}/post`` could never match. For the invoice and
+    debit-note routes the escaped slash is kept literally in the routed path and ``unescape_ref`` restores it where the number is looked up."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("raw_path"):
+            raw = scope["raw_path"].decode("latin-1")
+            head = raw.split("?", 1)[0]
+            if head.startswith(ENCODED_SLASH_PREFIXES) and "%2f" in head.lower():
+                import re
+                from urllib.parse import unquote
+                segments = [SLASH_TOKEN.join(unquote(part) for part in re.split("%2[fF]", seg)) for seg in head.split("/")]
+                scope = {**scope, "path": "/".join(segments)}
+        await self.app(scope, receive, send)
+
+
 class BodyLimitMiddleware:
     """Rejects bodies over PIC_MAX_BODY_BYTES (PIC_MAX_UPLOAD_BYTES for multipart/file uploads) with 413. Checks
     Content-Length up front and counts streamed chunks, passing every byte through unchanged (HMAC webhooks keep working)."""
@@ -389,6 +418,7 @@ def install(app: FastAPI) -> None:
     app.add_exception_handler(Exception, unhandled_handler)
     # Added before the context middleware, so it runs inside it and its 413 carries the request's traceId.
     app.add_middleware(BodyLimitMiddleware)
+    app.add_middleware(EncodedSlashMiddleware)
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):

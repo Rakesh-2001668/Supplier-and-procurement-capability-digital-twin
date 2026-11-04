@@ -14,6 +14,7 @@ import csv
 import hashlib
 import io
 import os
+import re
 import xml.etree.ElementTree as ET
 from datetime import date
 from typing import Optional
@@ -31,6 +32,10 @@ from app.pic.services.common import principal
 
 FORMATS = ("ISO20022_PAIN001", "NEFT_CSV")
 PAIN_NS = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
+PAIN_NS_FOREIGN = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.09"   # a file with a foreign beneficiary: BICFI, intermediary agent, purpose code
+BIC_PATTERN = re.compile(r"^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$")
+PURPOSE_PATTERN = re.compile(r"^[A-Z][0-9]{4}$")       # RBI purpose-of-remittance code, e.g. P0802
+CHARGE_BEARERS = ("DEBT", "CRED", "SHAR")
 SM = StateMachine("PAYMENT_FILE", {
     ("GENERATED", "send"): "SENT",
     ("GENERATED", "reject"): "REJECTED",
@@ -90,6 +95,29 @@ def _amount(minor: int) -> str:
     return f"{from_minor(minor):.2f}"
 
 
+def is_foreign(account) -> bool:
+    return (account.country or "IN").upper() != "IN"
+
+
+def foreign_account_problem(account, invoice=None) -> Optional[str]:
+    """What is missing for a payment to a foreign beneficiary bank account (SWIFT/BIC, charge bearer, purpose code, a valid intermediary BIC);
+    None for a domestic account or a complete foreign one."""
+    if not is_foreign(account):
+        return None
+    missing = []
+    if not BIC_PATTERN.match((account.swift_bic or "").upper()):
+        missing.append("SWIFT/BIC")
+    if (account.charge_bearer or "") not in CHARGE_BEARERS:
+        missing.append(f"charge bearer ({'/'.join(CHARGE_BEARERS)})")
+    if not PURPOSE_PATTERN.match((account.purpose_code or "").upper()):
+        missing.append("purpose code (letter and four digits)")
+    if account.intermediary_bic and not BIC_PATTERN.match(account.intermediary_bic.upper()):
+        missing.append("a valid intermediary BIC")
+    if missing:
+        return f"foreign beneficiary bank ({account.country}) is incomplete: {', '.join(missing)}"
+    return None
+
+
 def _transactions(session: Session, run_ref: str) -> list[dict]:
     tenant = current_tenant(session)
     items = []
@@ -99,15 +127,19 @@ def _transactions(session: Session, run_ref: str) -> list[dict]:
         items.append({"payment": payment.number, "invoice": invoice.number, "supplierInvoiceNo": invoice.supplier_invoice_no,
                       "companyCode": invoice.company_code, "valueDate": payment.value_date, "amountMinor": payment.amount_minor,
                       "currency": payment.currency, "creditor": (account.holder_name or supplier.legal_name)[:70], "ifsc": account.ifsc,
-                      "account": crypto.decrypt(tenant, "bank", account.account_enc), "supplier": supplier.code})
+                      "account": crypto.decrypt(tenant, "bank", account.account_enc), "supplier": supplier.code,
+                      "foreign": is_foreign(account), "country": account.country, "swift": (account.swift_bic or "").upper(),
+                      "intermediary": (account.intermediary_bic or "").upper(), "chargeBearer": account.charge_bearer,
+                      "purpose": (account.purpose_code or "").upper(), "problem": foreign_account_problem(account)})
     return items
 
 
 def pain001(message_id: str, initiating_party: str, groups: list[tuple[dict, list[dict]]]) -> str:
     """pain.001.001.03: GrpHdr, then one PmtInf per company code and execution date with a CdtTrfTxInf per payment."""
-    document = ET.Element("Document", {"xmlns": PAIN_NS})
-    root = _sub(document, "CstmrCdtTrfInitn")
     every = [t for _, txs in groups for t in txs]
+    v9 = any(t.get("foreign") for t in every)  # pain.001.001.09 carries BICFI, the intermediary agent and the purpose code of a foreign payment
+    document = ET.Element("Document", {"xmlns": PAIN_NS_FOREIGN if v9 else PAIN_NS})
+    root = _sub(document, "CstmrCdtTrfInitn")
     header = _sub(root, "GrpHdr")
     _sub(header, "MsgId", message_id[:35])
     _sub(header, "CreDtTm", clock.now().astimezone(clock.IST).replace(microsecond=0).isoformat())
@@ -122,7 +154,10 @@ def pain001(message_id: str, initiating_party: str, groups: list[tuple[dict, lis
         _sub(info, "NbOfTxs", str(len(txs)))
         _sub(info, "CtrlSum", _amount(sum(t["amountMinor"] for t in txs)))
         _sub(_sub(info, "PmtTpInf"), "InstrPrty", "NORM")
-        _sub(info, "ReqdExctnDt", txs[0]["valueDate"].isoformat())
+        if v9:
+            _sub(_sub(info, "ReqdExctnDt"), "Dt", txs[0]["valueDate"].isoformat())
+        else:
+            _sub(info, "ReqdExctnDt", txs[0]["valueDate"].isoformat())
         _sub(_sub(info, "Dbtr"), "Nm", str(debtor["debtorName"])[:70])
         debtor_account = _sub(info, "DbtrAcct")
         _sub(_sub(_sub(debtor_account, "Id"), "Othr"), "Id", str(debtor["debtorAccountRef"])[:34])
@@ -135,9 +170,20 @@ def pain001(message_id: str, initiating_party: str, groups: list[tuple[dict, lis
             _sub(ids, "InstrId", t["payment"][:35])
             _sub(ids, "EndToEndId", t["payment"][:35])
             _sub(_sub(tx, "Amt"), "InstdAmt", _amount(t["amountMinor"]), Ccy=t["currency"])
-            _agent(tx, "CdtrAgt", t["ifsc"])
-            _sub(_sub(tx, "Cdtr"), "Nm", t["creditor"])
+            if t.get("foreign"):
+                _sub(tx, "ChrgBr", t["chargeBearer"])
+                if t["intermediary"]:
+                    _sub(_sub(_sub(tx, "IntrmyAgt1"), "FinInstnId"), "BICFI", t["intermediary"])
+                _sub(_sub(_sub(tx, "CdtrAgt"), "FinInstnId"), "BICFI", t["swift"])
+            else:
+                _agent(tx, "CdtrAgt", t["ifsc"])
+            creditor = _sub(tx, "Cdtr")
+            _sub(creditor, "Nm", t["creditor"])
+            if t.get("foreign"):
+                _sub(_sub(creditor, "PstlAdr"), "Ctry", t["country"])
             _sub(_sub(_sub(_sub(tx, "CdtrAcct"), "Id"), "Othr"), "Id", t["account"][:34])
+            if t.get("foreign"):
+                _sub(_sub(tx, "Purp"), "Cd", t["purpose"])
             _sub(_sub(tx, "RmtInf"), "Ustrd", f"{t['supplierInvoiceNo']} {t['payment']}"[:140])
     ET.indent(document)
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(document, encoding="unicode") + "\n"
@@ -171,11 +217,17 @@ def generate(session: Session, run_ref: str, fmt: str) -> PaymentFile:
         raise Problem(409, "PAYMENT_FILE_EXISTS", f"{active.number} ({active.format}, {active.status}) already carries run {run_ref}; "
                       "a run is sent to the bank once. Mark it REJECTED before generating a replacement.", rule_ref="F7-07",
                       paymentFile=active.number)
-    grouped: dict[tuple[str, date], list[dict]] = {}
-    for t in txs:
-        grouped.setdefault((t["companyCode"], t["valueDate"]), []).append(t)
+    incomplete = [f"{t['payment']}: {t['problem']}" for t in txs if t["problem"]]
+    if incomplete:
+        raise Problem(409, "PAYMENT_FILE_INCOMPLETE", "A foreign beneficiary's bank details are incomplete: " + "; ".join(incomplete[:5]), rule_ref="F7-07",
+                      payments=incomplete)
+    if fmt == "NEFT_CSV" and any(t["currency"] != "INR" or t["foreign"] for t in txs):
+        raise Problem(422, "NEFT_INR_ONLY", "NEFT carries rupee payments to Indian accounts only: use ISO20022_PAIN001 for a foreign-currency run", rule_ref="F7-07")
+    grouped: dict[tuple[str, date, str], list[dict]] = {}
+    for t in txs:  # one PmtInf per company code, execution date and currency (a debit account has one currency)
+        grouped.setdefault((t["companyCode"], t["valueDate"], t["currency"]), []).append(t)
     groups, refs = [], []
-    for (company_code, _), items in sorted(grouped.items()):
+    for (company_code, _, _), items in sorted(grouped.items()):
         debtor, ref = _debtor(session, company_code)
         groups.append((debtor, items))
         refs.append(ref)

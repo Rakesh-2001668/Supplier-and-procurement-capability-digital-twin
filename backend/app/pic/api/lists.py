@@ -16,6 +16,7 @@ from app.pic.models import (
     PurchaseOrder, Requisition, ServiceEntry, SourcingEvent, Supplier, SupplierCategoryStatus,
 )
 from app.pic.platform import clock
+from app.pic.services import finance_scope
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.serialize import jsonable, row
 
@@ -245,6 +246,7 @@ def invoices(status: Optional[str] = None, supplier: Optional[str] = None, compa
             query = query.where(Invoice.gross_minor <= max_gross_minor)
         if _is_supplier(p):
             query = query.where(Invoice.supplier_id == p.supplier_id)
+        query = finance_scope.restrict_invoices(query, s)  # ABAC read scope: the user's company codes and plants
         return paginate(s, query, Invoice, page, lambda i: row(i, extra={"supplier_code": codes.get(i.supplier_id),
                                                                            "open_exceptions": open_exc.get(i.id, 0)}))
 

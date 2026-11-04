@@ -377,6 +377,8 @@ Instances by flow: F1 7, F2 56, F3 3, F4 17, F5 62, F6 58, F7 72, F8 32, F9 21.
 
 ### BP §7 M01 Spend & Category Intelligence
 
+> Second analysis of M01 (4 November 2026): the rows below are superseded by `docs/PIC_Spend_Cube_Analysis.md` (68 requirements, 19 defects and gaps fixed, credit / debit notes, ABAC read scope, payment-control rules, plans workflow, data quality, forecast accuracy, mock datasets).
+
 | ID | Item | Status | Evidence / gap |
 |---|---|---|---|
 | M01-C1 | Multi-ERP spend cube (PO, invoice, contract, consumption) | **PARTIAL** | Cube built from posted invoices plus ERP history only (`svc/savings.py:_spend`, `spend_cube`). **No PO commitments, consumption or multi-ERP source tagging.** |

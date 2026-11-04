@@ -3,24 +3,28 @@
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { ObjectPage } from '@/components/pic/object';
-import { Button, Card, DataTable, Dialog, Empty, Facts, Field, Select, StatusChip, Textarea } from '@/components/pic/ui';
+import { Button, Card, DataTable, Dialog, Empty, Facts, Field, LinkButton, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import type { ApiError } from '@/lib/pic/api';
 import { BlockChip, hasRole, MatchChip, useSessionUser } from '../_components';
 import { EInvoiceBadge, EInvoicePanel } from '../_ops';
 import { DebitNotesPanel, EarlyPaymentPanel, ScfBadge } from '../_p2p';
 
 type MatchDetail = { invoicedQty?: string; creditedQty?: string; netQty?: string; poQty?: string; receivedQty?: string; acceptedQty?: string;
   alreadyInvoicedQty?: string; sesApprovedMinor?: number; poPriceMinor?: number; invoicePriceMinor?: number };
+type TaxSplit = { supply?: 'INTRA' | 'INTER'; cgst?: number; sgst?: number; igst?: number; declared?: boolean; rcm?: { taxMinor: number } };
 type InvLine = { id: string; line_no: number; description: string; qty: string; unit_price_minor: number; net_minor: number; hsn_code: string | null;
-  gst_rate: string; tax_minor: number; match_status: string | null; match_detail: MatchDetail | null };
+  gst_rate: string; tax_minor: number; match_status: string | null; match_detail: MatchDetail | null; tax_split?: TaxSplit };
 type InvException = { id: string; invoice_line_id: string | null; type: string; delta: Record<string, string | number>; detail: string;
   suggested_action: string; status: string; resolution: string | null; resolution_note: string | null; ai_ref: string | null; created_at: string };
 type CreditNote = { id: string; number: string; supplier_credit_note_no: string; note_date: string; reason: string; net_minor: number; tax_minor: number;
   gross_minor: number; lines: { invoice_line: number; qty: string; unitCreditMinor?: number }[] };
 type Payment = { id: string; number: string; amount_minor: number; value_date: string; status: string; run_ref: string | null; currency?: string;
-  bank_status?: string; bank_utr?: string | null; return_reason?: string | null; tds_minor?: number };
+  bank_status?: string; bank_utr?: string | null; return_reason?: string | null; tds_minor?: number; tds_base_minor?: number; tds_rate?: string | number | null;
+  tds_certificate?: string | null; tds_cert_base_minor?: number; tcs_minor?: number; fx_rate?: string | number | null; amount_group_minor?: number | null;
+  fx_gain_loss_minor?: number | null; reversal_doc?: string | null };
 type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal_year: string; company_code: string; invoice_date: string; channel: string;
   irn: string | null; irn_valid: boolean | null; net_minor: number; tax_minor: number; gross_minor: number; status: string; match_type: string | null;
   first_pass_matched: boolean | null; payment_block: boolean | null; due_date: string | null; erp_doc_no: string | null; posting_key: string | null;
@@ -28,6 +32,8 @@ type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal
   retention_minor?: number; payment_option?: string; discount_minor?: number; currency?: string; msme_capped?: boolean; acceptance_date?: string | null;
   tds_section?: string | null; tds_rate?: string | number | null; tds_base_minor?: number; withholding_tax_minor?: number; fx_rate?: string | number | null;
   gross_group_minor?: number | null; posting_date?: string | null;
+  place_of_supply?: string | null; cgst_minor?: number; sgst_minor?: number; igst_minor?: number; reverse_charge?: boolean; rcm_tax_minor?: number;
+  tcs_section?: string | null; tcs_rate?: string | number | null; tcs_minor?: number;
   supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[]; debitNotes?: { id: string }[] };
 type PostResult = { status: string; erpDocument?: string | null; replayed?: boolean; integrationStatus?: string; attempts?: number; error?: string | null };
 
@@ -56,6 +62,14 @@ function irnText(inv: Invoice) {
   return inv.irn_valid === true ? 'valid' : inv.irn_valid === false ? 'INVALID' : 'not checked';
 }
 
+const heads = (h: { cgst?: number; sgst?: number; igst?: number }) =>
+  [h.cgst ? `CGST ${inr(h.cgst)}` : '', h.sgst ? `SGST ${inr(h.sgst)}` : '', h.igst ? `IGST ${inr(h.igst)}` : ''].filter(Boolean).join(' · ') || 'no tax';
+
+/** Whether finance may lift the payment block of this invoice: posted, unpaid, blocked, and nothing (exception, duplicate hold) explains the block. */
+function releasable(inv: Invoice, openExceptions: number) {
+  return inv.status === 'POSTED' && inv.payment_status === 'UNPAID' && inv.payment_block === true && !inv.duplicate_of && openExceptions === 0;
+}
+
 function deltaText(delta: Record<string, string | number>) {
   if (!delta || !Object.keys(delta).length) return '–';
   return Object.entries(delta).map(([k, v]) => k.endsWith('Minor') ? `${k.replace(/Minor$/, '')} ${inr(Number(v))}` : `${k} ${v}`).join(', ');
@@ -68,9 +82,11 @@ export default function InvoicePage() {
   const { data: inv, isLoading, error } = useApi<Invoice>(`/invoices/${ref}`);
   const [resolving, setResolving] = useState<InvException | null>(null);
   const [rejecting, setRejecting] = useState(false);
+  const [releasing, setReleasing] = useState(false);
   const [posted, setPosted] = useState<(PostResult & { key: string }) | null>(null);
 
   const ap = hasRole(user, 'AP_CLERK');
+  const finance = hasRole(user, 'FINANCE_CONTROLLER');
   const approver = hasRole(user, 'AP_CLERK', 'FINANCE_CONTROLLER');
   const postingKey = inv && user ? `${user.tenant}|${inv.company_code}|${inv.supplier.code}|${inv.supplier_invoice_no}` : '';
 
@@ -86,6 +102,16 @@ export default function InvoicePage() {
   const lineNo = (lineId: string | null) => inv?.lines.find((l) => l.id === lineId)?.line_no;
   const openExceptions = inv?.exceptions.filter((e) => e.status === 'OPEN') ?? [];
   const duplicateHold = openExceptions.some((e) => e.type === 'DUPLICATE');
+  const certPayment = inv?.payments.find((p) => p.tds_certificate && p.status !== 'CANCELLED') ?? inv?.payments.find((p) => p.tds_certificate);
+
+  if (error && (error as ApiError).status === 404) {
+    return (
+      <Card>
+        <Empty title="Invoice not found" hint="It does not exist, or it belongs to a company code or plant outside your access." />
+        <div className="mt-4 text-center"><LinkButton href="/pic/invoices">Back to the invoice worklist</LinkButton></div>
+      </Card>
+    );
+  }
 
   return (
     <>
@@ -103,6 +129,7 @@ export default function InvoicePage() {
             )}
             {approver && inv.status === 'MATCHED' && <Button variant="primary" busy={approve.isPending} onClick={() => approve.mutate()}>Approve</Button>}
             {ap && inv.status === 'APPROVED' && <Button variant="primary" busy={post.isPending} disabled={!postingKey} onClick={() => post.mutate()}>Post to ERP</Button>}
+            {finance && releasable(inv, openExceptions.length) && <Button onClick={() => setReleasing(true)}>Release payment block</Button>}
             {ap && ['POSTED', 'PAID'].includes(inv.status) && (
               <Button busy={post.isPending} disabled={!postingKey} onClick={() => post.mutate()}>Retry post (idempotent)</Button>
             )}
@@ -128,6 +155,12 @@ export default function InvoicePage() {
               ['Invoice date', date(inv.invoice_date)], ['Channel', label(inv.channel)],
               ['IRN', inv.irn ? <EInvoiceBadge key="irn" invoiceRef={ref} /> : <span key="irn">{irnText(inv)}</span>],
               ['Net', inr(inv.net_minor)], ['Tax (GST)', inr(inv.tax_minor)], ['Gross', inr(inv.gross_minor)],
+              ...(inv.place_of_supply ? [
+                ['Place of supply', `State code ${inv.place_of_supply}`] as [string, string],
+                ['GST heads', heads({ cgst: inv.cgst_minor, sgst: inv.sgst_minor, igst: inv.igst_minor })] as [string, string],
+              ] : []),
+              ...(inv.reverse_charge ? [['Reverse charge', `Yes: the supplier charges no GST; ${inr(inv.rcm_tax_minor ?? 0)} is self-assessed by the buyer`] as [string, string]] : []),
+              ...(inv.tcs_section && inv.tcs_minor ? [['TCS', `${inv.tcs_section} · ${inv.tcs_rate}% = ${inr(inv.tcs_minor)} collected by the supplier, paid with the invoice`] as [string, string]] : []),
               ...(inv.retention_minor ? [
                 ['Retention withheld', inr(inv.retention_minor)] as [string, string],
                 ['Payable now', inr(inv.gross_minor - inv.creditNotes.reduce((sum, n) => sum + n.gross_minor, 0) - inv.retention_minor)] as [string, string],
@@ -146,6 +179,18 @@ export default function InvoicePage() {
               ...(inv.posting_date ? [['Posting date', date(inv.posting_date)] as [string, string]] : []),
             ]} />
             {inv.irn && <p className="break-all font-mono text-[11px] text-slate-500">IRN {inv.irn}</p>}
+            {inv.irn_valid === false && (
+              <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+                The IRN failed validation (see the E-invoice tab). The invoice is held with a tax exception until the supplier sends a valid e-invoice or the exception is resolved.
+              </p>
+            )}
+            {certPayment && <CertificateUse supplier={inv.supplier.code} payment={certPayment} />}
+            {inv.payment_block && releasable(inv, openExceptions.length) && (
+              <p className="text-sm text-amber-800">
+                Payment block: posted and unpaid, and no exception or duplicate hold explains it (for example a block that came with the ERP load).
+                {finance ? ' You can release it with an audited reason.' : ' Finance releases it with an audited reason.'}
+              </p>
+            )}
             {inv.duplicate_of && <p className="text-sm text-amber-800">Suspected duplicate of {inv.duplicate_of}</p>}
             {duplicateHold && (
               <p className="text-sm text-amber-800">Held as a possible duplicate: resolve the hold as &ldquo;not a duplicate&rdquo; or reject the invoice. Re-running the match does not release it.</p>
@@ -173,6 +218,12 @@ export default function InvoicePage() {
               return <span className={po !== undefined && po !== iv ? 'font-semibold text-amber-700' : ''}>{po !== undefined ? inr(po) : '–'} / {inr(iv)}</span>;
             } },
             { key: 'net_minor', header: 'Net value', align: 'right', render: (l) => inr(l.net_minor) },
+            { key: 'tax_minor', header: 'GST', align: 'right', render: (l) => (
+              <><p>{inr(l.tax_minor)}</p>{l.tax_split && (l.tax_split.cgst || l.tax_split.sgst || l.tax_split.igst) ? (
+                <p className="text-xs text-slate-500" title={l.tax_split.declared ? 'Tax heads as printed on the supplier invoice' : 'Tax heads derived from the place of supply'}>
+                  {heads(l.tax_split)}{l.tax_split.declared ? '' : ' (derived)'}</p>
+              ) : null}{l.tax_split?.rcm ? <p className="text-xs text-slate-500">reverse charge {inr(l.tax_split.rcm.taxMinor)}</p> : null}</>
+            ) },
             { key: 'match_status', header: 'Match', render: (l) => <StatusChip status={l.match_status ?? 'PENDING'} /> },
           ]} />
         )}
@@ -228,14 +279,27 @@ export default function InvoicePage() {
               { key: 'value_date', header: 'Value date', render: (p) => date(p.value_date) },
               { key: 'status', header: 'Status', render: (p) => <StatusChip status={p.status} /> },
               { key: 'bank_status', header: 'Bank', render: (p) => p.bank_status ? <span><StatusChip status={p.bank_status} />{p.bank_utr ? <span className="ml-1 font-mono text-xs text-slate-500">{p.bank_utr}</span> : null}{p.return_reason ? <span className="ml-1 text-xs text-slate-500">{p.return_reason}</span> : null}</span> : '–' },
-              { key: 'tds_minor', header: 'TDS', align: 'right', render: (p) => p.tds_minor ? inr(p.tds_minor) : '–' },
-              { key: 'amount_minor', header: 'Amount (net of credit notes and TDS)', align: 'right', render: (p) => inr(p.amount_minor) },
+              { key: 'tds_minor', header: 'TDS', align: 'right', render: (p) => p.tds_minor || p.tds_certificate ? (
+                <><p>{inr(p.tds_minor ?? 0)}</p>
+                  {p.tds_rate ? <p className="text-xs text-slate-500">{p.tds_rate}% on {inr(p.tds_base_minor ?? 0)}</p> : null}
+                  {p.tds_certificate ? <p className="text-xs text-slate-500">s.197 {p.tds_certificate}{p.tds_cert_base_minor ? ` on ${inr(p.tds_cert_base_minor)}` : ''}</p> : null}</>
+              ) : '–' },
+              { key: 'tcs_minor', header: 'TCS', align: 'right', render: (p) => p.tcs_minor ? inr(p.tcs_minor) : '–' },
+              { key: 'fx', header: 'Exchange', render: (p) => p.fx_rate ? (
+                <span className="text-xs">rate {p.fx_rate} · {inr(p.amount_group_minor ?? 0)}{p.fx_gain_loss_minor ? <span className={p.fx_gain_loss_minor > 0 ? 'text-emerald-700' : 'text-red-700'}>
+                  {' '}{p.fx_gain_loss_minor > 0 ? 'gain' : 'loss'} {inr(Math.abs(p.fx_gain_loss_minor))}</span> : null}</span>
+              ) : '–' },
+              { key: 'amount_minor', header: 'Amount (net of credit notes and TDS, with TCS)', align: 'right', render: (p) => (
+                <>{p.currency && p.currency !== 'INR' ? `${p.currency} ${(p.amount_minor / 100).toFixed(2)}` : inr(p.amount_minor)}
+                  {p.reversal_doc ? <p className="text-xs font-normal text-amber-800">ERP reversal {p.reversal_doc}</p> : null}</>
+              ) },
             ]} />
           ) },
         ] : []}
       />
       {inv && resolving && <ResolveDialog inv={inv} exc={resolving} onClose={() => setResolving(null)} />}
       {inv && rejecting && <RejectDialog inv={inv} onClose={() => setRejecting(false)} />}
+      {inv && releasing && <ReleaseBlockDialog inv={inv} onClose={() => setReleasing(false)} />}
     </>
   );
 }
@@ -312,6 +376,46 @@ function RejectDialog({ inv, onClose }: { inv: Invoice; onClose: () => void }) {
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="danger" disabled={reason.trim().length < 3} busy={reject.isPending} onClick={() => reject.mutate()}>Reject invoice</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** The s.197 certificate a payment of this invoice used, with how much of its amount cap is consumed (from the supplier finance view). */
+function CertificateUse({ supplier, payment }: { supplier: string; payment: Payment }) {
+  const finance = useApi<{ certificates: { certificateNo: string; ratePct: string; maxBaseMinor: number | null; consumedBaseMinor: number; remainingBaseMinor: number | null; status: string }[] }>(
+    `/suppliers/${encodeURIComponent(supplier)}/finance`);
+  const cert = finance.data?.certificates.find((c) => c.certificateNo === payment.tds_certificate);
+  return (
+    <p className="text-sm text-slate-700" aria-label="TDS certificate used">
+      TDS certificate <span className="font-mono">{payment.tds_certificate}</span> (s.197) applied on payment {payment.number}
+      {payment.tds_cert_base_minor ? `: ${inr(payment.tds_cert_base_minor)} of the base taxed at its rate` : ''}.
+      {cert && cert.maxBaseMinor !== null ? ` Cap ${inr(cert.maxBaseMinor)} · consumed ${inr(cert.consumedBaseMinor)} · remaining ${inr(cert.remainingBaseMinor ?? 0)}; beyond the cap the section rate applies.`
+        : cert ? ' No amount cap on this certificate.' : ''}
+    </p>
+  );
+}
+
+function ReleaseBlockDialog({ inv, onClose }: { inv: Invoice; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const release = useCommand(() => api.post(`/invoices/${inv.id}/payment-block/release`, { reason: reason.trim() }), {
+    success: `Payment block of ${inv.number} released; it is payable in the next run`, onSuccess: onClose,
+  });
+  return (
+    <Dialog open title={`Release payment block · ${inv.number}`} onClose={onClose}>
+      <p className="text-sm text-slate-700">
+        Lifts the payment block of this posted, unpaid invoice. Only a block that no exception or duplicate hold explains can be released this way;
+        an invoice with open exceptions is released by resolving them, and a blocked supplier is unblocked on the supplier. The release is audited with your reason.
+      </p>
+      <div className="mt-3">
+        <Field label="Reason (at least 5 characters)" required>
+          {(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Block came with the ERP load; checked with the buyer, goods accepted" />}
+        </Field>
+      </div>
+      <ProblemBox error={release.error} />
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={reason.trim().length < 5} busy={release.isPending} onClick={() => release.mutate()}>Release payment block</Button>
       </div>
     </Dialog>
   );

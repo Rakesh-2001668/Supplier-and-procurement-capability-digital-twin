@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.054.001.02">
+  <BkToCstmrDbtCdtNtfctn>
+    <GrpHdr><MsgId>MSG-{{STMT}}</MsgId><CreDtTm>2027-03-03T09:00:00+05:30</CreDtTm></GrpHdr>
+    <Ntfctn>
+      <Id>{{STMT}}</Id>
+      <CreDtTm>2027-03-03T09:00:00+05:30</CreDtTm>
+      <Acct><Id><Othr><Id>50200011223399</Id></Othr></Id><Ccy>INR</Ccy></Acct>
+      <Ntry>
+        <NtryRef>NTF-{{STMT}}-1</NtryRef>
+        <Amt Ccy="INR">{{AMT1}}</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Sts>BOOK</Sts>
+        <BookgDt><Dt>2027-03-03</Dt></BookgDt>
+        <ValDt><Dt>2027-03-03</Dt></ValDt>
+        <AcctSvcrRef>HDFCNTF2027030300001</AcctSvcrRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>{{PAY1}}</EndToEndId><TxId>HDFCNTFTX0001</TxId></Refs>
+          <RmtInf><Ustrd>Payment {{PAY1}}</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+    </Ntfctn>
+  </BkToCstmrDbtCdtNtfctn>
+</Document>

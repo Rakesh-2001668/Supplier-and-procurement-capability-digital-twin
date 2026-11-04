@@ -24,7 +24,9 @@ def by_number(session: Session, model: Type, number: str, lock: bool = False):
 
 
 def by_ref(session: Session, model: Type, ref: str, lock: bool = False):
-    """Accept either a UUID or a human document number."""
+    """Accept either a UUID or a human document number (a ``%2F`` kept escaped by the invoice routes is a slash)."""
+    from app.pic.platform.http import unescape_ref
+    ref = unescape_ref(str(ref))
     try:
         obj = session.get(model, uuid.UUID(str(ref)), with_for_update=lock)
         if obj is not None:

@@ -58,7 +58,21 @@ INVENTORY_ACTIONS = {
     "INVENTORY_COUNT": {"check": ["company_code", "plant"]},
     "INVENTORY_RESERVE": {"check": ["company_code", "plant"]},
 }
-DEFAULT_POLICY["actions"].update(INVENTORY_ACTIONS)
+# Finance second pass (commands that had no ABAC check): capturing an invoice, resolving / rejecting / re-matching it, closing a posting period.
+FINANCE_ACTIONS = {
+    "INVOICE_CAPTURE": {"check": ["company_code"]},
+    "INVOICE_RESOLVE": {"check": ["company_code"]},
+    "PERIOD_CLOSE": {"check": ["company_code"]},
+}
+# Strategic sourcing second pass: creating an event is bound to the user's categories / plants / company codes; managing it (publish, close, open the
+# bids, disqualify, propose the award, export the comparison) to its category.
+SOURCING_ACTIONS = {
+    "SOURCING_CREATE": {"check": ["category", "plant", "company_code"]},
+    "SOURCING_MANAGE": {"check": ["category"]},
+    "SOURCING_EXPORT": {"check": ["category"]},
+}
+ADDED_ACTIONS = {**INVENTORY_ACTIONS, **FINANCE_ACTIONS, **SOURCING_ACTIONS}
+DEFAULT_POLICY["actions"].update(ADDED_ACTIONS)
 
 # Approval task kind -> ABAC action (workflow.complete calls ``guard_task``).
 TASK_ACTIONS = {
@@ -135,15 +149,39 @@ def policy_for(session, **scope: Optional[str]) -> dict:
         body = rules.resolve(session, "ABAC", **scope).body
     except Problem:
         return DEFAULT_POLICY
-    missing = {k: v for k, v in INVENTORY_ACTIONS.items() if k not in (body.get("actions") or {})}
+    missing = {k: v for k, v in ADDED_ACTIONS.items() if k not in (body.get("actions") or {})}
     return {**body, "actions": {**(body.get("actions") or {}), **missing}} if missing else body
+
+
+def read_scope(session, principal=None) -> dict:
+    """The dimensions a principal's attributes restrict for READS: {"company_code": [codes] | None, "plant": [plants] | None} (None =
+    unrestricted: no attribute, "*", an agent, mode OFF or AUDIT). The same attributes and the same rule ABAC as the command checks."""
+    principal = principal or session.info.get("principal")
+    out: dict = {"company_code": None, "plant": None}
+    if principal is None or principal.is_agent or principal.attributes.get("mfa_enrolment"):
+        return out
+    policy = policy_for(session)
+    if str(policy.get("mode", "ENFORCE")).upper() != "ENFORCE":
+        return out
+    attributes = _attributes(session, principal)
+    for dimension in out:
+        attribute = (policy.get("dimensions") or {}).get(dimension)
+        allowed = _allowed(attributes, attribute) if attribute else None
+        if allowed is not None and "*" not in allowed:
+            out[dimension] = [str(a) for a in allowed]
+    return out
 
 
 def _attributes(session, principal) -> dict:
     """Current attributes from the database (an administrator's change applies at once, not at the next sign-in); the token's
     attributes for principals without a user row."""
-    row = session.execute(select(AppUser.attributes).where(AppUser.id == principal.user_id)).scalar_one_or_none()
-    return dict(row) if row is not None else dict(principal.attributes or {})
+    from app.pic.platform import batch
+
+    def load():
+        row = session.execute(select(AppUser.attributes).where(AppUser.id == principal.user_id)).scalar_one_or_none()
+        return dict(row) if row is not None else dict(principal.attributes or {})
+
+    return batch.memo(session, ("abac-attributes", principal.user_id), load)
 
 
 # ---------------------------------------------------------------- enforcement
@@ -154,6 +192,8 @@ def authorize(session, principal, action: str, obj: Any = None, *, value_minor: 
     if principal is None or principal.is_agent or principal.attributes.get("mfa_enrolment"):
         return {"allowed": True, "enforced": False, "mode": "AGENT", "checked": [], "violations": [], "action": action}
     dims, value = dimensions_of(obj, value_minor=value_minor, company_code=company_code, plant=plant, category=category)
+    if value is not None and value_minor is None:
+        value = _in_company_currency(session, obj, dims.get("company_code"), value)
     policy = policy_for(session, company_code=dims.get("company_code"), plant=dims.get("plant"), category=dims.get("category"))
     result = evaluate(policy, _attributes(session, principal), action, dims, value)
     if result["allowed"]:
@@ -164,6 +204,31 @@ def authorize(session, principal, action: str, obj: Any = None, *, value_minor: 
     first = result["violations"][0]
     raise Problem(403, first["code"], "; ".join(describe(v) for v in result["violations"]), rule_ref="ABAC",
                   action=action, violations=[{k: v for k, v in x.items() if k != "allowed"} for x in result["violations"]])
+
+
+def _in_company_currency(session, obj: Any, company_code: Optional[str], value: int) -> int:
+    """The document value in the currency of its company code: an approval limit is a rupee amount, a document in dollars is compared at the exchange rate
+    fixed on it (``fx_rate``) or, before one is fixed, the rate valid on its date. Without a rate the document's own amount is compared."""
+    currency = (getattr(obj, "currency", None) or "").upper()
+    if not currency or obj is None:
+        return value
+    from decimal import ROUND_HALF_UP, Decimal
+    from app.pic.models import CompanyCode
+    from app.pic.platform import batch
+    home = ((batch.memo(session, ("company-currency", company_code), lambda: session.execute(select(CompanyCode.currency).where(CompanyCode.code == company_code)).scalar())
+             or "INR").upper() if company_code else "INR")
+    if currency == home:
+        return value
+    rate = getattr(obj, "fx_rate", None)
+    if rate is None:
+        from app.pic.platform import clock
+        from app.pic.services import spend_cube
+        on = getattr(obj, "invoice_date", None) or getattr(obj, "order_date", None) or clock.today()
+        found = spend_cube._rate(session, currency, home, on)
+        rate = found[0] if found else None
+    if rate is None:
+        return value
+    return int((Decimal(value) * Decimal(rate)).quantize(Decimal(1), ROUND_HALF_UP))
 
 
 def guard(session, action: str, obj: Any = None, **kwargs: Any) -> dict:

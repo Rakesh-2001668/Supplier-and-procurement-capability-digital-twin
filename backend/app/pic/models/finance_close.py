@@ -56,6 +56,7 @@ class TdsCertificate(TenantScoped, Base):
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="ACTIVE")
     note: Mapped[Optional[str]] = mapped_column(Text)
     revoked_reason: Mapped[Optional[str]] = mapped_column(Text)
+    max_base_minor: Mapped[Optional[int]] = mapped_column(BigInteger)  # amount cap of the certificate (migration 0020); beyond it the normal rate applies
 
 
 class BankStatementImport(TenantScoped, Base):
@@ -70,3 +71,43 @@ class BankStatementImport(TenantScoped, Base):
     credited: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     returned: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     result: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class TdsChallan(TenantScoped, Base):
+    """A tax deposit challan (ITNS 281) for TDS deducted in a quarter: BSR code of the bank branch, challan serial and deposit date identify it in the
+    tax department's records; the deposits are reconciled against the TDS deducted per section (migration 0020)."""
+    __tablename__ = "tds_challan"
+    __table_args__ = (UniqueConstraint("tenant_id", "bsr_code", "deposit_date", "challan_no"),
+                      Index("ix_tds_challan_quarter", "tenant_id", "company_code", "fiscal_year", "quarter"),
+                      CheckConstraint("amount_minor > 0", name="amount"), CheckConstraint("status IN ('RECORDED','VOID')", name="status"))
+    company_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    fiscal_year: Mapped[str] = mapped_column(String(7), nullable=False)
+    quarter: Mapped[str] = mapped_column(String(2), nullable=False)   # Q1..Q4 of the quarter the tax was deducted in
+    section: Mapped[str] = mapped_column(String(20), nullable=False)  # key of rule set TDS
+    challan_no: Mapped[str] = mapped_column(String(10), nullable=False)
+    bsr_code: Mapped[str] = mapped_column(String(7), nullable=False)
+    deposit_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="RECORDED")
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    void_reason: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class MsmeInterest(TenantScoped, Base):
+    """Interest owed to an MSME supplier for a payment made after its due date (MSMED Act s.16): one record per late payment, kept when the tenant
+    publishes the bank rate (rule MSME.bankRatePct); the ERP payload of the payment carries it (migration 0020)."""
+    __tablename__ = "msme_interest"
+    __table_args__ = (UniqueConstraint("tenant_id", "payment_id"), Index("ix_msme_interest_supplier", "tenant_id", "supplier_id"),
+                      CheckConstraint("status IN ('ACCRUED','WAIVED','SETTLED')", name="status"))
+    invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.invoice.id"), nullable=False)
+    payment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.payment.id"), nullable=False)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)
+    company_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    paid_on: Mapped[date] = mapped_column(Date, nullable=False)
+    days_late: Mapped[int] = mapped_column(Integer, nullable=False)
+    principal_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    rate_pct: Mapped[Decimal] = mapped_column(Numeric(7, 3), nullable=False)   # annual rate applied: interestMultiple x bank rate
+    interest_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="ACCRUED")
+    note: Mapped[Optional[str]] = mapped_column(Text)

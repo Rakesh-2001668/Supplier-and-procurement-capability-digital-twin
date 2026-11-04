@@ -67,7 +67,7 @@ Schema: migration `0003` adds 14 tables, each with forced row-level security and
 
 | Module | Status | What is still missing against the specification |
 |---|---|---|
-| M01 Spend & Category Intelligence | **Built (this release)** | ClickHouse cube for 50 M lines (Postgres serves the MVP volume); multi-currency normalisation in the cube is ready (`fx_rate`, `admin.convert`) but all current spend is INR |
+| M01 Spend & Category Intelligence | **Built (this release); second pass 4 Nov 2026: see `PIC_Spend_Cube_Analysis.md`** | ClickHouse cube for 50 M lines (Postgres serves the MVP volume); multi-currency normalisation in the cube is ready (`fx_rate`, `admin.convert`) but all current spend is INR |
 | M02 Demand Planning & MRP | **Built** + MRP-04 this release | ERP planned-order import adapter (AD-05) for tenants that run MRP in the ERP; gradient-boosted forecast model (exponential smoothing today) |
 | M03 Material & Supplier MDM | **Partial** | MDM-04 covers bank changes (dual approval, call-back, cooling-off); tax-ID and address changes through `supplier_master_change` are not built |
 | M04 Requisitioning & Guided Buying | **Partial** | cXML/OCI punch-out sessions; the Guided Buying Agent is the rules-based search (contract → catalogue → material → free text) and does not yet log agent runs |

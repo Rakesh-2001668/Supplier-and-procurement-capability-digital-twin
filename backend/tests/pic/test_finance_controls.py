@@ -40,13 +40,15 @@ class _Result:
 
 
 class _Session:
-    """Answers the three queries compute_tds makes: the rule set (none -> defaults), credit notes, earlier invoices of the supplier."""
+    """Answers the queries compute_tds makes: the rule set (none -> defaults), credit notes, advances recovered, earlier invoices of the supplier."""
 
     def __init__(self, prior_total=0, prior_taxed=0, credit=0):
         self.prior, self.credit = (prior_total, prior_taxed), credit
 
     def execute(self, statement):
         text = str(statement)
+        if "advance_recovery" in text:  # advances recovered from the bill: none (checked first: invoice.rule_set_version is a column of that query)
+            return SimpleNamespace(all=lambda: [])
         if "rule_set" in text:
             return _Result([])
         if "credit_note" in text:
