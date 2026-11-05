@@ -203,9 +203,15 @@ class SavingsLedgerEntry(TenantScoped, Base):
 class SpendLine(TenantScoped, Base):
     __tablename__ = "spend_line"
     __table_args__ = (
-        UniqueConstraint("tenant_id", "invoice_line_id"),
+        # One row per source line and document: the invoice line itself ('INVOICE', ref ''), each credit note line that reduces it
+        # ('CREDIT_NOTE', note number, negative amount) and each debit note line that adds to it ('DEBIT_NOTE', note number).
+        UniqueConstraint("tenant_id", "invoice_line_id", "document_type", "document_ref", name="uq_spend_line_invoice_line_document"),
+        CheckConstraint("document_type IN ('INVOICE','CREDIT_NOTE','DEBIT_NOTE')", name="document_type"),
+        # a line this large is a unit error; summed into the BIGINT cube it would stop the refresh for everyone (Rs 10 billion crore)
+        CheckConstraint("abs(amount_minor) <= 1000000000000000", name="amount_range"),
         # Cube refresh and drill-down paths (a period is the unit of incremental refresh).
         Index("ix_spend_line_tenant_period", "tenant_id", "period"),
+        Index("ix_spend_line_invoice_ref", "tenant_id", "invoice_ref"),
         Index("ix_spend_line_tenant_supplier_period", "tenant_id", "supplier_id", "period"),
         Index("ix_spend_line_tenant_category_period", "tenant_id", "category", "period"),
         # SPD-05 off-contract worklist: the largest off-contract lines without scanning the table.
@@ -240,3 +246,9 @@ class SpendLine(TenantScoped, Base):
     fx_date: Mapped[Optional[date]] = mapped_column(Date)
     amount_group_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
     price_variance_last_minor: Mapped[Optional[int]] = mapped_column(BigInteger)  # above the last price paid for the material
+    # Spend cube second pass (migration 0021): which document the line is (credit / debit notes are own signed lines in the period of
+    # the note), the date of that document (the FX rate and the fiscal period follow it) and the buyer of the order.
+    document_type: Mapped[str] = mapped_column(String(12), nullable=False, default="INVOICE", server_default="INVOICE")
+    document_ref: Mapped[str] = mapped_column(String(60), nullable=False, default="", server_default="")
+    document_date: Mapped[Optional[date]] = mapped_column(Date)
+    buyer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))

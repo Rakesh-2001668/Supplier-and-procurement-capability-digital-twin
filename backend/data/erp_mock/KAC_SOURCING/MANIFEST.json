@@ -1,0 +1,57 @@
+{
+  "axnSummary": {
+    "byState": {
+      "AWARDED": 3,
+      "CANCELLED": 1,
+      "CLOSED": 1,
+      "UNDER_EVALUATION": 1
+    },
+    "byType": {
+      "RFI": 1,
+      "RFP": 1,
+      "RFQ": 4
+    },
+    "events": 6
+  },
+  "client": "Kaveri Auto Components Pvt Ltd",
+  "currency": "INR",
+  "fictional": true,
+  "files": {
+    "event_plan_axn.json": {
+      "bytes": 1730,
+      "sha256": "48e710f56d1d1fe8a10d5cd6f2d49ce58a6ae2c5ff47c51400a64e3a9954427d"
+    },
+    "event_plan_kac.json": {
+      "bytes": 10592,
+      "sha256": "8e5c47ef2f65c9c7dae19ba08a366f71eec95d2d03f4f96e8226b3081fe05570"
+    },
+    "index_series.csv": {
+      "bytes": 13552,
+      "sha256": "e19f9a06429d8910fb861257f2773835db58a24d6371b7c47a8df3598f774220"
+    },
+    "should_cost_models.json": {
+      "bytes": 23422,
+      "sha256": "7dca5d4d485c5d398a493dde194c32ef8c3d6f65be6c66c5afa6147a7163beae"
+    }
+  },
+  "kacSummary": {
+    "byState": {
+      "AWARDED": 19,
+      "AWARD_PENDING": 3,
+      "CANCELLED": 4,
+      "CLOSED": 2,
+      "DRAFT": 3,
+      "OPEN": 3,
+      "PUBLISHED": 2,
+      "UNDER_EVALUATION": 4
+    },
+    "byType": {
+      "REVERSE_AUCTION": 3,
+      "RFI": 3,
+      "RFP": 5,
+      "RFQ": 29
+    },
+    "events": 40
+  },
+  "label": "MOCK sample data (sourcing_ops)"
+}

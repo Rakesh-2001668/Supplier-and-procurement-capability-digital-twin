@@ -5,10 +5,14 @@ import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, 
 import { Card, DataTable, Empty, Facts, Field, Kpi, Loading, Select } from '@/components/pic/ui';
 import { crore, inr } from '@/lib/pic/format';
 import { useApi } from '@/lib/pic/hooks';
+import { ForecastAccuracy } from './forecast-accuracy';
 import { period, periodRange, rupeeTick, SpendProblem } from './shared';
 
 type ForecastPoint = { period: string; actualMinor?: number; forecastMinor?: number; lowMinor?: number; highMinor?: number };
-type Series = { category: string; method: string; next12Minor: number; points: ForecastPoint[] };
+type Series = {
+  category: string; method: string; methodNote?: string; mapePct?: number | null; backtestFolds?: number; bandMethod?: string; candidatesMapePct?: Record<string, number>;
+  next12Minor: number; points: ForecastPoint[];
+};
 type SpendForecast = { history: [string, string]; horizon: string[]; series: Series[] };
 
 const ACTUAL = '#1A56DB';
@@ -34,7 +38,7 @@ function ForecastTooltip({ active, payload }: { active?: boolean; payload?: { pa
   );
 }
 
-/** SPD-09 spend forecast per category: Holt linear smoothing with an 80% band. */
+/** SPD-09 spend forecast per category: the best of three methods by back-test, with an 80% band, and its measured accuracy. */
 export function ForecastTab() {
   const [horizon, setHorizon] = useState('6');
   const [category, setCategory] = useState('');
@@ -101,7 +105,10 @@ export function ForecastTab() {
             </div>
             <div className="mt-4">
               <Facts items={[
-                ['Method', current.method],
+                ['Method', current.methodNote ?? current.method],
+                ['Back-test error (MAPE)', current.mapePct != null ? `${current.mapePct}% over ${current.backtestFolds ?? 0} folds` : 'not enough history'],
+                ['Candidates (MAPE)', current.candidatesMapePct && Object.keys(current.candidatesMapePct).length ? Object.entries(current.candidatesMapePct).map(([m, v]) => `${m} ${v}%`).join(' · ') : '–'],
+                ['80% band from', current.bandMethod === 'BACKTEST_P80' ? 'back-test errors' : 'residual spread (short history)'],
                 ['History', periodRange(data?.history)],
                 ['Horizon', data?.horizon.length ? `${period(data.horizon[0])} – ${period(data.horizon[data.horizon.length - 1])}` : '–'],
                 ['Categories forecast', String(series.length)],
@@ -120,6 +127,7 @@ export function ForecastTab() {
           </Card>
         </>
       )}
+      <ForecastAccuracy />
     </div>
   );
 }

@@ -3,15 +3,16 @@
 import { useEffect, useState } from 'react';
 import { Button, Dialog, Empty, Field, Input, Kpi, Loading, ProblemBox, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
-import { dateTime, inr, label } from '@/lib/pic/format';
+import { dateTime, inr, label, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import { useSourcingPolicy } from '../_lib';
 
 // ---------------------------------------------------------------- shapes (GET …/clarifications, GET …/auction)
 type Clarification = { seq: number; kind: 'QUESTION' | 'NOTICE'; question: string; answer: string | null; status: string; askedAt: string;
   answeredAt: string | null; askedBy?: { code: string; name: string } | null; mine?: boolean };
 type Board = { event: string; status: string; questionsCloseAt: string; open: boolean; openQuestions?: number; items: Clarification[] };
 export type AuctionSettings = { minDecrementPct: string; extensionMinutes: number; triggerMinutes: number; showRank: boolean; showBestPrice: boolean;
-  paymentTermsDays?: number | null; leadTimeDays?: number | null };
+  paymentTermsDays?: number | null; leadTimeDays?: number | null; ceilingMinor?: number | null };
 type LadderRow = { rank: number; supplier: string; name: string | null; priceMinor: number; submittedAt: string; bids: number };
 type AuctionBidRow = { id: string; supplier?: string; priceMinor: number; rankAtSubmit?: number; submittedAt: string; extendedClose: boolean };
 export type AuctionView = {
@@ -106,6 +107,7 @@ export function AuctionPanel({ path, status, canManage }: { path: string; status
   const query = useApi<AuctionView>(`${path}/auction`, { refetchInterval: live ? 3000 : undefined });
   const left = useCountdown(query.data, query.dataUpdatedAt);
   const [editing, setEditing] = useState(false);
+  const policy = useSourcingPolicy();
   if (query.isLoading) return <Loading />;
   if (query.error) return <ProblemBox error={query.error} />;
   const a = query.data;
@@ -119,13 +121,16 @@ export function AuctionPanel({ path, status, canManage }: { path: string; status
         <Kpi label="Best price / unit" value={inr(a.bestPriceMinor)} tone="good"
           hint={a.savingsVsBaselinePct ? `${a.savingsVsBaselinePct}% below baseline ${inr(a.baselineMinor)}` : a.baselineMinor ? `baseline ${inr(a.baselineMinor)}` : undefined} />
         <Kpi label="Bidders" value={`${a.bidders} / ${a.invited ?? '–'}`} hint={`${a.bids?.length ?? 0} bid(s)`} />
-        <Kpi label="Soft-close extensions" value={a.extensions} hint={a.scheduledCloseAt ? `scheduled close ${dateTime(a.scheduledCloseAt)}` : undefined} tone={a.extensions ? 'warn' : 'default'} />
+        <Kpi label="Soft-close extensions" value={`${a.extensions} / ${policy?.maxExtensions ?? 12}`} hint={a.scheduledCloseAt ? `scheduled close ${dateTime(a.scheduledCloseAt)}` : undefined} tone={a.extensions ? 'warn' : 'default'} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
         <p>
           Each new bid must be ≥ {s.minDecrementPct}% below the supplier&apos;s own last bid. A bid in the last {s.triggerMinutes} min extends the end by {s.extensionMinutes} min.
           Suppliers see {s.showRank ? 'their rank' : 'no rank'}{s.showBestPrice ? ' and the best price' : ', not the best price'}.
           {s.paymentTermsDays != null || s.leadTimeDays != null ? ` Fixed terms: ${s.paymentTermsDays ?? 'supplier'} days payment, ${s.leadTimeDays ?? 'twin'} days lead time.` : ''}
+          {s.ceilingMinor ? ` No bid may be above the ceiling of ${inr(s.ceilingMinor)} per unit.` : ' No ceiling price is set.'}
+          {` Soft-close extensions are capped at ${policy?.maxExtensions ?? 12} (SOURCING-POLICY), so the auction cannot run for ever.`}
+          {policy?.priceBand && ` A bid below ${Number(policy.priceBand.minVsBaseline) * 100}% or above ${Number(policy.priceBand.maxVsBaseline) * 100}% of the baseline is refused as implausible.`}
           {a.ruleSet && <span className="ml-1 font-mono text-[11px] text-slate-400">{a.ruleSet}</span>}
         </p>
         {canManage && status === 'DRAFT' && <Button onClick={() => setEditing(true)}>Auction settings</Button>}
@@ -183,12 +188,14 @@ function AuctionSettingsDialog({ path, settings, onClose }: { path: string; sett
     minDecrementPct: String(settings.minDecrementPct ?? ''), extensionMinutes: String(settings.extensionMinutes ?? ''),
     triggerMinutes: String(settings.triggerMinutes ?? ''), showRank: !!settings.showRank, showBestPrice: !!settings.showBestPrice,
     paymentTermsDays: settings.paymentTermsDays != null ? String(settings.paymentTermsDays) : '', leadTimeDays: settings.leadTimeDays != null ? String(settings.leadTimeDays) : '',
+    ceiling: settings.ceilingMinor ? String(settings.ceilingMinor / 100) : '',
   });
   const save = useCommand(() => api.put(`${path}/auction`, {
     minDecrementPct: draft.minDecrementPct, extensionMinutes: Number(draft.extensionMinutes), triggerMinutes: Number(draft.triggerMinutes),
     showRank: draft.showRank, showBestPrice: draft.showBestPrice,
     ...(draft.paymentTermsDays !== '' ? { paymentTermsDays: Number(draft.paymentTermsDays) } : {}),
     ...(draft.leadTimeDays !== '' ? { leadTimeDays: Number(draft.leadTimeDays) } : {}),
+    ...(draft.ceiling !== '' ? { ceilingMinor: rupeesToMinor(draft.ceiling) } : {}),
   }), { success: 'Auction settings saved – they are frozen when the event is published', onSuccess: onClose });
   const set = (patch: Partial<typeof draft>) => setDraft((d) => ({ ...d, ...patch }));
   return (
@@ -200,6 +207,7 @@ function AuctionSettingsDialog({ path, settings, onClose }: { path: string; sett
         <Field label="Extension (min)">{(id) => <Input id={id} type="number" min="0" value={draft.extensionMinutes} onChange={(e) => set({ extensionMinutes: e.target.value })} />}</Field>
         <Field label="Fixed payment terms (days)" hint="Empty: supplier master terms">{(id) => <Input id={id} type="number" min="0" value={draft.paymentTermsDays} onChange={(e) => set({ paymentTermsDays: e.target.value })} />}</Field>
         <Field label="Fixed lead time (days)" hint="Empty: supplier twin lead time">{(id) => <Input id={id} type="number" min="0" value={draft.leadTimeDays} onChange={(e) => set({ leadTimeDays: e.target.value })} />}</Field>
+        <Field label="Ceiling price per unit (₹)" hint="No bid above it. Empty: no ceiling. The extension cap and the price band come from SOURCING-POLICY.">{(id) => <Input id={id} type="number" min="0" step="0.01" value={draft.ceiling} onChange={(e) => set({ ceiling: e.target.value })} />}</Field>
       </div>
       <div className="mt-3 space-y-1 text-sm">
         <label className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4" checked={draft.showRank} onChange={(e) => set({ showRank: e.target.checked })} /> Suppliers see their rank</label>

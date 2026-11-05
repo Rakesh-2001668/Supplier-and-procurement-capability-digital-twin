@@ -16,7 +16,7 @@ from app.pic.platform import clock
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row
-from app.pic.services import finance_scope, forecasting, payables, risk, savings, spend
+from app.pic.services import finance_scope, forecasting, payables, risk, savings, spend, spend_scope, spend_workflow
 from app.pic.services.common import by_ref, supplier_ref
 
 router = APIRouter(prefix="/v1")
@@ -66,14 +66,11 @@ def _csv(value: Optional[str]) -> list:
 
 
 def _cube_filter(period_from, period_to, category, supplier, parent, plant, company_code, cost_centre, wbs, cost_object, currency, source_system,
-                 source, contracted, addressable, maverick) -> spend.CubeFilter:
-    for label, value in (("period_from", period_from), ("period_to", period_to)):
-        if value and not (len(value) == 7 and value[4] == "-" and value[:4].isdigit() and value[5:].isdigit()):
-            raise Problem(422, "INVALID_PERIOD", f"{label} must be YYYY-MM")
+                 source, contracted, addressable, maverick, buyer=None) -> spend.CubeFilter:
     return spend.CubeFilter(period_from=period_from, period_to=period_to, categories=_csv(category), suppliers=_csv(supplier), parents=_csv(parent),
                             plants=_csv(plant), company_codes=_csv(company_code), cost_centres=_csv(cost_centre), wbs=_csv(wbs),
                             cost_objects=_csv(cost_object), currencies=_csv(currency), source_systems=_csv(source_system), sources=_csv(source),
-                            contracted=contracted, addressable=addressable, maverick=maverick)
+                            contracted=contracted, addressable=addressable, maverick=maverick, buyers=_csv(buyer)).validate()
 
 
 @router.get("/spend/analysis", tags=["M01 Spend"])
@@ -85,11 +82,11 @@ def spend_analysis(dims: str = Query("category", description="Comma-separated: "
                    company_code: Optional[str] = None, cost_centre: Optional[str] = None, wbs: Optional[str] = None,
                    cost_object: Optional[str] = None, currency: Optional[str] = None, source_system: Optional[str] = None,
                    source: Optional[str] = None, contracted: Optional[bool] = None, addressable: Optional[bool] = None,
-                   maverick: Optional[bool] = None, limit: int = Query(1000, ge=1, le=5000), commitments: bool = False,
-                   p: Principal = Depends(require("spend:read"))):
+                   maverick: Optional[bool] = None, buyer: Optional[str] = Query(None, description="Buyer e-mail(s)"),
+                   limit: int = Query(1000, ge=1, le=5000), commitments: bool = False, p: Principal = Depends(require("spend:read"))):
     """The spend cube (BP M01 7.2): any dimensions, filters and measures, served from the cube summary tables."""
     flt = _cube_filter(period_from, period_to, category, supplier, parent, plant, company_code, cost_centre, wbs, cost_object, currency,
-                       source_system, source, contracted, addressable, maverick)
+                       source_system, source, contracted, addressable, maverick, buyer)
     with uow(p) as s:
         return spend.cube(s, _csv(dims), flt, limit=limit, include_commitments=commitments)
 
@@ -107,7 +104,7 @@ def spend_commitments(dims: str = "category", category: Optional[str] = None, su
 
 
 @router.get("/spend/cube-status", tags=["M01 Spend"])
-def spend_cube_status(p: Principal = Depends(require("spend:read"))):
+def spend_cube_status(p: Principal = Depends(require_any("spend:read", "admin:integration", "admin:rules"))):
     """When the cube summaries were last built, how long it took and which periods still wait for a refresh."""
     from app.pic.services import spend_cube
     with uow(p) as s:
@@ -138,54 +135,59 @@ def refresh_spend_cube(body: CubeRefreshIn, p: Principal = Depends(require("admi
 def maverick_hits(status: Optional[str] = "OPEN", rule: Optional[str] = None, limit: int = Query(200, le=500),
                   p: Principal = Depends(require("spend:read"))):
     with uow(p) as s:
-        query = select(MaverickHit).order_by(MaverickHit.amount_minor.desc()).limit(limit)
+        query = spend._scoped_to_line(s, select(MaverickHit).order_by(MaverickHit.amount_group_minor.desc().nulls_last(), MaverickHit.number).limit(limit),
+                                      MaverickHit.spend_line_id)
         if status:
             query = query.where(MaverickHit.status == status)
         if rule:
             query = query.where(MaverickHit.rule_code == rule)
         suppliers = {x.id: x.code for x in s.execute(select(Supplier)).scalars()}
-        hits = [row(h, extra={"supplier": suppliers.get(h.supplier_id)}) for h in s.execute(query).scalars()]
+        hits = [row(h, extra={"supplier": suppliers.get(h.supplier_id), "lifecycle": spend_workflow.lifecycle(h)}) for h in s.execute(query).scalars()]
         from app.pic.models import MaverickRule
         return {"rules": [row(r) for r in s.execute(select(MaverickRule).order_by(MaverickRule.code)).scalars()], "hits": hits}
 
 
 class DispositionIn(BaseModel):
     disposition: str = Field(pattern="^(ACCEPTED_EXCEPTION|RECOVERY|POLICY_BREACH|FALSE_POSITIVE)$")
-    comment: str
+    comment: str = Field(max_length=2000)
+    reason_code: Optional[str] = Field(default=None, max_length=30, description="Required for ACCEPTED_EXCEPTION and FALSE_POSITIVE: " + ", ".join(spend.REASON_CODES))
 
 
 @router.post("/spend/maverick-hits/{hit_id}/disposition", tags=["M01 Spend"])
 def dispose_hit(hit_id: uuid.UUID, body: DispositionIn, p: Principal = Depends(require("spend:read"))):
     with uow(p) as s:
-        return row(spend.dispose(s, _get(s, MaverickHit, hit_id, "Maverick hit"), body.disposition, body.comment))
+        return row(spend.dispose(s, _get(s, MaverickHit, hit_id, "Maverick hit"), body.disposition, body.comment, reason_code=body.reason_code))
 
 
 @router.get("/spend/classification-reviews", tags=["M01 Spend"])
 def classification_reviews(status: str = "OPEN", p: Principal = Depends(require_any("spend:read", "mdm:request"))):
     with uow(p) as s:
         from app.pic.models import TaxonomyNode
-        reviews = s.execute(select(ClassificationReview).where(ClassificationReview.status == status)
-                            .order_by(ClassificationReview.confidence)).scalars().all()
+        reviews = s.execute(spend._scoped_to_line(s, select(ClassificationReview).where(ClassificationReview.status == status)
+                                                  .order_by(ClassificationReview.confidence, ClassificationReview.id), ClassificationReview.spend_line_id)).scalars().all()
         return {"categories": [{"code": n.code, "name": n.name} for n in s.execute(select(TaxonomyNode).where(TaxonomyNode.level == 3)
                                                                                    .order_by(TaxonomyNode.code)).scalars()],
                 "reviews": [row(r) for r in reviews]}
 
 
 class ReviewDecisionIn(BaseModel):
-    category: str
-    comment: Optional[str] = None
+    category: str = Field(max_length=40)
+    comment: Optional[str] = Field(default=None, max_length=2000)
+    reason: Optional[str] = Field(default=None, max_length=500)
+    learn_keyword: Optional[str] = Field(default=None, max_length=40, description="Teach the classifier this word for the chosen category")
 
 
 @router.post("/spend/classification-reviews/{review_id}/decision", tags=["M01 Spend"])
 def decide_review(review_id: uuid.UUID, body: ReviewDecisionIn, p: Principal = Depends(require_any("spend:read", "mdm:request"))):
     with uow(p) as s:
-        return row(spend.decide_review(s, _get(s, ClassificationReview, review_id, "Classification review"), body.category, body.comment))
+        return row(spend.decide_review(s, _get(s, ClassificationReview, review_id, "Classification review"), body.category, body.comment,
+                                       learn_keyword=body.learn_keyword, reason=body.reason))
 
 
 @router.get("/category-plans", tags=["M01 Spend"])
 def category_plans(p: Principal = Depends(require("spend:read"))):
     with uow(p) as s:
-        return [row(c) for c in s.execute(select(CategoryPlan).order_by(CategoryPlan.spend_minor.desc())).scalars()]
+        return [row(c) for c in s.execute(select(CategoryPlan).order_by(CategoryPlan.spend_minor.desc(), CategoryPlan.number)).scalars() if spend_scope.allows_category(s, c.category)]
 
 
 class PlanGenerateIn(BaseModel):

@@ -64,14 +64,7 @@ FINANCE_ACTIONS = {
     "INVOICE_RESOLVE": {"check": ["company_code"]},
     "PERIOD_CLOSE": {"check": ["company_code"]},
 }
-# Strategic sourcing second pass: creating an event is bound to the user's categories / plants / company codes; managing it (publish, close, open the
-# bids, disqualify, propose the award, export the comparison) to its category.
-SOURCING_ACTIONS = {
-    "SOURCING_CREATE": {"check": ["category", "plant", "company_code"]},
-    "SOURCING_MANAGE": {"check": ["category"]},
-    "SOURCING_EXPORT": {"check": ["category"]},
-}
-ADDED_ACTIONS = {**INVENTORY_ACTIONS, **FINANCE_ACTIONS, **SOURCING_ACTIONS}
+ADDED_ACTIONS = {**INVENTORY_ACTIONS, **FINANCE_ACTIONS}
 DEFAULT_POLICY["actions"].update(ADDED_ACTIONS)
 
 # Approval task kind -> ABAC action (workflow.complete calls ``guard_task``).

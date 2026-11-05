@@ -14,6 +14,7 @@ from app.pic.api import erp_ai_ops  # noqa: E402  (wave 1 engineer F: ERP sync, 
 from app.pic.api import admin_enterprise  # noqa: E402  (M13 enterprise administration: organisation, users, roles, templates)
 from app.pic.api import finance  # noqa: E402  (M10 finance completion: periods, TDS, bank results, payment proposal)
 from app.pic.api import inventory  # noqa: E402  (M09 inventory: stock reads, stock postings, physical inventory, reservations)
+from app.pic.api import spend_ops  # noqa: E402  (M01 spend second pass: analytics, drill, export, quality, steward queue, maverick lifecycle, plans)
 from app.pic.platform import errors, http
 
 
@@ -31,3 +32,4 @@ def install(app: FastAPI) -> None:
     app.include_router(admin_enterprise.router)
     app.include_router(finance.router)
     app.include_router(inventory.router)
+    app.include_router(spend_ops.router)

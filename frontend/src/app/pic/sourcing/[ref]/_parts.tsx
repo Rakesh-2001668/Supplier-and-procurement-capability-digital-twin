@@ -1,17 +1,16 @@
 'use client';
 
-import { Lock } from 'lucide-react';
-import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
-import { Button, DataTable, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
+import { Button, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, ApiError } from '@/lib/pic/api';
-import { dateTime, inr, label, qty } from '@/lib/pic/format';
-import { useApi, useCommand } from '@/lib/pic/hooks';
+import { inr, label, qty } from '@/lib/pic/format';
+import { useApi } from '@/lib/pic/hooks';
+import { CompareRow, Comparison, ifMatchOptions, useEventCommand } from '../_lib';
 
-// ---------------------------------------------------------------- shapes (GET /sourcing/events/{ref}, GET …/bids, POST …/scenarios)
+// ---------------------------------------------------------------- shapes (GET /sourcing/events/{ref}, POST …/scenarios)
 export type EventLine = { id: string; line_no: number; description: string; plant: string; annual_qty: string; monthly_qty: string; uom: string;
-  requisition_id: string | null; pr_line_no: number | null; lot_code?: string | null; baseline_price_minor?: number | null; requisition?: string | null };
-export type Criterion = { id: string; code: string; name: string; weight: number; data_source?: string };
+  requisition_id: string | null; pr_line_no: number | null; lot_code?: string | null; baseline_price_minor?: number | null; requisition?: string | null; need_date?: string | null };
+export type Criterion = { id: string; code: string; name: string; weight: number; data_source?: string; min_score?: string | number | null };
 export type Invitee = { id: string; code: string; name: string; categoryStatus: string; waiver: string | null };
 export type BidMeta = { supplier: string; round: number; status: string; submittedAt: string; hash: string };
 export type ScenarioRaw = Record<string, unknown> & { id: string; kind: string; feasible: boolean; allocations: Allocation[]; explanation: Record<string, unknown> | null };
@@ -21,27 +20,27 @@ export type AllocLine = { line: number; eventLineId: string; lot: string | null;
 export type Allocation = { supplier: string; supplierId: string; share: string; monthlyQty?: string; annualQty?: string | null; priceMinor: number | null;
   tcoMinor?: number; valueMinor?: number; lines?: AllocLine[] };
 export type Scenario = { id: string; kind: string; feasible: boolean; allocations: Allocation[]; weightedPriceMinor: number | null;
-  weightedTcoMinor: number | null; annualSavingsMinor: number | null; explanation: Record<string, unknown> | null };
+  weightedTcoMinor: number | null; annualSavingsMinor: number | null; riskScore: number | null; superseded: string | null; explanation: Record<string, unknown> | null };
+export type AwardAuthority = { valueMinor: number; chain: string[]; bandChain: string[]; approvalAboveMinor: number; rule: string };
+export type AwardException = { code: string; detail: string };
 export type AwardDecision = { id: string; scenario_id: string; status: string; rationale: string | null; conflict_declarations: { user: string; declaration: string }[];
-  annual_value_minor: number; rule_set_version: string; created_at: string };
+  annual_value_minor: number; rule_set_version: string; created_at: string; authority?: AwardAuthority | null; exceptions?: AwardException[]; regret_sent_at?: string | null };
 export type ShouldCost = { model: string; material: string; conversion: string; tooling: string; packaging: string; subtotal: string;
   overheadMarginPct: string; unitCost: string; unitCostMinor: number };
+export type BudgetCheck = { outcome: string; fiscalYear?: string; plan?: string; mode?: string; budgetMinor?: number; committedMinor?: number; eventEstimateMinor?: number;
+  incrementalMinor?: number; projectedMinor?: number; usedPct?: string; justification?: string };
 export type SourcingEvent = {
   id: string; number: string; type: string; title: string; category: string; status: string; round: number; weights_locked: boolean; owner_id?: string;
   published_at: string | null; close_at: string; closed_at: string | null; unsealed_at: string | null; baseline_price_minor: number | null;
   baseline_method: string | null; should_cost: ShouldCost | null; constraints: ({ max_suppliers?: number; max_share?: string; min_share?: string } & Record<string, unknown>) | null;
-  tco_params: Record<string, string | number> | null; savings_target_pct: string | null; bundle?: { kind: string; ref: string | null; requisitions: string[]; sourceLines: number } | null;
+  tco_params: Record<string, unknown> | null; savings_target_pct: string | null; bundle?: { kind: string; ref: string | null; requisitions: string[]; sourceLines: number } | null;
   auction?: Record<string, unknown> | null; auction_ends_at?: string | null;
+  currency?: string; scoring_method?: string; purpose_code?: string | null; need_date?: string | null; budget_check?: BudgetCheck | null; budget_justification?: string | null;
+  clarification_close_at?: string | null; reference_date?: string | null; min_bidders?: number | null; competitive?: boolean | null;
+  opening?: { required?: boolean; round?: number; openers?: string[] } | null; template_code?: string | null; cloned_from?: string | null;
+  rule_versions?: Record<string, string> | null; open_at?: string | null;
   lines: EventLine[]; criteria: Criterion[]; invitees: Invitee[]; bids: BidMeta[]; scenarios: ScenarioRaw[]; awardDecisions: AwardDecision[];
 };
-export type MatrixLine = { line: number; lot: string | null; priceMinor: number; tcoMinor: number; leadTimeDays: number; paymentTermsDays: number;
-  verifiedCapacityPerMonth: string | null; weightedScore?: string };
-export type MatrixRow = { supplier: string; supplierId: string; round: number; bidId: string; priceMinor: number; tcoMinor: number;
-  tco?: Record<string, number>; leadTimeDays: number; paymentTermsDays: number; verifiedCapacityPerMonth: string | null;
-  lateDeliveryProb: string | null; shouldCostDeltaMinor: number | null; scores?: Record<string, string>; weightedScore?: string;
-  basis?: 'UNIT' | 'ANNUAL_VALUE'; coverage?: { bid: number; of: number }; complete?: boolean; lines?: MatrixLine[];
-  lots?: { lot: string; discountPct: string; allOrNothing: boolean }[];
-  autoScores?: Record<string, { score: string; source: string; noData: boolean; inputs: Record<string, unknown> }> };
 export type LineBid = { supplier: string; rank: number; priceMinor: number; tcoMinor: number; leadTimeDays: number; paymentTermsDays: number;
   verifiedCapacityPerMonth: string | null; weightedScore?: string };
 export type LineMatrix = { line: number; description: string; lot: string | null; uom: string; annualQty: string; monthlyQty: string; baselineMinor: number | null; bids: LineBid[] };
@@ -49,9 +48,12 @@ export type LineMatrix = { line: number; description: string; lot: string | null
 /** Persisted scenarios come back snake_case on the event, fresh ones camelCase from POST …/scenarios. */
 export function normaliseScenario(s: ScenarioRaw): Scenario {
   const pick = (a: string, b: string) => (s[a] ?? s[b] ?? null) as number | null;
-  return { id: s.id, kind: s.kind, feasible: s.feasible, allocations: s.allocations ?? [], explanation: s.explanation,
+  const explanation = s.explanation as Record<string, unknown> | null;
+  const by = explanation?.supersededBy;
+  return { id: s.id, kind: s.kind, feasible: s.feasible, allocations: s.allocations ?? [], explanation,
     weightedPriceMinor: pick('weightedPriceMinor', 'weighted_price_minor'), weightedTcoMinor: pick('weightedTcoMinor', 'weighted_tco_minor'),
-    annualSavingsMinor: pick('annualSavingsMinor', 'annual_savings_minor') };
+    annualSavingsMinor: pick('annualSavingsMinor', 'annual_savings_minor'), riskScore: pick('riskScore', 'risk_score'),
+    superseded: explanation?.supersededAt ? String(by ?? 'rebuilt') : null };
 }
 
 export function toLocalInput(d: Date) {
@@ -59,117 +61,9 @@ export function toLocalInput(d: Date) {
 }
 
 const pct = (v: string | number | null | undefined, digits = 0) => (v === null || v === undefined || v === '' ? '–' : `${(Number(v) * 100).toFixed(digits)}%`);
-const TCO_PARTS: [string, string][] = [['price', 'Price'], ['freight', 'Freight'], ['duty', 'Duty'], ['packaging', 'Packaging'],
-  ['carrying', 'Inventory carrying (lead time)'], ['quality', 'Quality cost (PPM × CoPQ)'], ['paymentTermValue', 'Payment-term value']];
-
-// ---------------------------------------------------------------- bids: sealed metadata + evaluation matrix
-export function BidsPanel({ event, sealed, requested, onRequest, matrix, loading, error }: {
-  event: SourcingEvent; sealed: boolean; requested: boolean; onRequest: () => void; matrix?: MatrixRow[]; loading: boolean; error: ApiError | null;
-}) {
-  const manual = event.criteria.filter((c) => c.code !== 'PRICE_TCO');
-  const bestScore = matrix?.length ? Math.max(...matrix.map((m) => Number(m.weightedScore ?? 0))) : null;
-  const multi = event.lines.length > 1;
-  return (
-    <div className="space-y-5">
-      <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Bid receipts (metadata only)</h3>
-        <DataTable<BidMeta & Record<string, unknown>> rows={event.bids.map((b) => ({ ...b, id: `${b.supplier}-${b.round}` }))} empty="No bids received yet"
-          columns={[
-            { key: 'supplier', header: 'Supplier' },
-            { key: 'round', header: 'Round', align: 'right' },
-            { key: 'status', header: 'Status', render: (b) => <StatusChip status={b.status as string} /> },
-            { key: 'submittedAt', header: 'Submitted', render: (b) => dateTime(b.submittedAt as string) },
-            { key: 'hash', header: 'Sealed payload hash (SHA-256)', render: (b) => <span className="font-mono text-[11px] text-slate-500" title={b.hash as string}>{(b.hash as string).slice(0, 16)}…</span> },
-          ]} />
-        <p className="mt-1 text-xs text-slate-500">Prices are never shown here. The hash proves the bid content was not changed between submission and unsealing.</p>
-      </div>
-
-      <div>
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Evaluation matrix</h3>
-          {!requested && <Button onClick={onRequest}>View bids</Button>}
-        </div>
-        {!requested ? (
-          <p className="text-sm text-slate-600">{sealed ? `Bids are sealed until ${dateTime(event.close_at)}. Any attempt to open them before close is blocked and written to the audit trail.` : 'Load the TCO evaluation matrix of the unsealed bids.'}</p>
-        ) : loading ? <Loading /> : error ? (error.status === 423 ? <SealedLock error={error} closeAt={event.close_at} /> : <ProblemBox error={error} />) : !matrix?.length ? (
-          <Empty title="No unsealed bids" hint="No supplier submitted a bid in this round." />
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th scope="col" className="px-3 py-2 text-left">Supplier</th>
-                  <th scope="col" className="px-3 py-2 text-right">{multi ? 'Annual price' : 'Price'}</th>
-                  <th scope="col" className="px-3 py-2 text-right">{multi ? 'Annual TCO' : 'TCO / unit'}</th>
-                  <th scope="col" className="px-3 py-2 text-right">Lead time</th>
-                  <th scope="col" className="px-3 py-2 text-right">Terms</th>
-                  <th scope="col" className="px-3 py-2 text-right">Verified capacity / month</th>
-                  <th scope="col" className="px-3 py-2 text-right">Late prob.</th>
-                  <th scope="col" className="px-3 py-2 text-right">vs should-cost</th>
-                  {['PRICE_TCO', ...manual.map((c) => c.code)].map((c) => <th key={c} scope="col" className="px-3 py-2 text-right">{c.replace(/_/g, ' ')}</th>)}
-                  <th scope="col" className="px-3 py-2 text-right">Weighted</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
-                {matrix.map((m, i) => (
-                  <tr key={m.bidId} className="align-top">
-                    <td className="px-3 py-2">
-                      <Link href={`/pic/suppliers/${encodeURIComponent(m.supplier)}`} className="font-medium text-[#1A56DB] hover:underline">{m.supplier}</Link>
-                      <span className="ml-1 text-xs text-slate-500">round {m.round}</span>
-                      <div className="mt-0.5 flex flex-wrap gap-1">
-                        {i === 0 && <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-800">Lowest TCO</span>}
-                        {multi && m.coverage && <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${m.complete ? 'bg-slate-100 text-slate-700' : 'bg-amber-50 text-amber-800'}`}>{m.coverage.bid}/{m.coverage.of} lines</span>}
-                        {m.lots?.map((l) => <span key={l.lot} className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800" title="Bundle terms of the lot">
-                          lot {l.lot}{Number(l.discountPct) > 0 ? ` −${Number(l.discountPct)}%` : ''}{l.allOrNothing ? ' all-or-nothing' : ''}</span>)}
-                        {bestScore !== null && Number(m.weightedScore ?? 0) === bestScore && <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-blue-800">Best score</span>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{inr(m.priceMinor)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      <details>
-                        <summary className="cursor-pointer font-semibold">{inr(m.tcoMinor)}</summary>
-                        <dl className="mt-1 space-y-0.5 text-left text-xs text-slate-600">
-                          {TCO_PARTS.filter(([k]) => m.tco?.[k] !== undefined).map(([k, name]) => (
-                            <div key={k} className="flex justify-between gap-3"><dt>{name}</dt><dd className="tabular-nums">{inr(m.tco?.[k])}</dd></div>
-                          ))}
-                          {multi && m.lines?.map((l) => (
-                            <div key={l.line} className="flex justify-between gap-3"><dt>Line {l.line}{l.lot ? ` (lot ${l.lot})` : ''}</dt><dd className="tabular-nums">{inr(l.tcoMinor)} / unit</dd></div>
-                          ))}
-                        </dl>
-                      </details>
-                    </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{m.leadTimeDays} d</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{m.paymentTermsDays} d</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{qty(m.verifiedCapacityPerMonth)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{pct(m.lateDeliveryProb)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${m.shouldCostDeltaMinor && m.shouldCostDeltaMinor > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                      {m.shouldCostDeltaMinor === null ? '–' : `${m.shouldCostDeltaMinor > 0 ? '+' : ''}${inr(m.shouldCostDeltaMinor)}`}
-                    </td>
-                    {['PRICE_TCO', ...manual.map((c) => c.code)].map((c) => (
-                      <td key={c} className="px-3 py-2 text-right tabular-nums" title={m.autoScores?.[c] ? `From ${label(m.autoScores[c].source)} data at close${m.autoScores[c].noData ? ' – no data, neutral score' : ''}` : undefined}>
-                        {m.scores?.[c] ?? '–'}{m.autoScores?.[c] && <span className="ml-1 text-[10px] uppercase text-slate-400">{m.autoScores[c].noData ? 'no data' : 'data'}</span>}
-                      </td>
-                    ))}
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums">{m.weightedScore ?? '–'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="border-t border-slate-100 px-3 py-2 text-xs text-slate-500">
-              TCO = price + freight + duty + packaging + carrying cost of lead time + quality cost (twin PPM) − value of payment terms. Capacity is the lower of the offer and the digital twin&apos;s verified free capacity.
-              Criterion scores are averages across evaluators; PRICE_TCO = best TCO ÷ this TCO × 100{multi ? ' per line, weighted by line value (a line without a bid scores 0)' : ''}.
-              Criteria marked “data” are scored from the scorecard, ESG assessment or risk signals at close and frozen on the bid.
-            </p>
-          </div>
-        )}
-      </div>
-      {requested && !sealed && multi && <LineMatrixPanel event={event} />}
-    </div>
-  );
-}
 
 /** The evaluation matrix by line: every bid on each line, ranked by TCO. */
-function LineMatrixPanel({ event }: { event: SourcingEvent }) {
+export function LineMatrixPanel({ event }: { event: SourcingEvent }) {
   const lines = useApi<LineMatrix[]>(`/sourcing/events/${encodeURIComponent(event.number)}/line-matrix`);
   if (lines.isLoading) return <Loading />;
   if (lines.error) return <ProblemBox error={lines.error} />;
@@ -178,7 +72,7 @@ function LineMatrixPanel({ event }: { event: SourcingEvent }) {
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">By line and lot</h3>
       <div className="space-y-3">
         {(lines.data ?? []).map((l) => (
-          <div key={l.line} className="rounded-lg border border-slate-200">
+          <div key={l.line} className="overflow-x-auto rounded-lg border border-slate-200">
             <p className="border-b border-slate-100 bg-slate-50 px-3 py-2 text-sm">
               <span className="font-mono text-xs text-slate-500">Line {l.line}</span> <span className="font-medium">{l.description}</span>
               {l.lot && <span className="ml-2 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">lot {l.lot}</span>}
@@ -186,8 +80,8 @@ function LineMatrixPanel({ event }: { event: SourcingEvent }) {
             </p>
             {l.bids.length === 0 ? <p className="px-3 py-2 text-sm text-amber-800">Nobody bid this line – it cannot be awarded.</p> : (
               <table className="min-w-full text-sm">
-                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-1">#</th><th className="px-3 py-1">Supplier</th><th className="px-3 py-1 text-right">Price</th>
-                  <th className="px-3 py-1 text-right">TCO / unit</th><th className="px-3 py-1 text-right">Lead time</th><th className="px-3 py-1 text-right">Capacity / month</th><th className="px-3 py-1 text-right">Score</th></tr></thead>
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500"><tr><th scope="col" className="px-3 py-1">#</th><th scope="col" className="px-3 py-1">Supplier</th><th scope="col" className="px-3 py-1 text-right">Price</th>
+                  <th scope="col" className="px-3 py-1 text-right">TCO / unit</th><th scope="col" className="px-3 py-1 text-right">Lead time</th><th scope="col" className="px-3 py-1 text-right">Capacity / month</th><th scope="col" className="px-3 py-1 text-right">Score</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">{l.bids.map((b) => (
                   <tr key={b.supplier}><td className="px-3 py-1 tabular-nums">{b.rank}</td><td className="px-3 py-1 font-medium">{b.supplier}</td><td className="px-3 py-1 text-right tabular-nums">{inr(b.priceMinor)}</td>
                     <td className="px-3 py-1 text-right tabular-nums">{inr(b.tcoMinor)}</td><td className="px-3 py-1 text-right tabular-nums">{b.leadTimeDays} d</td>
@@ -202,45 +96,42 @@ function LineMatrixPanel({ event }: { event: SourcingEvent }) {
   );
 }
 
-function SealedLock({ error, closeAt }: { error: ApiError; closeAt: string }) {
-  return (
-    <div role="alert" className="flex gap-3 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-800">
-      <Lock className="mt-0.5 h-5 w-5 shrink-0 text-slate-600" aria-hidden />
-      <div>
-        <p className="font-semibold">Bids are sealed</p>
-        <p className="mt-0.5">{error.problem.detail ?? `Bids stay sealed until ${dateTime(closeAt)}.`}</p>
-        <p className="mt-1 text-xs text-slate-600">
-          Sealed bidding keeps every supplier&apos;s price confidential until the close time, so nobody can steer the result. This access attempt has been logged in the audit trail
-          {error.problem.ruleRef ? ` (rule ${error.problem.ruleRef})` : ''}. The matrix opens automatically once the event is closed.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------- award scenarios side by side
-export function ScenariosPanel({ event, scenarios, canAward, onAward }: { event: SourcingEvent; scenarios: Scenario[]; canAward: boolean; onAward: (id: string) => void }) {
+export function ScenariosPanel({ event, scenarios, canAward, canManage, onAward, onCustom }: {
+  event: SourcingEvent; scenarios: Scenario[]; canAward: boolean; canManage: boolean; onAward: (id: string) => void; onCustom: () => void;
+}) {
   const line = event.lines[0];
   const multi = event.lines.length > 1;
   return (
     <div className="space-y-5">
+      {canManage && event.status === 'UNDER_EVALUATION' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={onCustom}>Enter a custom split</Button>
+          <p className="text-xs text-slate-500">A manual split by percentage or monthly quantity per supplier, checked against capacity, MOQ, share bounds and the risk caps. The shares of each line must add up to exactly 100 %.</p>
+        </div>
+      )}
       {!scenarios.length ? (
-        <Empty title="No award scenarios yet" hint="After close, build scenarios to compare lowest cost, best value and the capacity-constrained optimum." />
+        <Empty title="No award scenarios yet" hint="After the opening, build scenarios to compare lowest cost, best value and the capacity-constrained optimum." />
       ) : (
         <div className="grid gap-4 lg:grid-cols-3">
           {scenarios.map((s) => {
             const decision = event.awardDecisions.find((d) => d.scenario_id === s.id);
+            const violations = (s.explanation?.violations as string[] | undefined) ?? [];
             return (
-              <article key={s.id} className={`flex flex-col rounded-xl border p-4 ${s.feasible ? 'border-slate-200' : 'border-red-200 bg-red-50/30'}`}>
+              <article key={s.id} aria-label={`${label(s.kind)} scenario`} className={`flex flex-col rounded-xl border p-4 ${s.superseded ? 'border-slate-200 bg-slate-50 opacity-80' : s.feasible ? 'border-slate-200' : 'border-red-200 bg-red-50/30'}`}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold">{label(s.kind)}</h3>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ring-1 ring-inset ${s.feasible ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-red-50 text-red-800 ring-red-200'}`}>
-                    {s.feasible ? 'Feasible' : 'Infeasible'}
+                  <span className="flex flex-wrap gap-1">
+                    {s.superseded && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold uppercase text-slate-700" title={s.superseded}>Stale</span>}
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase ring-1 ring-inset ${s.feasible ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-red-50 text-red-800 ring-red-200'}`}>
+                      {s.feasible ? 'Feasible' : 'Infeasible'}
+                    </span>
                   </span>
                 </div>
+                {s.superseded && <p className="mt-1 text-xs text-slate-600">Superseded: {s.superseded}. Rebuild the scenarios; this one cannot be awarded.</p>}
                 <table className="mt-3 w-full text-sm">
                   <thead className="text-left text-[11px] uppercase tracking-wide text-slate-500">
-                    <tr><th className="py-1">Supplier</th><th className="py-1 text-right">Share</th><th className="py-1 text-right">{multi ? 'Lines' : 'Qty / month'}</th><th className="py-1 text-right">{multi ? 'Annual value' : 'Price'}</th></tr>
+                    <tr><th scope="col" className="py-1">Supplier</th><th scope="col" className="py-1 text-right">Share</th><th scope="col" className="py-1 text-right">{multi ? 'Lines' : 'Qty / month'}</th><th scope="col" className="py-1 text-right">{multi ? 'Annual value' : 'Price'}</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {s.allocations.length ? s.allocations.map((a) => (
@@ -266,36 +157,21 @@ export function ScenariosPanel({ event, scenarios, canAward, onAward }: { event:
                 <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                   <div><dt className="text-xs text-slate-500">{multi ? 'Annual award value' : 'Weighted price'}</dt><dd className="font-semibold tabular-nums">{inr(s.weightedPriceMinor)}</dd></div>
                   <div><dt className="text-xs text-slate-500">{multi ? 'Annual TCO' : 'Weighted TCO'}</dt><dd className="font-semibold tabular-nums">{inr(s.weightedTcoMinor)}</dd></div>
-                  <div className="col-span-2"><dt className="text-xs text-slate-500">Annual savings vs baseline {event.baseline_price_minor ? inr(event.baseline_price_minor) : ''}{!multi && line ? ` × ${qty(line.annual_qty, line.uom)}` : multi ? ' (annual value)' : ''}</dt>
-                    <dd className={`font-semibold tabular-nums ${s.annualSavingsMinor && s.annualSavingsMinor > 0 ? 'text-emerald-700' : ''}`}>{inr(s.annualSavingsMinor)}</dd></div>
+                  <div><dt className="text-xs text-slate-500">Risk score (0 best, 100 worst)</dt><dd className="font-semibold tabular-nums">{s.riskScore ?? '–'}</dd></div>
+                  <div><dt className="text-xs text-slate-500">Annual savings vs baseline {event.baseline_price_minor ? inr(event.baseline_price_minor) : ''}{!multi && line ? ` × ${qty(line.annual_qty, line.uom)}` : ''}</dt>
+                    <dd className={`font-semibold tabular-nums ${s.annualSavingsMinor && s.annualSavingsMinor > 0 ? 'text-emerald-700' : s.annualSavingsMinor && s.annualSavingsMinor < 0 ? 'text-red-700' : ''}`}>{inr(s.annualSavingsMinor)}{s.annualSavingsMinor != null && s.annualSavingsMinor < 0 ? ' (cost increase)' : ''}</dd></div>
                 </dl>
+                {violations.length > 0 && (
+                  <ul className="mt-2 list-disc rounded bg-red-50 p-2 pl-5 text-xs text-red-800" aria-label="Why this scenario is infeasible">{violations.map((v) => <li key={v}>{v}</li>)}</ul>
+                )}
                 {s.explanation && <Explanation e={s.explanation} />}
                 <div className="mt-auto pt-3">
                   {decision && <p className="mb-2 flex items-center gap-2 text-xs">Award decision <StatusChip status={decision.status} /></p>}
-                  {canAward && s.feasible && <Button variant="primary" className="w-full" onClick={() => onAward(s.id)}>Award this scenario</Button>}
+                  {canAward && s.feasible && !s.superseded && <Button variant="primary" className="w-full" onClick={() => onAward(s.id)}>Award this scenario</Button>}
                 </div>
               </article>
             );
           })}
-        </div>
-      )}
-      {event.awardDecisions.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Award decisions</h3>
-          <ul className="space-y-2">
-            {event.awardDecisions.map((d) => (
-              <li key={d.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusChip status={d.status} />
-                  <span className="font-medium">{label(scenarios.find((s) => s.id === d.scenario_id)?.kind ?? 'scenario')}</span>
-                  <span className="text-slate-600">· annual value {inr(d.annual_value_minor)} · {dateTime(d.created_at)}</span>
-                  <span className="font-mono text-[11px] text-slate-400">{d.rule_set_version}</span>
-                </div>
-                {d.rationale && <p className="mt-1 text-slate-700">Rationale: {d.rationale}</p>}
-                {d.conflict_declarations?.map((c) => <p key={c.user} className="mt-0.5 text-xs text-slate-500">Conflict declaration by {c.user}: “{c.declaration}”</p>)}
-              </li>
-            ))}
-          </ul>
         </div>
       )}
     </div>
@@ -325,8 +201,68 @@ function Explanation({ e }: { e: Record<string, unknown> }) {
   );
 }
 
+// ---------------------------------------------------------------- custom split
+type SplitRow = { supplier: string; line: string; mode: 'share' | 'qty'; value: string };
+
+export function CustomSplitDialog({ event, rows, onClose }: { event: SourcingEvent; rows: CompareRow[]; onClose: () => void }) {
+  const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
+  const multi = event.lines.length > 1;
+  const [split, setSplit] = useState<SplitRow[]>([
+    { supplier: rows[0]?.supplier ?? '', line: multi ? String(event.lines[0].line_no) : '', mode: 'share', value: '60' },
+    { supplier: rows[1]?.supplier ?? rows[0]?.supplier ?? '', line: multi ? String(event.lines[0].line_no) : '', mode: 'share', value: '40' },
+  ]);
+  const [result, setResult] = useState<Scenario | null>(null);
+  const set = (i: number, patch: Partial<SplitRow>) => setSplit((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const totals = new Map<string, number>();
+  split.forEach((r) => { if (r.mode === 'share') totals.set(r.line || '1', (totals.get(r.line || '1') ?? 0) + (Number(r.value) || 0)); });
+  const shareProblems = [...totals].filter(([, t]) => Math.abs(t - 100) > 0.0001).map(([ln, t]) => `${multi ? `Line ${ln}: ` : ''}shares add up to ${t}, not 100`);
+  const invalid = split.some((r) => !r.supplier || !(Number(r.value) > 0) || (multi && !r.line)) || shareProblems.length > 0;
+  const go = useEventCommand(path, (_: void, ifMatch) => api.post<ScenarioRaw>(`${path}/scenarios/custom`, {
+    allocations: split.map((r) => ({ supplier: r.supplier, ...(multi ? { line: Number(r.line) } : {}), ...(r.mode === 'share' ? { share_pct: r.value } : { qty_per_month: r.value }) })),
+  }, ifMatchOptions(ifMatch)), {
+    success: (s) => (s.feasible ? 'Custom scenario stored: feasible' : 'Custom scenario stored: NOT feasible, see the reasons'),
+    onSuccess: (s) => setResult(normaliseScenario(s)),
+  });
+  return (
+    <Dialog open title="Custom award split" onClose={onClose} wide>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-700">Enter percentages of the monthly demand (or monthly quantities) per bidder{multi ? ' and line' : ''}. The scenario is stored with its risk score and reasons whether it is feasible or not.</p>
+        <div className="space-y-2">
+          {split.map((r, i) => (
+            <div key={i} className="grid grid-cols-2 items-end gap-2 md:grid-cols-[1.5fr_1fr_1fr_1fr_auto]">
+              <Field label={i === 0 ? 'Bidder' : ' '}>{(id) => <Select id={id} aria-label={`Allocation ${i + 1} bidder`} value={r.supplier} onChange={(e) => set(i, { supplier: e.target.value })}
+                options={rows.map((b) => ({ value: b.supplier, label: `${b.supplier} · ${inr(b.tcoMinor)}` }))} />}</Field>
+              {multi ? <Field label={i === 0 ? 'Line' : ' '}>{(id) => <Select id={id} aria-label={`Allocation ${i + 1} line`} value={r.line} onChange={(e) => set(i, { line: e.target.value })}
+                options={event.lines.map((l) => ({ value: String(l.line_no), label: `Line ${l.line_no}` }))} />}</Field> : <div className="hidden md:block" />}
+              <Field label={i === 0 ? 'Split by' : ' '}>{(id) => <Select id={id} aria-label={`Allocation ${i + 1} basis`} value={r.mode} onChange={(e) => set(i, { mode: e.target.value as SplitRow['mode'] })}
+                options={[{ value: 'share', label: 'Percentage' }, { value: 'qty', label: 'Qty / month' }]} />}</Field>
+              <Field label={i === 0 ? (r.mode === 'share' ? 'Share (%)' : 'Quantity / month') : ' '}>{(id) => <Input id={id} aria-label={`Allocation ${i + 1} value`} type="number" min="0" step="any" value={r.value} onChange={(e) => set(i, { value: e.target.value })} />}</Field>
+              <Button variant="ghost" aria-label={`Remove allocation ${i + 1}`} disabled={split.length < 2} onClick={() => setSplit((cur) => cur.filter((_, j) => j !== i))}>Remove</Button>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button onClick={() => setSplit((cur) => [...cur, { supplier: rows[0]?.supplier ?? '', line: multi ? String(event.lines[0].line_no) : '', mode: 'share', value: '' }])}>Add allocation</Button>
+          {shareProblems.length > 0 && <p role="alert" className="text-sm text-red-700">{shareProblems.join('; ')}</p>}
+        </div>
+        {result && (
+          <div role="status" className={`rounded-lg border p-3 text-sm ${result.feasible ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900'}`}>
+            <p className="font-semibold">{result.feasible ? 'Feasible' : 'Not feasible'} · risk score {result.riskScore ?? '–'} · savings {inr(result.annualSavingsMinor)} a year</p>
+            {((result.explanation?.violations as string[] | undefined) ?? []).map((v) => <p key={v}>{v}</p>)}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Close</Button>
+          <Button variant="primary" disabled={invalid} busy={go.isPending} onClick={() => go.mutate()}>Check and store scenario</Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 // ---------------------------------------------------------------- dialogs
-export function ScoreDialog({ event, matrix, onClose }: { event: SourcingEvent; matrix: MatrixRow[]; onClose: () => void }) {
+export function ScoreDialog({ event, matrix, onClose }: { event: SourcingEvent; matrix: { supplier: string; scores?: Record<string, string> }[]; onClose: () => void }) {
+  const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
   const manual = event.criteria.filter((c) => c.code !== 'PRICE_TCO' && (c.data_source ?? 'MANUAL') === 'MANUAL');
   const [scores, setScores] = useState<Record<string, string>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
@@ -334,17 +270,17 @@ export function ScoreDialog({ event, matrix, onClose }: { event: SourcingEvent; 
     supplier: m.supplier, criterion: c.code, score: Number(scores[`${m.supplier}|${c.code}`]), comment: comments[m.supplier] || undefined,
   })));
   const invalid = entries.some((e) => Number.isNaN(e.score) || e.score < 0 || e.score > 100);
-  const save = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/scores`, entries),
+  const save = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/scores`, entries, ifMatchOptions(ifMatch)),
     { success: `${entries.length} score(s) recorded`, onSuccess: onClose });
   return (
-    <Dialog open title={`Score bids – ${event.number}`} onClose={onClose}>
-      {!manual.length ? <Empty title="No manually scored criteria" hint="This event is scored on price/TCO only." /> : (
+    <Dialog open title={`Score bids – ${event.number}`} onClose={onClose} wide>
+      {!manual.length ? <Empty title="No manually scored criteria" hint="This event is scored on price/TCO and platform data only." /> : (
         <>
-          <p className="mb-3 text-sm text-slate-600">Enter your own evaluation (0–100) per criterion. Price/TCO is computed from the bids and is not scored by hand. Leave a cell empty to skip it.</p>
+          <p className="mb-3 text-sm text-slate-600">Enter your own evaluation (0–100) per criterion. Price/TCO is computed from the bids and is not scored by hand. Leave a cell empty to skip it. You must have declared your conflict of interest first.</p>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
-                <tr><th className="py-1 pr-2">Supplier</th>{manual.map((c) => <th key={c.code} className="py-1 pr-2">{c.name} <span className="normal-case text-slate-400">({c.weight}%)</span></th>)}<th className="py-1">Comment</th></tr>
+                <tr><th scope="col" className="py-1 pr-2">Supplier</th>{manual.map((c) => <th scope="col" key={c.code} className="py-1 pr-2">{c.name} <span className="normal-case text-slate-400">({c.weight}%{c.min_score != null ? `, gate ${String(c.min_score)}` : ''})</span></th>)}<th scope="col" className="py-1">Comment</th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {matrix.map((m) => (
@@ -377,6 +313,7 @@ export function ScoreDialog({ event, matrix, onClose }: { event: SourcingEvent; 
 }
 
 export function RoundDialog({ event, onClose }: { event: SourcingEvent; onClose: () => void }) {
+  const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
   const [closeAt, setCloseAt] = useState(() => toLocalInput(new Date(Date.now() + 3 * 864e5)));
   const [note, setNote] = useState('');
   const [now, setNow] = useState(() => Date.now());
@@ -386,7 +323,7 @@ export function RoundDialog({ event, onClose }: { event: SourcingEvent; onClose:
   }, []);
   const when = new Date(closeAt);
   const future = !Number.isNaN(when.getTime()) && when.getTime() > now;
-  const go = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/rounds`, { close_at: when.toISOString(), note }),
+  const go = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/rounds`, { close_at: when.toISOString(), note }, ifMatchOptions(ifMatch)),
     { success: `Round ${event.round + 1} opened – bids sealed again`, onSuccess: onClose });
   return (
     <Dialog open title={`Open negotiation round ${event.round + 1}`} onClose={onClose}>
@@ -404,47 +341,89 @@ export function RoundDialog({ event, onClose }: { event: SourcingEvent; onClose:
   );
 }
 
-export function AwardDialog({ event, scenarios, matrix, initial, onClose }: { event: SourcingEvent; scenarios: Scenario[]; matrix?: MatrixRow[]; initial: string | null; onClose: () => void }) {
-  const feasible = scenarios.filter((s) => s.feasible);
+/** What the server will flag for this scenario, worked out from the comparison so the buyer sees it before proposing. */
+export function previewExceptions(event: SourcingEvent, scenario: Scenario | undefined, comparison: Comparison | undefined): { code: string; detail: string; needsRationale: boolean }[] {
+  if (!scenario || !comparison) return [];
+  const rows = comparison.bids;
+  const by = new Map(rows.map((r) => [r.supplier, r]));
+  const out: { code: string; detail: string; needsRationale: boolean }[] = [];
+  const eligible = rows.filter((r) => !r.technicalGate || r.technicalGate.passed);
+  const pool = eligible.length ? eligible : rows;
+  const multi = event.lines.length > 1;
+  let notLowest = false;
+  if (multi) {
+    const lowest: Record<number, number> = {};
+    pool.forEach((r) => r.lines.forEach((l) => { lowest[l.line] = Math.min(lowest[l.line] ?? l.priceMinor, l.priceMinor); }));
+    notLowest = scenario.allocations.some((a) => a.lines?.some((l) => l.priceMinor > (lowest[l.line] ?? 0)));
+  } else if (pool.length) {
+    const low = Math.min(...pool.map((r) => r.priceMinor));
+    notLowest = scenario.allocations.some((a) => (a.priceMinor ?? 0) > low);
+  }
+  if (notLowest) out.push({ code: 'NOT_LOWEST', detail: 'The award includes a bid that is not the lowest eligible price.', needsRationale: true });
+  if (event.min_bidders && rows.length < event.min_bidders) out.push({ code: 'LIMITED_COMPETITION', detail: `${rows.length} valid bidder(s); the minimum is ${event.min_bidders}.`, needsRationale: true });
+  const awarded = scenario.allocations.map((a) => by.get(a.supplier)).filter((r): r is CompareRow => !!r);
+  const inc = awarded.filter((r) => r.tcoIncomplete);
+  if (inc.length) out.push({ code: 'INCOMPLETE_TCO', detail: `Total cost has a missing input for ${inc.map((r) => `${r.supplier} (${r.tcoMissing.join(', ')})`).join(', ')}.`, needsRationale: false });
+  const unv = awarded.filter((r) => !r.capacityVerified);
+  if (unv.length) out.push({ code: 'UNVERIFIED_CAPACITY', detail: `Capacity is not verified for ${unv.map((r) => r.supplier).join(', ')}.`, needsRationale: false });
+  if (scenario.annualSavingsMinor != null && scenario.annualSavingsMinor < 0) out.push({ code: 'NEGATIVE_SAVINGS', detail: `The award costs ${inr(Math.abs(scenario.annualSavingsMinor))} a year more than the baseline.`, needsRationale: true });
+  return out;
+}
+
+export function AwardDialog({ event, scenarios, comparison, initial, onClose }: { event: SourcingEvent; scenarios: Scenario[]; comparison?: Comparison; initial: string | null; onClose: () => void }) {
+  const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
+  const feasible = scenarios.filter((s) => s.feasible && !s.superseded);
   const [scenarioId, setScenarioId] = useState(initial ?? feasible[0]?.id ?? '');
   const [rationale, setRationale] = useState('');
   const [declaration, setDeclaration] = useState('');
+  const [error, setError] = useState<ApiError | null>(null);
   const scenario = feasible.find((s) => s.id === scenarioId);
-  const multi = event.lines.length > 1;
-  const lowest = matrix?.length ? Math.min(...matrix.map((m) => m.priceMinor)) : null;
-  const lowestByLine: Record<number, number> = {};
-  (matrix ?? []).forEach((m) => m.lines?.forEach((l) => { lowestByLine[l.line] = Math.min(lowestByLine[l.line] ?? l.priceMinor, l.priceMinor); }));
-  // Without the matrix we cannot prove the award goes to the lowest bid, so ask for a rationale.
-  const notLowest = !scenario || lowest === null || (multi
-    ? scenario.allocations.some((a) => a.lines?.some((l) => l.priceMinor > (lowestByLine[l.line] ?? 0)))
-    : scenario.allocations.some((a) => (a.priceMinor ?? 0) > lowest));
-  const ready = !!scenario && !!declaration.trim() && (!notLowest || !!rationale.trim());
-  const award = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/award`,
-    { scenario_id: scenarioId, rationale: rationale.trim() || undefined, conflict_declaration: declaration.trim() }),
-  { success: 'Award proposed – routed for approval where required', onSuccess: onClose });
+  const exceptions = previewExceptions(event, scenario, comparison);
+  const needs = exceptions.some((e) => e.needsRationale);
+  const ready = !!scenario && !!declaration.trim() && (!needs || !!rationale.trim());
+  const rows = comparison?.bids ?? [];
+  const blocked = (scenario?.allocations ?? []).map((a) => rows.find((r) => r.supplier === a.supplier)).filter((r): r is CompareRow => !!r).flatMap((r) => [
+    ...(r.technicalGate && (!r.technicalGate.passed || r.technicalGate.pending.length) ? [`${r.supplier} has not passed the technical gate (${[...r.technicalGate.failed, ...r.technicalGate.pending].join(', ')})`] : []),
+    ...((r.unscored?.length ?? 0) > 0 ? [`${r.supplier} is not scored on ${r.unscored!.join(', ')}`] : []),
+    ...(r.validUntil && new Date(r.validUntil) < new Date() ? [`${r.supplier}'s offer expired on ${r.validUntil}`] : []),
+  ]);
+  const award = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/award`, { scenario_id: scenarioId, rationale: rationale.trim() || undefined, conflict_declaration: declaration.trim() }, ifMatchOptions(ifMatch)),
+    { success: 'Award proposed – routed for approval where required', onSuccess: onClose, onError: setError, quiet: true });
+  const serverExceptions = (error?.problem?.exceptions as AwardException[] | undefined) ?? [];
   return (
-    <Dialog open title={`Propose award – ${event.number}`} onClose={onClose}>
-      {!feasible.length ? <Empty title="No feasible scenario" hint="Build scenarios first; only feasible scenarios can be awarded." /> : (
+    <Dialog open title={`Propose award – ${event.number}`} onClose={onClose} wide>
+      {!feasible.length ? <Empty title="No feasible scenario" hint="Build scenarios first; only current, feasible scenarios can be awarded." /> : (
         <div className="space-y-3">
           <Field label="Scenario">{(id) => (
             <Select id={id} value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}
-              options={feasible.map((s) => ({ value: s.id, label: `${label(s.kind)} – ${s.allocations.map((a) => (a.lines ? `${a.supplier} ${a.lines.length} line(s)` : `${a.supplier} ${pct(a.share)}`)).join(' / ')} @ ${inr(s.weightedPriceMinor)}${multi ? ' a year' : ''}` }))} />
+              options={feasible.map((s) => ({ value: s.id, label: `${label(s.kind)} – ${s.allocations.map((a) => (a.lines ? `${a.supplier} ${a.lines.length} line(s)` : `${a.supplier} ${pct(a.share)}`)).join(' / ')} @ ${inr(s.weightedPriceMinor)}${event.lines.length > 1 ? ' a year' : ''}` }))} />
           )}</Field>
-          {scenario && notLowest && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              {lowest === null ? 'The bid matrix is not loaded, so a written rationale is required.' : `This scenario awards volume above the lowest bid (${inr(lowest)}). A written rationale is required (SRC-RATIONALE) and the award goes to approval.`}
-            </p>
+          {exceptions.length > 0 && (
+            <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900" role="status">
+              <p className="font-semibold">This award carries {exceptions.length} exception(s); it always goes to the approvers</p>
+              <ul className="mt-1 list-disc pl-5">{exceptions.map((e) => <li key={e.code}><span className="font-mono text-xs">{e.code}</span> {e.detail}{e.needsRationale ? ' A written rationale is required.' : ' Recorded; a rationale is needed when the policy says so.'}</li>)}</ul>
+            </div>
           )}
-          <Field label={`Rationale${notLowest ? ' (required)' : ' (optional)'}`}>{(id) => <Textarea id={id} value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="Why this allocation – capacity, risk, quality, TCO…" />}</Field>
+          {blocked.length > 0 && (
+            <div role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-900">
+              <p className="font-semibold">The server will refuse this award</p>
+              <ul className="mt-1 list-disc pl-5">{blocked.map((b) => <li key={b}>{b}</li>)}</ul>
+            </div>
+          )}
+          <Field label={`Rationale${needs ? ' (required)' : ' (optional)'}`} hint="At least the minimum length set by SOURCING-POLICY (default 15 characters). Say why: capacity, risk, quality, TCO.">{(id) => <Textarea id={id} value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="Why this allocation – capacity, risk, quality, TCO…" />}</Field>
           <Field label="Conflict-of-interest declaration (required)" hint="Recorded with your name on the award decision (SRC-05).">{(id) => (
             <Textarea id={id} value={declaration} onChange={(e) => setDeclaration(e.target.value)} placeholder="I have no personal or financial interest in any bidder." />
           )}</Field>
-          <p className="text-xs text-slate-500">Awards above the approval threshold or not to the lowest bid go to the approvers in the award approval band; they decide from the task panel on this page.</p>
+          <ProblemBox error={error} />
+          {serverExceptions.length > 0 && (
+            <ul className="list-disc rounded-lg bg-slate-50 p-2 pl-6 text-sm" aria-label="Exceptions reported by the server">{serverExceptions.map((e) => <li key={e.code}><span className="font-mono text-xs">{e.code}</span> {e.detail}</li>)}</ul>
+          )}
+          <p className="text-xs text-slate-500">The authority band (approval chain by annual value) is stored on the decision. Awards above the approval threshold, to a non-lowest bid or with the exceptions above go to the approvers; they decide from the task panel on this page.</p>
         </div>
       )}
       <div className="mt-4 flex justify-end gap-2">
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" disabled={!ready} busy={award.isPending} onClick={() => award.mutate()}>Propose award</Button>
+        <Button variant="primary" disabled={!ready} busy={award.isPending} onClick={() => { setError(null); award.mutate(); }}>Propose award</Button>
       </div>
     </Dialog>
   );
@@ -454,8 +433,9 @@ export function AwardDialog({ event, scenarios, matrix, initial, onClose }: { ev
 export const CANCELLABLE = ['DRAFT', 'PUBLISHED', 'OPEN', 'CLOSED', 'UNDER_EVALUATION', 'AWARD_PENDING'];
 
 export function CancelEventDialog({ event, onClose }: { event: SourcingEvent; onClose: () => void }) {
+  const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
   const [reason, setReason] = useState('');
-  const cancel = useCommand(() => api.post(`/sourcing/events/${encodeURIComponent(event.number)}/cancel`, { reason: reason.trim() }), {
+  const cancel = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/cancel`, { reason: reason.trim() }, ifMatchOptions(ifMatch)), {
     success: `${event.number} cancelled${event.status !== 'DRAFT' ? ' – invited suppliers are notified' : ''}`, onSuccess: onClose,
   });
   return (
@@ -477,3 +457,4 @@ export function CancelEventDialog({ event, onClose }: { event: SourcingEvent; on
     </Dialog>
   );
 }
+

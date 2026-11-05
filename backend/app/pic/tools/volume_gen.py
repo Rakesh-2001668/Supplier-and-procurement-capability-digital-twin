@@ -319,11 +319,20 @@ def cube_principal(tenant_id: uuid.UUID):
                          roles=list(user.roles), scopes=scopes_for(list(user.roles)), attributes={})
 
 
+RUNS = 5   # every query is run this many times; p50 and p95 are reported (p95 of five runs is the slowest)
+P95_TARGET_SECONDS = 2.0   # the owner's target on 1 M lines (the NFR in TD 15 is 3 s on 50 M)
+
+
+def _percentile(values: list, q: float) -> float:
+    ordered = sorted(values)
+    return ordered[max(0, min(len(ordered) - 1, int(round(q * (len(ordered) - 1) + 0.4999))))]
+
+
 def measure_cube(tenant_id: uuid.UUID) -> list[dict]:
-    """Build the cube summaries (the scheduled refresh job; its time is reported, the 3 s target applies to queries), then time the
-    cube queries and the SPD-01 overview against the summaries."""
+    """Build the cube summaries (the scheduled refresh job; its time is reported, the target applies to queries), then time the eight main
+    cube queries ``RUNS`` times each: p50 and p95 per query, through the service functions with a category-manager principal."""
     from app.pic.db import tenant_tx
-    from app.pic.services import savings, spend
+    from app.pic.services import spend, spend_analytics, spend_cube
 
     principal = cube_principal(tenant_id)
     out = []
@@ -333,28 +342,41 @@ def measure_cube(tenant_id: uuid.UUID) -> list[dict]:
     out.append({"dimensions": ["(refresh)"], "seconds": round(seconds, 3), "rows": refreshed["cube"]["summaryRows"], "lines": refreshed["cube"]["lines"],
                 "pass": True, "note": "full rebuild of spend_cube_summary + spend_commitment_summary"})
     log(f"  cube refresh (full): {seconds:,.2f}s, {refreshed['cube']['summaryRows']:,} summary rows from {refreshed['cube']['lines']:,} lines")
-    for dims in (["category"], ["supplier"], ["category", "period"], ["category_l1", "plant"], ["parent_supplier", "currency"]):
-        with tenant_tx(tenant_id, principal.user_id, principal) as s:
-            t0 = time.perf_counter()
-            cube = savings.spend_cube(s, dims)
-            seconds = time.perf_counter() - t0
-        out.append({"dimensions": dims, "seconds": round(seconds, 3), "rows": len(cube["rows"]),
-                    "lines": sum(r["lines"] for r in cube["rows"]), "pass": seconds <= CUBE_TARGET_SECONDS})
-        log(f"  spend cube {dims}: {seconds:,.2f}s, {len(cube['rows']):,} rows")
-    with tenant_tx(tenant_id, principal.user_id, principal) as s:  # filtered: one category, one quarter-ish window, by supplier
-        t0 = time.perf_counter()
-        cube = spend.cube(s, ["supplier"], spend.CubeFilter(categories=["FORGINGS"], period_from="2025-01"), limit=50, include_commitments=True)
-        seconds = time.perf_counter() - t0
-    out.append({"dimensions": ["supplier", "(filtered: FORGINGS, from 2025-01, + commitments)"], "seconds": round(seconds, 3), "rows": len(cube["rows"]),
-                "lines": sum(r["lines"] for r in cube["rows"]), "pass": seconds <= CUBE_TARGET_SECONDS})
-    log(f"  filtered cube by supplier + commitments: {seconds:,.2f}s")
     with tenant_tx(tenant_id, principal.user_id, principal) as s:
-        t0 = time.perf_counter()
-        overview = spend.overview(s)
-        seconds = time.perf_counter() - t0
-    out.append({"dimensions": ["(overview SPD-01)"], "seconds": round(seconds, 3), "rows": len(overview["opportunities"]), "lines": overview["lines"],
-                "pass": seconds <= CUBE_TARGET_SECONDS})
-    log(f"  overview: {seconds:,.2f}s")
+        period = s.execute(spend_cube.text("SELECT max(period) FROM pic.spend_line")).scalar()
+    t0 = time.perf_counter()
+    spend_cube.refresh_spend_views(tenant_id, periods=[period], commitments=False)
+    one = time.perf_counter() - t0
+    out.append({"dimensions": ["(refresh one period)"], "seconds": round(one, 3), "pass": True, "note": f"incremental refresh of {period}"})
+    log(f"  cube refresh (one period {period}): {one:,.2f}s")
+    queries = [
+        (["category"], lambda s: spend_cube.cube(s, ["category"])),
+        (["supplier"], lambda s: spend_cube.cube(s, ["supplier"], limit=500)),
+        (["category", "period"], lambda s: spend_cube.cube(s, ["category", "period"], limit=5000)),
+        (["category_l1", "plant"], lambda s: spend_cube.cube(s, ["category_l1", "plant"])),
+        (["fiscal_year", "parent_supplier"], lambda s: spend_cube.cube(s, ["fiscal_year", "parent_supplier"], limit=500)),
+        (["supplier", "(filtered: FORGINGS, from 2025-01, + commitments)"],
+         lambda s: spend_cube.cube(s, ["supplier"], spend_cube.CubeFilter(categories=["FORGINGS"], period_from="2025-01"), limit=50, include_commitments=True)),
+        (["(overview SPD-01)"], lambda s: spend.overview(s)),
+        (["(YoY / YTD comparison by category)"], lambda s: spend_analytics.comparison(s, ["category"])),
+    ]
+    for dims, call in queries:
+        label = " x ".join(dims)
+        times, result = [], None
+        for _ in range(RUNS):
+            with tenant_tx(tenant_id, principal.user_id, principal) as s:
+                t0 = time.perf_counter()
+                result = call(s)
+                times.append(time.perf_counter() - t0)
+        p50, p95 = _percentile(times, 0.5), _percentile(times, 0.95)
+        rows = len(result["rows"]) if isinstance(result, dict) and "rows" in result else len(result.get("opportunities", [])) if isinstance(result, dict) else 0
+        if "lines" in (result or {}):
+            lines_total = result["lines"]
+        else:
+            lines_total = sum(r.get("lines", 0) for r in result.get("rows", [])) if isinstance(result, dict) else 0
+        out.append({"dimensions": dims, "label": label, "seconds": round(p95, 3), "p50": round(p50, 3), "p95": round(p95, 3), "runs": RUNS, "rows": rows, "lines": lines_total,
+                    "meets2s": p95 <= P95_TARGET_SECONDS, "pass": p95 <= CUBE_TARGET_SECONDS})
+        log(f"  {label}: p50 {p50:,.3f}s  p95 {p95:,.3f}s  ({rows:,} rows)")
     return out
 
 

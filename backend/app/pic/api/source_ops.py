@@ -195,6 +195,7 @@ class AuctionSettingsIn(BaseModel):
     showBestPrice: Optional[bool] = None
     paymentTermsDays: Optional[int] = None
     leadTimeDays: Optional[int] = None
+    ceilingMinor: Optional[int] = Field(default=None, gt=0)  # no bid above this price (the auction's reserve / ceiling)
 
 
 class AuctionBidIn(BaseModel):

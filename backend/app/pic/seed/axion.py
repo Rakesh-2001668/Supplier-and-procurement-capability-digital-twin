@@ -401,6 +401,7 @@ def run(password: str) -> list[str]:
                                    ("TF001", "TECHNICAL", 85), ("KD002", "TECHNICAL", 82), ("SLA003", "TECHNICAL", 74)]}
     for who, entries in scores.items():
         with sc.act(who, at(date(2026, 10, 20), 11)) as s:
+            sourcing.declare_conflict(s, s.get(SourcingEvent, event_id), False, "No personal or financial interest in any bidder.")  # SRC-05
             sourcing.score(s, s.get(SourcingEvent, event_id), [{"supplier": a, "criterion": b, "score": c} for a, b, c in entries])
     with sc.act("category.manager", at(date(2026, 10, 20), 15)) as s:
         options = sourcing.build_scenarios(s, s.get(SourcingEvent, event_id))

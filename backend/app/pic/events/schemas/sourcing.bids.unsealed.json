@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.bids.unsealed",
+  "title": "sourcing.bids.unsealed",
+  "description": "Payload (outbox_event.payload) of sourcing.bids.unsealed on SOURCING_EVENT. Produced by services/sourcing.py.",
+  "type": "object",
+  "properties": {
+    "round": {},
+    "bids": {},
+    "competitive": {},
+    "minBidders": {}
+  },
+  "required": [
+    "round",
+    "bids",
+    "competitive",
+    "minBidders"
+  ],
+  "additionalProperties": true
+}

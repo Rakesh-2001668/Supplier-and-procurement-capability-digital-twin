@@ -193,8 +193,9 @@ def list_rules(p: Principal = Depends(require(READ))):
 def new_rule_version(body: RuleSetIn, p: Principal = Depends(require("admin:rules"))):
     """Rule changes are new effective-dated versions; existing versions are never edited (P14). A version label is used once
     per key; a second version with the same scope and effective date must name the version it supersedes (it then wins)."""
-    from app.pic.platform import inventory_defaults
-    problems = inventory_defaults.validate(body.key, body.body)
+    from app.pic.platform import inventory_defaults, sourcing_defaults
+    from app.pic.services import spend_workflow
+    problems = inventory_defaults.validate(body.key, body.body) + sourcing_defaults.validate(body.key, body.body) + spend_workflow.validate_rule(body.key, body.body)
     if problems:
         raise Problem(422, "RULE_INVALID", f"{body.key}: " + "; ".join(problems), rule_ref=body.key, errors=problems)
     with uow(p) as s:

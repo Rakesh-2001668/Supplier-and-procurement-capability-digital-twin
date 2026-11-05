@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.bid.disqualified",
+  "title": "sourcing.bid.disqualified",
+  "description": "Payload (outbox_event.payload) of sourcing.bid.disqualified on SOURCING_EVENT. Produced by services/sourcing.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "supplierId": {
+      "type": "string"
+    },
+    "reason": {},
+    "round": {},
+    "ownerId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "supplier",
+    "supplierId",
+    "reason",
+    "round",
+    "ownerId"
+  ],
+  "additionalProperties": true
+}

@@ -52,6 +52,8 @@ STREAM_ONLY = {
     "stock_reservation.created": "The reservation's RESERVATION demand element is what MRP reads; subscribers use the event for requester dashboards.",
     "stock_reservation.issued": "The goods issue (201) is in the ledger and the ERP material document is queued; subscribers (consumption analytics) read the stream.",
     "stock_reservation.cancelled": "The reservation demand is released for MRP through its demand element; subscribers use the event for dashboards.",
+    "sourcing.bids.unsealed": "The sealed bids of a round were opened (TD 6.1 bids.unsealed): the audit trail holds who opened them; subscribers (BI, the Bid Analysis Agent) read the stream.",
+    "sourcing.bid.withdrawn": "A supplier withdrew its sealed bid before the close; the content is destroyed unread and the audit trail holds the reason; nothing else reacts.",
 }
 
 

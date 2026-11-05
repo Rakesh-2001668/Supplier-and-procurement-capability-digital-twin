@@ -15,7 +15,7 @@ from app.pic.models import (
 )
 from app.pic.platform import agents as agent_catalogue
 from app.pic.platform import clock
-from app.pic.platform import finance_defaults, inventory_defaults, job_defaults, p2p_defaults
+from app.pic.platform import finance_defaults, inventory_defaults, job_defaults, p2p_defaults, sourcing_defaults
 from app.pic.platform.process_defs import baseline
 from app.pic.seed import clause_library, templates
 
@@ -71,6 +71,7 @@ RULE_SETS = {
     **job_defaults.BODIES,  # wave 1 platform: PAYMENT-RUN, MRP-SCHEDULE, PRIVACY-RETENTION, DELEGATION, AI-CONTROL
     **p2p_defaults.BODIES,  # wave 1 P2P completion: ONE-TIME-VENDOR, PO-PRICE-CHECK, DEBIT-NOTE, EARLY-PAYMENT, MANDATORY-FIELDS, ...
     **inventory_defaults.BODIES,  # inventory: INVENTORY-POSTING, INVENTORY-COUNT, INVENTORY-RESERVATION, INVENTORY-ALERTS
+    **sourcing_defaults.BODIES,  # strategic sourcing: SOURCING-POLICY, SOURCING-TCO (M05)
     "DMN-01": ({"bands": [
         {"upTo": 25_000 * 100, "autoChannels": ["CATALOGUE", "CONTRACT"], "chain": ["COST_OBJECT_OWNER"]},
         {"upTo": 2 * L, "chain": ["COST_OBJECT_OWNER"]},

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.bid.withdrawn",
+  "title": "sourcing.bid.withdrawn",
+  "description": "Payload (outbox_event.payload) of sourcing.bid.withdrawn on SOURCING_EVENT. Produced by services/sourcing.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "round": {}
+  },
+  "required": [
+    "supplier",
+    "round"
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,461 @@
+{
+  "events": [
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "FERROUS-CASTINGS",
+      "created": "2025-04-14",
+      "key": "K01",
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 5,
+      "big": true,
+      "category": "FORGINGS",
+      "created": "2025-05-12",
+      "key": "K02",
+      "outcome": "AWARD_SPLIT",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "FASTENERS",
+      "clarifications": 2,
+      "created": "2025-06-09",
+      "key": "K03",
+      "lateBid": true,
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "type": "RFQ",
+      "uninvited": true,
+      "withdraw": true
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "RUBBER-SEALS",
+      "created": "2025-07-07",
+      "key": "K04",
+      "outcome": "AWARD_AUCTION",
+      "state": "AWARDED",
+      "type": "REVERSE_AUCTION"
+    },
+    {
+      "baselineMethod": "MARKET_INDEX",
+      "bidders": 5,
+      "category": "MRO",
+      "commodity": "bearings",
+      "created": "2025-08-04",
+      "key": "K05",
+      "outcome": "AWARD_NON_LOWEST",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "SHOULD_COST",
+      "bidders": 4,
+      "big": true,
+      "category": "ELECTRONICS",
+      "commodity": "wiring",
+      "created": "2025-09-01",
+      "key": "K06",
+      "outcome": "AWARD_CAPACITY",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "PACKAGING",
+      "created": "2025-10-06",
+      "key": "K07",
+      "lines": 3,
+      "outcome": "AWARD_LOT",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 5,
+      "category": "MACHINING",
+      "created": "2025-11-03",
+      "key": "K08",
+      "outcome": "AWARD_ROUNDS",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 4,
+      "category": "PROF-SERVICES",
+      "created": "2025-12-01",
+      "key": "K09",
+      "outcome": "AWARD_BEST_VALUE",
+      "state": "AWARDED",
+      "type": "RFP"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 5,
+      "category": "FORGINGS",
+      "created": "2026-01-12",
+      "key": "K10",
+      "outcome": "AWARD_DISQ",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 5,
+      "category": "RAW-MATERIALS",
+      "created": "2026-04-13",
+      "import": true,
+      "key": "K11",
+      "outcome": "AWARD_IMPORT",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "MRO-LUBRICANTS",
+      "created": "2026-05-04",
+      "key": "K12",
+      "outcome": "AWARD_AUCTION",
+      "softClose": true,
+      "state": "AWARDED",
+      "type": "REVERSE_AUCTION"
+    },
+    {
+      "activate": true,
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "big": true,
+      "category": "TOOLING",
+      "created": "2026-05-18",
+      "key": "K13",
+      "outcome": "AWARD_SPLIT",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "activate": true,
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "LOGISTICS",
+      "created": "2026-06-01",
+      "key": "K14",
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "type": "RFP"
+    },
+    {
+      "activate": true,
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "MACHINING",
+      "created": "2026-06-15",
+      "key": "K15",
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "twoPerson": true,
+      "type": "RFQ"
+    },
+    {
+      "activate": true,
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "FASTENERS",
+      "cloneOf": "K03",
+      "created": "2026-07-06",
+      "key": "K16",
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "big": true,
+      "category": "FORGINGS",
+      "created": "2026-08-03",
+      "key": "K17",
+      "outcome": "PENDING",
+      "state": "AWARD_PENDING",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "big": true,
+      "category": "ELECTRONICS",
+      "commodity": "plastics",
+      "created": "2026-08-17",
+      "key": "K18",
+      "outcome": "PENDING_NON_LOWEST",
+      "state": "AWARD_PENDING",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "big": true,
+      "category": "PACKAGING",
+      "created": "2026-09-07",
+      "key": "K19",
+      "outcome": "PENDING",
+      "state": "AWARD_PENDING",
+      "type": "REVERSE_AUCTION"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "MRO-CHEMICALS",
+      "created": "2025-09-15",
+      "key": "K20",
+      "outcome": "EVAL_RFI",
+      "state": "UNDER_EVALUATION",
+      "type": "RFI"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 3,
+      "category": "TOOLING-SERVICES",
+      "created": "2026-03-02",
+      "key": "K21",
+      "outcome": "EVAL_RFI",
+      "state": "UNDER_EVALUATION",
+      "type": "RFI"
+    },
+    {
+      "baselineMethod": "WEIGHTED_AVG",
+      "bidders": 5,
+      "category": "RUBBER-SEALS",
+      "created": "2026-09-24",
+      "key": "K22",
+      "outcome": "EVAL_PARTIAL",
+      "state": "UNDER_EVALUATION",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 3,
+      "category": "IT-SERVICES",
+      "created": "2026-09-21",
+      "key": "K23",
+      "outcome": "EVAL_PARTIAL",
+      "state": "UNDER_EVALUATION",
+      "type": "RFP"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "FERROUS-CASTINGS",
+      "created": "2026-10-05",
+      "earlyOpen": true,
+      "key": "K24",
+      "openers": 0,
+      "outcome": "CLOSED_WAIT",
+      "state": "CLOSED",
+      "twoPerson": true,
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "OFFICE-SAFETY",
+      "created": "2026-10-12",
+      "key": "K25",
+      "openers": 1,
+      "outcome": "CLOSED_WAIT",
+      "state": "CLOSED",
+      "twoPerson": true,
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "bids": 2,
+      "category": "MRO",
+      "created": "2026-10-26",
+      "key": "K26",
+      "outcome": "OPEN",
+      "state": "OPEN",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "WEIGHTED_AVG",
+      "bidders": 3,
+      "bids": 1,
+      "category": "FASTENERS",
+      "clarifications": 1,
+      "created": "2026-10-27",
+      "earlyView": true,
+      "key": "K27",
+      "outcome": "OPEN",
+      "state": "OPEN",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 3,
+      "bids": 0,
+      "category": "FACILITIES",
+      "created": "2026-10-28",
+      "key": "K28",
+      "outcome": "OPEN",
+      "state": "OPEN",
+      "type": "RFP"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "PACKAGING",
+      "clarifications": 1,
+      "created": "2026-10-29",
+      "key": "K29",
+      "outcome": "PUBLISHED",
+      "state": "PUBLISHED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "LOGISTICS",
+      "created": "2026-10-30",
+      "key": "K30",
+      "outcome": "PUBLISHED",
+      "state": "PUBLISHED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "SHOULD_COST",
+      "bidders": 3,
+      "category": "ELECTRONICS",
+      "commodity": "wiring",
+      "created": "2026-10-30",
+      "key": "K31",
+      "outcome": "DRAFT",
+      "state": "DRAFT",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "MACHINING",
+      "created": "2026-10-31",
+      "key": "K32",
+      "outcome": "DRAFT",
+      "state": "DRAFT",
+      "type": "RFI"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "FORGINGS",
+      "created": "2026-10-31",
+      "key": "K33",
+      "lines": 3,
+      "outcome": "DRAFT",
+      "state": "DRAFT",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "MRO",
+      "created": "2025-06-23",
+      "key": "K34",
+      "outcome": "CANCEL_DRAFT",
+      "state": "CANCELLED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "FERROUS-CASTINGS",
+      "created": "2025-10-20",
+      "key": "K35",
+      "outcome": "CANCEL_BIDS",
+      "state": "CANCELLED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "ELECTRONICS",
+      "created": "2026-02-23",
+      "key": "K36",
+      "outcome": "CANCEL_PENDING",
+      "state": "CANCELLED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "category": "RUBBER-SEALS",
+      "created": "2026-07-20",
+      "key": "K37",
+      "outcome": "CANCEL_OPEN",
+      "state": "CANCELLED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 4,
+      "category": "ELECTRONICS",
+      "created": "2026-02-09",
+      "key": "K38",
+      "outcome": "AWARD_ROUNDS",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 3,
+      "bids": 2,
+      "category": "LOGISTICS",
+      "created": "2026-03-16",
+      "key": "K39",
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "type": "RFP"
+    },
+    {
+      "baselineMethod": "LAST_PRICE",
+      "bidders": 6,
+      "category": "MRO-LUBRICANTS",
+      "created": "2026-03-30",
+      "key": "K40",
+      "outcome": "AWARD_LOWEST",
+      "state": "AWARDED",
+      "template": true,
+      "type": "RFQ"
+    }
+  ],
+  "label": "MOCK sample data (sourcing_ops)",
+  "summary": {
+    "byState": {
+      "AWARDED": 19,
+      "AWARD_PENDING": 3,
+      "CANCELLED": 4,
+      "CLOSED": 2,
+      "DRAFT": 3,
+      "OPEN": 3,
+      "PUBLISHED": 2,
+      "UNDER_EVALUATION": 4
+    },
+    "byType": {
+      "REVERSE_AUCTION": 3,
+      "RFI": 3,
+      "RFP": 5,
+      "RFQ": 29
+    },
+    "events": 40
+  }
+}

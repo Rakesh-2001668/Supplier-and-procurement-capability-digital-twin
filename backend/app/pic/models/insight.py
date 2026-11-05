@@ -20,8 +20,9 @@ class SpendCubeSummary(TenantScoped, Base):
     Amounts are in the group currency (``amount_group_minor``) and the document currency (``amount_minor``)."""
     __tablename__ = "spend_cube_summary"
     __table_args__ = (
-        Index("uq_spend_cube_summary_grain", "tenant_id", "period", "category", "supplier_id", "plant", "company_code", "cost_object",
+        Index("uq_spend_cube_summary_grain", "tenant_id", "period", "category", "supplier_id", "buyer_id", "plant", "company_code", "cost_object",
               "cost_object_type", "material_group", "currency", "source", "source_system", "contracted", "addressable", "maverick", unique=True),
+        Index("ix_spend_cube_summary_period", "tenant_id", "period"),
         Index("ix_spend_cube_summary_supplier", "tenant_id", "supplier_id", "period"),
         Index("ix_spend_cube_summary_parent", "tenant_id", "parent_supplier_id", "period"),
         Index("ix_spend_cube_summary_category", "tenant_id", "category", "period"),
@@ -32,6 +33,8 @@ class SpendCubeSummary(TenantScoped, Base):
     category: Mapped[str] = mapped_column(String(40), nullable=False)
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     parent_supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # = supplier_id without a parent
+    buyer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=uuid.UUID(int=0),
+                                                server_default="00000000-0000-0000-0000-000000000000")  # nil UUID = no buyer
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     company_code: Mapped[str] = mapped_column(String(10), nullable=False)
     cost_object: Mapped[str] = mapped_column(String(40), nullable=False, default="")  # '' = none
@@ -49,7 +52,10 @@ class SpendCubeSummary(TenantScoped, Base):
     pos: Mapped[int] = mapped_column(BigInteger, nullable=False)  # distinct purchase orders within the row's grain
     auto_classified_lines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    amount_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)  # = invoiced + debit notes + credit notes (negative)
+    invoiced_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # invoice lines
+    debit_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # debit-note lines (positive)
+    credit_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")  # credit-note lines (negative)
     price_variance_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     price_variance_last_group_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     fx_missing_lines: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)  # foreign lines without a rate (excluded from group amounts)

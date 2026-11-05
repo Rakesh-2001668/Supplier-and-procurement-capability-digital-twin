@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import { CartesianGrid, LabelList, Legend, ReferenceArea, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from 'recharts';
-import { Button, Card, DataTable, Dialog, Empty, Field, Kpi, Loading, ProblemBox, StatusChip, Textarea } from '@/components/pic/ui';
+import { Button, Card, DataTable, Empty, Kpi, Loading, ProblemBox, StatusChip } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { crore, dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { useMe } from '../../mrp/_components';
+import { PlanDialog } from './plan-detail';
 import { SpendProblem } from './shared';
 
 type Evidence = {
@@ -16,7 +17,7 @@ type Evidence = {
 type Plan = {
   id: string; number: string; category: string; fiscal_year: string; spend_minor: number; profit_impact: string; supply_risk: string; kraljic: string;
   evidence: Evidence; levers: string[]; waves: string[]; budget_minor: number | null; savings_target_minor: number | null; status: string;
-  approved_at: string | null; created_at: string;
+  approved_at: string | null; created_at: string; version: number;
 };
 
 const QUADRANTS = [
@@ -47,7 +48,7 @@ function PlanTooltip({ active, payload }: { active?: boolean; payload?: { payloa
 export function StrategyTab() {
   const { scopes } = useMe();
   const { data, isLoading, error } = useApi<Plan[]>('/category-plans');
-  const [approving, setApproving] = useState<Plan | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
   const regenerate = useCommand(() => api.post<Plan[]>('/category-plans', {}), {
     success: (r) => `${r.length} draft plan(s) regenerated from the last 12 months of spend; approved plans are kept as they are`,
   });
@@ -63,7 +64,7 @@ export function StrategyTab() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-3xl text-sm text-slate-600">
           Profit impact scales with the category’s share of spend; supply risk combines criticality, concentration (HHI), single sourcing, supplier risk tier and the twin’s late-delivery probability.
-          Plans are approved by the procurement head or CPO, never by the plan owner.
+          Open a plan to validate, edit, submit, approve, reject or revise it. Plans are approved by the procurement head or CPO, never by the plan owner or the person who submitted it.
         </p>
         {canGenerate && (
           <div className="flex flex-col items-end gap-1">
@@ -117,7 +118,7 @@ export function StrategyTab() {
 
           <Card title="Category plans">
             <DataTable<Plan> rows={plans} columns={[
-              { key: 'number', header: 'Plan', render: (p) => <span><span className="font-mono text-xs font-semibold">{p.number}</span><br /><span className="text-xs text-slate-500">FY {p.fiscal_year}</span></span> },
+              { key: 'number', header: 'Plan', render: (p) => <span><span className="font-mono text-xs font-semibold">{p.number}</span><br /><span className="text-xs text-slate-500">FY {p.fiscal_year} · v{p.version}</span></span> },
               { key: 'category', header: 'Category', render: (p) => <span className="font-mono text-xs font-semibold">{p.category}</span> },
               { key: 'kraljic', header: 'Quadrant', render: (p) => (
                 <span className="inline-flex items-center gap-1.5 text-sm">
@@ -142,30 +143,12 @@ export function StrategyTab() {
                 </details>
               ) },
               { key: 'status', header: 'Status', render: (p) => <span><StatusChip status={p.status} />{p.approved_at && <span className="mt-0.5 block text-xs text-slate-500">{dateTime(p.approved_at)}</span>}</span> },
-              { key: 'actions', header: '', render: (p) => (p.status === 'DRAFT' ? <Button variant="primary" onClick={() => setApproving(p)}>Approve</Button> : null) },
+              { key: 'actions', header: '', render: (p) => <Button variant={p.status === 'IN_APPROVAL' || p.status === 'DRAFT' ? 'primary' : 'secondary'} onClick={() => setOpened(p.number)} aria-label={`Open plan ${p.number}`}>Open</Button> },
             ]} />
           </Card>
         </>
       )}
-      {approving && <ApproveDialog plan={approving} onClose={() => setApproving(null)} />}
+      {opened && <PlanDialog number={opened} onClose={() => setOpened(null)} />}
     </div>
-  );
-}
-
-function ApproveDialog({ plan, onClose }: { plan: Plan; onClose: () => void }) {
-  const [comment, setComment] = useState('');
-  const approve = useCommand(() => api.post<Plan>(`/category-plans/${encodeURIComponent(plan.number)}/approve`, { comment: comment.trim() || undefined }), {
-    success: `${plan.number} (${plan.category}) approved`, onSuccess: onClose });
-  return (
-    <Dialog open title={`Approve category plan – ${plan.number}`} onClose={onClose}>
-      <p className="mb-3 text-sm text-slate-600">{plan.category} · {label(plan.kraljic)} · budget {crore(plan.budget_minor)} · savings target {crore(plan.savings_target_minor)}.
-        Only the procurement head or CPO may approve, and not the plan owner.</p>
-      <Field label="Comment (optional)">{(id) => <Textarea id={id} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="e.g. Agreed in the category review; start wave 1 in Q1" />}</Field>
-      {approve.error && <div className="mt-3"><ProblemBox error={approve.error} /></div>}
-      <div className="mt-4 flex justify-end gap-2">
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" busy={approve.isPending} onClick={() => approve.mutate()}>Approve plan</Button>
-      </div>
-    </Dialog>
   );
 }

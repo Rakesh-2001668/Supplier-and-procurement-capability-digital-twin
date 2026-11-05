@@ -694,6 +694,10 @@ def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_no
                  after={"creditNote": note.number, "grossMinor": note.gross_minor,
                         **({"valueCredit": True} if any("unitCreditMinor" in e for e in stored) else {}),
                         **({"erpCreditMemo": memo.idempotency_key} if memo is not None else {})}, reason=reason)
+    # M01: the spend cube records the credit as negative lines in the period of the note (services/spend_feed.py)
+    outbox.emit(session, "credit_note.received", "CREDIT_NOTE", note.id, note.number,
+                {"creditNoteId": str(note.id), "invoiceId": str(invoice.id), "invoice": invoice.number, "grossMinor": note.gross_minor,
+                 "noteDate": note_date.isoformat()})
     return note
 
 

@@ -119,8 +119,15 @@ def test_spot_trip_payments_spend_and_kpis(loaded):
         payments = s.execute(select(Payment)).scalars().all()
         assert len(payments) == counts["paid"] >= 10
         spend = s.execute(select(SpendLine).where(SpendLine.category == "LOGISTICS")).scalars().all()
-        assert len(spend) == 16 and {line.period for line in spend} >= {"2026-11", "2026-12", "2027-01", "2027-02", "2027-03"}
-        assert sum(1 for line in spend if line.contracted) == 15
+        # 16 freight invoice lines. Since the spend cube takes credit and debit notes as documents of their own (spend second pass, S3), a note posted
+        # against a freight invoice is a cube line of its own too (a credit note is negative, a debit note positive, in the period of the note): the
+        # invoice lines stay 16 and the total is 16 plus the notes.
+        invoice_lines = [line for line in spend if line.document_type == "INVOICE"]
+        notes = [line for line in spend if line.document_type != "INVOICE"]
+        assert len(invoice_lines) == 16 and {line.period for line in invoice_lines} >= {"2026-11", "2026-12", "2027-01", "2027-02", "2027-03"}
+        assert all((line.document_type == "CREDIT_NOTE") == (line.amount_minor < 0) for line in notes)
+        assert {line.document_type for line in notes} <= {"CREDIT_NOTE", "DEBIT_NOTE"} and len(spend) == 16 + len(notes)
+        assert sum(1 for line in invoice_lines if line.contracted) == 15
         open_tasks = s.execute(select(Task).where(Task.status == "OPEN")).scalars().all()
         assert open_tasks == []
     kpis = counts["kpis"]

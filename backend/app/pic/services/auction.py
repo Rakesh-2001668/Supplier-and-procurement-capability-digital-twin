@@ -31,8 +31,9 @@ from app.pic.services.common import category_status, days_from_terms, principal
 ELIGIBLE = ("QUALIFIED", "PREFERRED")
 CLOSED_FOR_NOTICES = ("DRAFT", "CANCELLED", "AWARDED")
 SETTING_TYPES = {"minDecrementPct": "pct", "extensionMinutes": "minutes", "triggerMinutes": "minutes", "showRank": "bool",
-                 "showBestPrice": "bool", "paymentTermsDays": "days", "leadTimeDays": "days"}
-PUBLIC_SETTINGS = ("minDecrementPct", "extensionMinutes", "triggerMinutes", "showRank", "showBestPrice", "paymentTermsDays", "leadTimeDays")
+                 "showBestPrice": "bool", "paymentTermsDays": "days", "leadTimeDays": "days", "ceilingMinor": "minor"}
+PUBLIC_SETTINGS = ("minDecrementPct", "extensionMinutes", "triggerMinutes", "showRank", "showBestPrice", "paymentTermsDays", "leadTimeDays",
+                   "ceilingMinor")
 
 
 def is_supplier(p) -> bool:
@@ -44,6 +45,13 @@ def ends_at(event: SourcingEvent) -> datetime:
     if event.type == "REVERSE_AUCTION" and event.auction_ends_at is not None:
         return event.auction_ends_at
     return event.close_at
+
+
+def clarification_deadline(event: SourcingEvent) -> datetime:
+    """Suppliers may ask until the clarification deadline of the event (set when it is created or by the policy), else until the bids close."""
+    if event.type != "REVERSE_AUCTION" and event.clarification_close_at is not None:
+        return min(event.clarification_close_at, ends_at(event))
+    return ends_at(event)
 
 
 def _invitee(session: Session, event: SourcingEvent, supplier_id: Optional[uuid.UUID]) -> Optional[Invitee]:
@@ -114,8 +122,8 @@ def ask(session: Session, event: SourcingEvent, text: str) -> SourcingClarificat
     now = clock.now()
     if is_supplier(p):
         require_visible(session, event)
-        if event.status != "OPEN" or now >= ends_at(event):
-            raise Problem(409, "CLARIFICATION_WINDOW_CLOSED", f"Questions on {event.number} closed at {ends_at(event).isoformat()}",
+        if event.status not in ("OPEN", "PUBLISHED") or now >= clarification_deadline(event):
+            raise Problem(409, "CLARIFICATION_WINDOW_CLOSED", f"Questions on {event.number} closed at {clarification_deadline(event).isoformat()}",
                           rule_ref="F3-03")
     else:
         _require_manager(session, event)
@@ -190,8 +198,8 @@ def clarifications(session: Session, event: SourcingEvent) -> dict:
     items = session.execute(select(SourcingClarification).where(SourcingClarification.event_id == event.id)
                             .order_by(SourcingClarification.seq)).scalars().all()
     now = clock.now()
-    window = {"event": event.number, "status": event.status, "questionsCloseAt": ends_at(event).isoformat(),
-              "open": event.status == "OPEN" and now < ends_at(event)}
+    window = {"event": event.number, "status": event.status, "questionsCloseAt": clarification_deadline(event).isoformat(),
+              "open": event.status in ("OPEN", "PUBLISHED") and now < clarification_deadline(event)}
     if is_supplier(p):
         # Suppliers see every published answer and their own questions; the asker of any item is never disclosed.
         visible = [i for i in items if i.status == "ANSWERED" or i.asked_by_supplier_id == p.supplier_id]
@@ -218,6 +226,11 @@ def _validated(overrides: dict) -> dict:
             if not isinstance(value, bool):
                 raise Problem(422, "INVALID_SETTING", f"{key} must be true or false")
             clean[key] = value
+        elif kind == "minor":
+            amount = int(value)
+            if amount <= 0:
+                raise Problem(422, "INVALID_SETTING", f"{key} must be a positive amount in minor units")
+            clean[key] = amount
         else:
             number = int(value)
             if number < 0 or (kind == "minutes" and number > 240) or (kind == "days" and number > 365):
@@ -301,7 +314,19 @@ def place_bid(session: Session, event: SourcingEvent, supplier: Supplier, price_
         raise rule_violation(f"{supplier.code} is {status} for {event.category} and cannot bid", "P06/SRC-INVITE")
     if price_minor <= 0:
         raise Problem(422, "INVALID_PRICE", "priceMinor must be positive")
+    from app.pic.platform import sourcing_defaults
+
+    pol = sourcing_defaults.policy(session, category=event.category).body
+    band = pol.get("priceBand") or {}
+    if price_minor > int(band.get("maxUnitPriceMinor", 10 ** 12)) or (
+            event.baseline_price_minor and not Decimal(str(band.get("minVsBaseline", "0"))) * event.baseline_price_minor <= price_minor
+            <= Decimal(str(band.get("maxVsBaseline", "1000000"))) * event.baseline_price_minor):
+        raise Problem(422, "IMPLAUSIBLE_PRICE", f"{fmt_inr(price_minor)} is outside the plausible range for {event.number} (check the decimal point)",
+                      rule_ref="SRC-BID")
     settings = event.auction or effective_settings(session, event)
+    if settings.get("ceilingMinor") and price_minor > int(settings["ceilingMinor"]):
+        raise rule_violation(f"The ceiling price of this auction is {fmt_inr(int(settings['ceilingMinor']))}: bid at or below it", "AUCTION-CEILING",
+                             ceilingMinor=int(settings["ceilingMinor"]))
     bids = _bids(session, event)
     own = [b for b in bids if b.supplier_id == supplier.id]
     limit = max_next_price(settings, own[-1].price_minor if own else None)
@@ -314,7 +339,8 @@ def place_bid(session: Session, event: SourcingEvent, supplier: Supplier, price_
     extended = False
     trigger = timedelta(minutes=int(settings.get("triggerMinutes", 0)))
     extension = timedelta(minutes=int(settings.get("extensionMinutes", 0)))
-    if extension and end - now <= trigger:
+    extensions_so_far = sum(1 for b in bids if b.extended_close)
+    if extension and end - now <= trigger and extensions_so_far < int(pol.get("maxExtensions", 12)):  # the soft close cannot go on for ever
         event.auction_ends_at = end + extension
         extended = True
         workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, event.auction_ends_at,

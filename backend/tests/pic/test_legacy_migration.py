@@ -102,4 +102,10 @@ def test_change_order_and_supplier_change_request_create_versions():
         assert [v.version for v in versions] == [1, 2] and "OEM pull-in" in versions[0].change_reason
         pcr = s.execute(select(PoChangeRequest).where(PoChangeRequest.po_id == po.id)).scalar_one()
         assert (pcr.origin, pcr.status, pcr.result_version) == ("SUPPLIER", "ACCEPTED", 3) and "Furnace" in versions[1].change_reason
-        assert len(s.execute(select(SourceList)).scalars().all()) == 2
+        # The legacy flow itself creates 2 source-list entries. Activating the contracts born of the signature award adds one entry per awarded
+        # supplier and material (TD 9.2: the source list of allowed suppliers; services/sourcing_handoff.py), so those are not counted here.
+        from app.pic.models import Contract, ContractLine
+        awarded = {(c.supplier_id, l.material_id, l.plant, c.valid_from, c.valid_to) for c, l in s.execute(
+            select(Contract, ContractLine).join(ContractLine, ContractLine.contract_id == Contract.id).where(Contract.source_event_id.is_not(None))).all()}
+        legacy = [x for x in s.execute(select(SourceList)).scalars().all() if (x.supplier_id, x.material_id, x.plant, x.valid_from, x.valid_to) not in awarded]
+        assert len(legacy) == 2

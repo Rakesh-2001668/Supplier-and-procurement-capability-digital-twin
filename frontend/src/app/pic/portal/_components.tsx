@@ -7,6 +7,7 @@ import { date, dateTime, inr, label, qty, rupeesToMinor } from '@/lib/pic/format
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { isNumber, isPositive, minus, PoDetail, today } from '../invoices/_components';
 import { emptyEway, EwayFields, ewayPayload, ewayProblem } from '../receiving/_components';
+export { BidDialog } from './_bid';
 
 const rupees = (minor: number) => (minor / 100).toFixed(2);
 
@@ -148,135 +149,6 @@ export function ServiceSheetDialog({ po, onClose }: { po: PoDetail; onClose: () 
         <Button onClick={onClose}>Cancel</Button>
         <Button variant="primary" disabled={!chosen.length || invalid} busy={send.isPending} onClick={() => send.mutate()}>Submit service sheet</Button>
       </div>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------- sealed bid (RFQ)
-type EventLine = { id: string; line_no: number; description: string; plant: string; annual_qty: string; monthly_qty: string; uom: string; lot_code?: string | null };
-type SourcingEvent = { id: string; number: string; type: string; title: string; category: string; status: string; round: number; close_at: string;
-  published_at: string | null; currency: string; lines: EventLine[]; criteria: { code: string; name: string; weight: number }[];
-  bids: { supplier: string; round: number; status: string; submittedAt: string; hash: string }[] };
-type BidDraft = { unit_price: string; freight: string; duty: string; packaging: string; payment_terms_days: string; lead_time_days: string; capacity_per_month: string };
-
-export function BidDialog({ number, onClose }: { number: string; onClose: () => void }) {
-  const { data: event, isLoading, error } = useApi<SourcingEvent>(`/sourcing/events/${encodeURIComponent(number)}`);
-  const [drafts, setDrafts] = useState<Record<number, BidDraft>>({});
-  const [receipt, setReceipt] = useState<{ round: number; status: string; hash: string; submittedAt: string } | null>(null);
-  const [prefilled, setPrefilled] = useState(false);
-  const [skipped, setSkipped] = useState<Record<number, boolean>>({});
-  const [lotTerms, setLotTerms] = useState<Record<string, { discount: string; allOrNothing: boolean }>>({});
-  if (event && !prefilled) {
-    setPrefilled(true);
-    setDrafts(Object.fromEntries(event.lines.map((l) => [l.line_no, { unit_price: '', freight: '0', duty: '0', packaging: '0',
-      payment_terms_days: '60', lead_time_days: '', capacity_per_month: String(Number(l.monthly_qty)) }])));
-  }
-  const open = !!event && event.status === 'OPEN' && new Date(event.close_at) > new Date();
-  const myRoundBid = event?.bids.find((b) => b.round === event.round);
-  const multi = (event?.lines.length ?? 0) > 1;
-  const entries = event?.lines.map((l) => ({ line: l, d: drafts[l.line_no] })).filter((e) => e.d && !skipped[e.line.line_no]) ?? [];
-  const lotCodes = Array.from(new Set((event?.lines ?? []).map((l) => l.lot_code).filter((c): c is string => !!c)));
-  // lot terms (a discount for the whole lot, all-or-nothing) need a price for every line of the lot
-  const lotProblems = lotCodes.filter((code) => {
-    const t = lotTerms[code];
-    const wants = !!t && (Number(t.discount) > 0 || t.allOrNothing);
-    return wants && (event?.lines ?? []).some((l) => l.lot_code === code && skipped[l.line_no]);
-  });
-  const lotDiscountBad = lotCodes.some((code) => lotTerms[code]?.discount && !(Number(lotTerms[code].discount) >= 0 && Number(lotTerms[code].discount) < 100));
-  const invalid = lotProblems.length > 0 || lotDiscountBad || !entries.length || entries.some(({ d }) => !isPositive(d.unit_price) || !isNumber(d.freight) || !isNumber(d.duty) || !isNumber(d.packaging)
-    || !isNumber(d.payment_terms_days) || !isPositive(d.lead_time_days) || (d.capacity_per_month !== '' && !isNumber(d.capacity_per_month)));
-  const submit = useCommand(() => api.post<{ round: number; status: string; hash: string; submittedAt: string }>(`/sourcing/events/${encodeURIComponent(number)}/bids`, {
-    lines: entries.map(({ line, d }) => ({ line: line.line_no, unit_price: d.unit_price, freight: d.freight || '0', duty: d.duty || '0', packaging: d.packaging || '0',
-      payment_terms_days: Number(d.payment_terms_days), lead_time_days: Number(d.lead_time_days),
-      capacity_per_month: d.capacity_per_month === '' ? undefined : d.capacity_per_month })),
-    lots: lotCodes.filter((code) => lotTerms[code] && (Number(lotTerms[code].discount) > 0 || lotTerms[code].allOrNothing))
-      .map((code) => ({ lot: code, discount_pct: lotTerms[code].discount || '0', all_or_nothing: lotTerms[code].allOrNothing })),
-  }), { success: 'Sealed bid submitted', onSuccess: setReceipt });
-  const update = (line: number, patch: Partial<BidDraft>) => setDrafts((ds) => ({ ...ds, [line]: { ...ds[line], ...patch } }));
-
-  return (
-    <Dialog open title={`${number} · ${open ? 'Submit sealed bid' : 'Event details'}`} onClose={onClose}>
-      {isLoading ? <Loading /> : error ? <ProblemBox error={error} /> : event && (
-        <div className="space-y-4">
-          <div>
-            <p className="text-sm font-medium">{event.title}</p>
-            <p className="text-xs text-slate-600">{event.type} · {event.category} · round {event.round} · closes {dateTime(event.close_at)}</p>
-            <div className="mt-1"><StatusChip status={event.status} /></div>
-          </div>
-          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-3 text-sm text-slate-800">
-            Bids are encrypted when you submit them and stay sealed until the event closes at <span className="font-semibold">{dateTime(event.close_at)}</span> —
-            nobody at Axion can read prices before then. You can resubmit any time before close; your new bid replaces the previous one for this round.
-          </div>
-          {event.criteria.length > 0 && (
-            <p className="text-xs text-slate-600">Evaluation: {event.criteria.map((c) => `${c.name} ${c.weight}%`).join(' · ')}</p>
-          )}
-          {(receipt || myRoundBid) && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900" role="status">
-              {receipt ? 'Bid received' : 'Your bid on file'} for round {(receipt ?? myRoundBid)!.round} · {label((receipt ?? myRoundBid)!.status)} ·
-              {' '}{dateTime(receipt?.submittedAt ?? myRoundBid!.submittedAt)}
-              <p className="mt-1 break-all font-mono text-[11px]">SHA-256 {receipt?.hash ?? myRoundBid!.hash}</p>
-            </div>
-          )}
-          {event.bids.filter((b) => b.round !== event.round).map((b) => (
-            <p key={b.round} className="text-xs text-slate-500">Round {b.round}: {label(b.status)} · {dateTime(b.submittedAt)}</p>
-          ))}
-          {open ? (
-            <>
-              {multi && <p className="text-sm text-slate-700">This event has {event.lines.length} lines. Price each line you want to bid; you may leave a line out unless the buyer requires a price for every line (the server tells you).</p>}
-              {event.lines.map((l) => drafts[l.line_no] && (
-                <div key={l.id} className={`rounded-lg border p-3 ${skipped[l.line_no] ? 'border-slate-200 bg-slate-50' : 'border-slate-200'}`}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-medium">Line {l.line_no} · {l.description}{l.lot_code && <span className="ml-2 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-violet-800">lot {l.lot_code}</span>}</p>
-                    {multi && (
-                      <label className="flex items-center gap-2 text-xs text-slate-700">
-                        <input type="checkbox" className="h-4 w-4" checked={!skipped[l.line_no]} onChange={(e) => setSkipped((s) => ({ ...s, [l.line_no]: !e.target.checked }))} /> Bid on this line
-                      </label>
-                    )}
-                  </div>
-                  <p className="text-xs text-slate-500">{qty(l.annual_qty, l.uom)} per year · {qty(l.monthly_qty, l.uom)} per month · plant {l.plant}</p>
-                  {!skipped[l.line_no] && <div className="mt-2 grid gap-3 md:grid-cols-4">
-                    <Field label="Unit price (₹)">{(id) => <Input id={id} value={drafts[l.line_no].unit_price} onChange={(e) => update(l.line_no, { unit_price: e.target.value })} />}</Field>
-                    <Field label="Freight / unit (₹)">{(id) => <Input id={id} value={drafts[l.line_no].freight} onChange={(e) => update(l.line_no, { freight: e.target.value })} />}</Field>
-                    <Field label="Duty / unit (₹)">{(id) => <Input id={id} value={drafts[l.line_no].duty} onChange={(e) => update(l.line_no, { duty: e.target.value })} />}</Field>
-                    <Field label="Packaging / unit (₹)">{(id) => <Input id={id} value={drafts[l.line_no].packaging} onChange={(e) => update(l.line_no, { packaging: e.target.value })} />}</Field>
-                    <Field label="Payment terms (days)">{(id) => <Input id={id} inputMode="numeric" value={drafts[l.line_no].payment_terms_days} onChange={(e) => update(l.line_no, { payment_terms_days: e.target.value })} />}</Field>
-                    <Field label="Lead time (days)">{(id) => <Input id={id} inputMode="numeric" value={drafts[l.line_no].lead_time_days} onChange={(e) => update(l.line_no, { lead_time_days: e.target.value })} />}</Field>
-                    <Field label={`Capacity / month (${l.uom})`}>{(id) => <Input id={id} value={drafts[l.line_no].capacity_per_month} onChange={(e) => update(l.line_no, { capacity_per_month: e.target.value })} />}</Field>
-                  </div>}
-                </div>
-              ))}
-              {lotCodes.map((code) => (
-                <div key={code} className="rounded-lg border border-violet-200 bg-violet-50/40 p-3">
-                  <p className="text-sm font-medium">Lot {code} · bundle terms (optional)</p>
-                  <p className="text-xs text-slate-600">Lines {event.lines.filter((l) => l.lot_code === code).map((l) => l.line_no).join(', ')}. A discount applies only if you are awarded the whole lot.
-                    All-or-nothing means you accept the lot only as a whole. Both need a price on every line of the lot.</p>
-                  <div className="mt-2 grid items-end gap-3 md:grid-cols-3">
-                    <Field label="Lot discount (%)">{(id) => <Input id={id} inputMode="decimal" value={lotTerms[code]?.discount ?? ''}
-                      onChange={(e) => setLotTerms((t) => ({ ...t, [code]: { discount: e.target.value, allOrNothing: t[code]?.allOrNothing ?? false } }))} />}</Field>
-                    <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" className="h-4 w-4" checked={lotTerms[code]?.allOrNothing ?? false}
-                      onChange={(e) => setLotTerms((t) => ({ ...t, [code]: { discount: t[code]?.discount ?? '', allOrNothing: e.target.checked } }))} /> All or nothing</label>
-                  </div>
-                  {lotProblems.includes(code) && <p role="alert" className="mt-1 text-sm text-red-700">Bid every line of lot {code} to offer these terms.</p>}
-                </div>
-              ))}
-              <div className="flex justify-end gap-2">
-                <Button onClick={onClose}>Close</Button>
-                <Button variant="primary" disabled={invalid} busy={submit.isPending} onClick={() => submit.mutate()}>
-                  {myRoundBid || receipt ? 'Replace sealed bid' : 'Submit sealed bid'}
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <ul className="text-sm text-slate-700">{event.lines.map((l) => <li key={l.id}>Line {l.line_no} · {l.description} · {qty(l.annual_qty, l.uom)} per year</li>)}</ul>
-              <p className="text-sm text-slate-600">
-                {event.status === 'PUBLISHED' ? 'Bidding opens once the event is opened by the buyer.' : 'Bidding is closed for this event.'}
-              </p>
-              <div className="flex justify-end"><Button onClick={onClose}>Close</Button></div>
-            </>
-          )}
-        </div>
-      )}
     </Dialog>
   );
 }

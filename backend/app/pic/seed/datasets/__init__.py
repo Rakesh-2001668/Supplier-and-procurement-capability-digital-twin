@@ -48,6 +48,8 @@ PACKS = (
     "inventory_ops",          # D13 tenants AXN and KAC: opening stock, transfer, blocked batch, scrap, counts and reservations (inventory module)
     "inventory_master",       # D14 tenants AXN and KAC: MOCK go-live inputs of the inventory module: master data, KAC opening stock, controllers per plant, KAC rule values
     "finance_ops",           # D15 tenants AXN and KAC: MOCK finance datasets: payment history, exceptions, notes, tax data, FX, periods, bank statements, treasury rules
+    "spend_ops",             # D16 tenants AXN and KAC: MOCK spend datasets: two fiscal years, multi-ERP lines, steward and maverick workloads, duplicates, plans, forecast history, data-quality findings
+    "sourcing_ops",          # D17 tenants AXN and KAC: MOCK strategic-sourcing datasets: events in every type and state, bids and TCO, awards, should-cost models, indices
     "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
 )

@@ -127,7 +127,7 @@ MINUTES_SAVED_PER_AGENT_RUN = Decimal(6)
 # ---------------------------------------------------------------- M01 spend & category intelligence
 def _portfolio(c: Ctx) -> dict:
     from app.pic.services import spend
-    return spend.portfolio(c.session, *c.periods())
+    return spend.portfolio(c.session, *c.periods(), plant=c.plant)
 
 
 def m01_under_management(c: Ctx) -> Result:
@@ -150,6 +150,57 @@ def m01_classification(c: Ctx) -> Result:
     decided = dict(c.session.execute(text("SELECT status, count(*) FROM pic.classification_review GROUP BY status")).all())
     accepted = p["autoClassifiedLines"] + decided.get("ACCEPTED", 0)
     return pct(accepted, p["autoClassifiedLines"] + decided.get("ACCEPTED", 0) + decided.get("RECLASSIFIED", 0))
+
+
+def m01_tail_spend(c: Ctx) -> Result:
+    """Share of spend with the long-tail suppliers: parent suppliers beyond 80% cumulative spend (class C of the Pareto ranking)."""
+    from app.pic.services import spend_analytics, spend_cube
+    lo, hi = c.periods()
+    flt = spend_cube.CubeFilter(period_from=None if lo == "0000-00" else lo, period_to=None if hi == "9999-99" else hi, plants=[c.plant] if c.plant else [],
+                                addressable=True)
+    p = spend_analytics.pareto(c.session, "parent_supplier", flt, limit=1)
+    return pct(p["tailSpendMinor"], p["totalMinor"], {"tailSuppliers": p["tailCount"], "suppliers": p["count"]})
+
+
+def m01_suppliers_per_category(c: Ctx) -> Result:
+    """Supplier consolidation: average number of parent suppliers per category (addressable spend, categories with spend)."""
+    from app.pic.services import spend_analytics, spend_cube
+    lo, hi = c.periods()
+    flt = spend_cube.CubeFilter(period_from=None if lo == "0000-00" else lo, period_to=None if hi == "9999-99" else hi, plants=[c.plant] if c.plant else [],
+                                addressable=True)
+    rows = spend_analytics.category_structure(c.session, flt)["rows"]
+    return mean(sum(r["suppliers"] for r in rows), len(rows), Decimal(1), {"categories": len(rows)})
+
+
+def m01_queue_overdue(c: Ctx) -> Result:
+    n = c.scalar("SELECT count(*) FROM pic.classification_review WHERE status IN ('OPEN', 'PENDING_SECOND') AND due_at < :know", know=clock.now())
+    return count_of(n, {"definition": "steward-queue items past their SLA"})
+
+
+def m01_maverick_overdue(c: Ctx) -> Result:
+    n = c.scalar("SELECT count(*) FROM pic.maverick_hit WHERE status = 'OPEN' AND due_at < :know", know=clock.now())
+    return count_of(n, {"definition": "open maverick hits past their SLA"})
+
+
+def m01_quality_score(c: Ctx) -> Result:
+    from app.pic.services import spend_quality
+    report = spend_quality.assess(c.session)
+    return Decimal(str(report["score"])), Decimal(str(report["score"])), Decimal(100), {"failing": report["failing"], "grade": report["grade"]}
+
+
+def m01_spend_forecast_mape(c: Ctx) -> Result:
+    from app.pic.services import spend_forecast
+    a = spend_forecast.accuracy(c.session)
+    # thin history: no number (a MAPE over a handful of points is not a measurement); the details say why and how much data there was
+    return ((Decimal(str(a["mapePct"])) if a["mapePct"] is not None else None), None, Decimal(a["count"]),
+            {"status": a["status"], "reason": a["reason"], "bandCoveragePct": a["bandCoveragePct"], "wapePct": a["wapePct"], "judged": a["count"],
+             "series": a["seriesCount"], "months": a["monthsCount"], "minimumJudged": a["minimumJudged"], "minimumMonths": a["minimumMonths"]})
+
+
+def m01_savings_pipeline(c: Ctx) -> Result:
+    t = _savings_totals(c)
+    open_ = max(0, t.get("NEGOTIATED", 0) - t.get("REALISED", 0))
+    return Decimal(open_), Decimal(t.get("NEGOTIATED", 0)), Decimal(t.get("REALISED", 0)), {"definition": "negotiated savings not yet realised"}
 
 
 def _savings_totals(c: Ctx) -> dict:
@@ -571,11 +622,18 @@ def _define(code, module, name, unit, direction, formula, source, target=None, w
 
 H, L, I = "HIGHER_BETTER", "LOWER_BETTER", "INFO"
 for _args, _kw in [
-    (("SPEND_UNDER_MGMT", "M01", "Spend under management %", "PCT", H, "addressable spend on contract/catalogue or bought clean from a qualified supplier in a planned category / addressable spend", "spend_cube_summary, category_plan, supplier_category_status", 75, 60), {"compute": m01_under_management}),
-    (("CONTRACT_COVERAGE", "M01", "Contract coverage %", "PCT", H, "contracted addressable spend / addressable spend", "spend_cube_summary", 70, 55), {"compute": m01_contract_coverage}),
-    (("MAVERICK_PCT", "M01", "Maverick spend %", "PCT", L, "addressable spend with a maverick flag / addressable spend", "spend_cube_summary", 8, 12), {"compute": m01_maverick}),
-    (("CLASSIFICATION_ACCURACY", "M01", "Classification accuracy %", "PCT", H, "(auto-classified + steward-accepted) / (auto-classified + steward decisions)", "spend_cube_summary, classification_review", 90, 80), {"compute": m01_classification}),
+    (("SPEND_UNDER_MGMT", "M01", "Spend under management %", "PCT", H, "addressable spend on contract/catalogue or bought clean from a qualified supplier in a planned category / addressable spend", "spend_cube_summary, category_plan, supplier_category_status", 75, 60), {"compute": m01_under_management, "scopes": ("TENANT", "PLANT")}),
+    (("CONTRACT_COVERAGE", "M01", "Contract coverage %", "PCT", H, "contracted addressable spend / addressable spend", "spend_cube_summary", 70, 55), {"compute": m01_contract_coverage, "scopes": ("TENANT", "PLANT")}),
+    (("MAVERICK_PCT", "M01", "Maverick spend %", "PCT", L, "addressable spend with a maverick flag / addressable spend", "spend_cube_summary", 8, 12), {"compute": m01_maverick, "scopes": ("TENANT", "PLANT")}),
+    (("CLASSIFICATION_ACCURACY", "M01", "Classification accuracy %", "PCT", H, "(auto-classified + steward-accepted) / (auto-classified + steward decisions)", "spend_cube_summary, classification_review", 90, 80), {"compute": m01_classification, "scopes": ("TENANT", "PLANT")}),
     (("SAVINGS_REALISATION_RATE", "M01", "Savings realisation rate %", "PCT", H, "realised savings / negotiated savings", "savings_ledger_entry", 70, 50), {"compute": m01_realisation_rate}),
+    (("TAIL_SPEND_PCT", "M01", "Tail spend %", "PCT", L, "spend with class C parent suppliers (beyond 80% cumulative spend) / addressable spend", "spend_cube_summary", 8, 15), {"compute": m01_tail_spend, "scopes": ("TENANT", "PLANT")}),
+    (("SUPPLIERS_PER_CATEGORY", "M01", "Suppliers per category", "RATIO", I, "parent suppliers with addressable spend / categories with addressable spend", "spend_cube_summary"), {"compute": m01_suppliers_per_category, "scopes": ("TENANT", "PLANT")}),
+    (("SPEND_FORECAST_MAPE", "M01", "Spend forecast error (MAPE) %", "PCT", L, "mean |forecast issued - actual| / actual over issued forecasts of complete months", "spend_forecast_snapshot, spend_cube_summary", 12, 20), {"compute": m01_spend_forecast_mape, "point_in_time": True}),
+    (("SAVINGS_PIPELINE", "M01", "Savings pipeline", "MINOR", I, "negotiated savings not yet realised", "savings_ledger_entry"), {"compute": m01_savings_pipeline}),
+    (("QUEUE_OVERDUE", "M01", "Steward queue past SLA", "COUNT", L, "classification reviews open past their due date", "classification_review", 0, 25), {"compute": m01_queue_overdue, "point_in_time": True}),
+    (("MAVERICK_OVERDUE", "M01", "Maverick hits past SLA", "COUNT", L, "open maverick hits past their due date", "maverick_hit", 0, 10), {"compute": m01_maverick_overdue, "point_in_time": True}),
+    (("DATA_QUALITY_SCORE", "M01", "Spend data-quality score", "PCT", H, "100 minus the penalties of the spend-cube data-quality checks", "spend_line, spend_cube_summary", 90, 75), {"compute": m01_quality_score, "point_in_time": True}),
     (("FORECAST_MAPE", "M02", "Forecast accuracy (MAPE) %", "PCT", L, "mean |effective forecast − actual| / actual over closed forecast periods", "forecast", 20, 30), {"compute": m02_mape, "scopes": ("TENANT", "PLANT")}),
     (("EXCEPTION_BACKLOG", "M02", "Open MRP exceptions", "COUNT", L, "MRP exceptions with status OPEN", "mrp_exception", 20, 50), {"compute": m02_exception_backlog, "point_in_time": True}),
     (("PO_CONVERSION_LEAD", "M02", "Planned-order conversion lead time (days)", "DAYS", L, "mean time from planned order creation to the requisition it became", "planned_order, requisition", 3, 7), {"compute": m02_conversion_lead, "scopes": ("TENANT", "PLANT")}),

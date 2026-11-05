@@ -217,6 +217,7 @@ def test_manual_scores_carry_over_to_the_bid_of_a_new_round():
         _bid(s, "tf.sales", event)
         _bid(s, "kd.sales", event, unit_price="405")
         _close(s, event, at(2029, 3, 8, 17, 5))
+        sourcing.declare_conflict(s, event, False, "No personal or financial interest in any bidder.")
         sourcing.score(s, event, [{"supplier": "TF001", "criterion": "QUALITY", "score": 90},
                                   {"supplier": "KD002", "criterion": "QUALITY", "score": 70}])
         sourcing.new_round(s, event, at(2029, 3, 12, 17), "improve price")

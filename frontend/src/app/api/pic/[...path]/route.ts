@@ -5,7 +5,7 @@ import { apiBase, clientIp, SESSION_COOKIE } from '@/lib/pic/server';
 // Streams the response body so the server-sent event stream (/v1/stream) passes through.
 
 const FORWARD_REQUEST_HEADERS = ['content-type', 'idempotency-key', 'if-match', 'x-request-id', 'accept', 'traceparent', 'tracestate'];
-const FORWARD_RESPONSE_HEADERS = ['content-type', 'content-disposition', 'etag', 'idempotent-replayed', 'x-request-id', 'retry-after', 'cache-control', 'traceparent'];
+const FORWARD_RESPONSE_HEADERS = ['content-type', 'content-disposition', 'x-content-sha256', 'x-rows', 'x-row-count', 'x-truncated', 'etag', 'idempotent-replayed', 'x-request-id', 'retry-after', 'cache-control', 'traceparent'];
 
 async function forward(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;

@@ -10,3 +10,5 @@ from app.pic.services import (  # noqa: F401,E402  (wave 1 engineer D: industry-
 )
 from app.pic.services import inventory, stock_ledger, stock_reads  # noqa: F401,E402  (inventory: stock ledger, postings, counts, reservations)
 from app.pic.services import debit_notes, early_payment, edi_invoice, mandatory, po_controls, request_templates, sales_order  # noqa: F401,E402  (wave 1 engineer B: P2P completion)
+from app.pic.services import spend_feed, spend_workflow, spend_forecast, spend_quality, spend_analytics  # noqa: F401,E402  (M01 second pass: cube feed, governance workflows, forecast, data quality, analytics)
+from app.pic.services import should_cost, sourcing_analysis, sourcing_handoff, sourcing_kpi, sourcing_notify, sourcing_templates  # noqa: F401,E402  (M05 second pass: should-cost, bid analysis, hand-off, KPIs, notifications, templates)

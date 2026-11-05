@@ -197,7 +197,8 @@ def _requirement(s, lines, origin="MANUAL") -> Requisition:
     base = s.execute(select(Requisition).where(Requisition.number == "REQ-2312")).scalar_one()
     base_line = s.execute(select(PrLine).where(PrLine.requisition_id == base.id, PrLine.line_no == 10)).scalar_one()
     pr = Requisition(tenant_id=base.tenant_id, number=f"REQ-C1-{uuid.uuid4().hex[:8]}", origin=origin, requester_id=base.requester_id,
-                     company_code=base.company_code, plant=base.plant, status="APPROVED", total_minor=0)
+                     company_code=base.company_code, plant=base.plant, status="APPROVED", total_minor=0,
+                     purpose_code="STOCK_REPLENISHMENT")  # P01: an event takes the purpose code of its requirements
     s.add(pr)
     s.flush()
     for index, (number, qty) in enumerate(lines, start=1):

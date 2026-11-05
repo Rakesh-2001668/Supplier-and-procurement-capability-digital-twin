@@ -69,7 +69,7 @@ def test_portfolio_counts_by_type_and_status(loaded):
         assert status["ACTIVE"] + status["EXPIRING"] + status["EXPIRED"] == 55
         # the 40 SAP outline agreements are untouched next to them (still 40; their status may move on when another test module
         # has run the renewal and expiry jobs on the shared database, so only the lifecycle family is asserted)
-        sap = db.execute(select(Contract).where(~Contract.number.like("KAC-%"))).scalars().all()
+        sap = db.execute(select(Contract).where(~Contract.number.like("KAC-%"), Contract.source_event_id.is_(None))).scalars().all()   # the sourcing pack adds contracts born from its awards (source_event_id set)
         assert len(sap) == 40 and {c.status for c in sap} <= {"ACTIVE", "EXPIRING", "EXPIRED"}
         # masters carry no lines or value; call-offs do
         assert all(c.target_value_minor == 0 for c in contracts.values() if c.type in ("MASTER_AGREEMENT", "NDA"))

@@ -90,9 +90,13 @@ def _negotiated(session: Session, event) -> None:
     initiative.new_price_minor = weighted
     initiative.annual_volume = volume
     initiative.supplier_prices = {a["supplierId"]: a["priceMinor"] for a in data["allocations"]}
-    _ledger(session, initiative, "NEGOTIATED", amount, False,
-            f"({initiative.baseline_price_minor/100:.2f} − {weighted/100:.2f}) × {volume} /yr", "SOURCING_EVENT", event.object_ref)
-    SM.apply(session, initiative, "negotiate", extra_after={"negotiatedMinor": amount})
+    # An award above the baseline is a cost increase, not a negative saving: the ledger records 0 negotiated and the audit trail the increase.
+    booked = max(amount, 0)
+    _ledger(session, initiative, "NEGOTIATED", booked, False,
+            f"({initiative.baseline_price_minor/100:.2f} − {weighted/100:.2f}) × {volume} /yr" + (" (cost increase: not booked as a saving)" if amount < 0 else "")
+            + f" [baseline method {data.get('baselineMethod') or initiative.baseline_method}]", "SOURCING_EVENT", event.object_ref)
+    SM.apply(session, initiative, "negotiate", extra_after={"negotiatedMinor": booked, "baselineMethod": data.get("baselineMethod") or initiative.baseline_method,
+                                                            **({"costIncreaseMinor": -amount} if amount < 0 else {})})
 
 
 @outbox.consumer("contract.activated", "savings-contracted")
@@ -220,63 +224,8 @@ def waterfall(session: Session, initiative: SavingsInitiative) -> dict:
 
 
 # ---------------------------------------------------------------- spend (M01)
-@outbox.consumer("invoice.posted", "spend-cube")
-def _spend(session: Session, event) -> None:
-    invoice = session.get(Invoice, uuid.UUID(event.payload["invoiceId"]))
-    credited: dict[int, Decimal] = {}
-    for note in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars():
-        for entry in note.lines:
-            credited[int(entry["invoice_line"])] = credited.get(int(entry["invoice_line"]), Decimal(0)) + D(entry["qty"])
-    for line in session.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)).scalars():
-        po_line = session.get(PoLine, line.po_line_id)
-        po = session.get(PurchaseOrder, po_line.po_id)
-        material = session.get(Material, po_line.material_id) if po_line.material_id else None
-        flags = []
-        if po.created_at.date() > invoice.invoice_date:
-            flags.append("PO_AFTER_INVOICE")
-        if material and po_line.contract_line_id is None and session.execute(
-                select(ContractLine.id).join(Contract, Contract.id == ContractLine.contract_id).where(
-                    ContractLine.material_id == material.id, Contract.status.in_(("ACTIVE", "EXPIRING")))).first():
-            flags.append("OFF_CONTRACT")
-        if any(f.get("code") == "SPLIT_PATTERN" for f in (po.risk_factors or [])):
-            flags.append("SPLIT_PO")
-        if po_line.price_deviation:
-            flags.append("OFF_CONTRACT_PRICE")
-        qty = line.qty - credited.get(line.line_no, Decimal(0))
-        reference = None
-        if po_line.price_validity_id:
-            reference = session.get(PriceValidity, po_line.price_validity_id).unit_price_minor
-        elif material and material.standard_price_minor:
-            reference = material.standard_price_minor
-        variance = line_amount(qty, line.unit_price_minor - reference) if reference and line.unit_price_minor > reference else 0
-        last_price = _last_price_paid(session, po_line, po)
-        variance_last = line_amount(qty, line.unit_price_minor - last_price) if last_price and line.unit_price_minor > last_price else 0
-        amount = line_amount(qty, line.unit_price_minor)
-        fx = cube_engine.rate_for_line(session, invoice.currency, invoice.invoice_date)
-        spend_line = SpendLine(
-            tenant_id=invoice.tenant_id, invoice_line_id=line.id, invoice_ref=invoice.number, po_ref=po.number, supplier_id=invoice.supplier_id,
-            category=material.category if material else po_line.material_group, material_group=po_line.material_group, plant=po_line.plant,
-            company_code=invoice.company_code, cost_object=po_line.account_assignment_code, period=invoice.invoice_date.strftime("%Y-%m"),
-            amount_minor=amount, contracted=po_line.contract_line_id is not None, addressable=True,
-            maverick_flags=flags, classification_confidence=Decimal("1.000") if material else Decimal("0.000"), created_by=invoice.created_by,
-            description=po_line.description, po_line_id=po_line.id, price_variance_minor=variance, source="PLATFORM",
-            currency=invoice.currency, source_system="PIC", cost_object_type=po_line.account_assignment_type,
-            fx_rate=fx[0] if fx else None, fx_date=fx[1] if fx else None,
-            amount_group_minor=int((Decimal(amount) * fx[0]).quantize(Decimal("1"), ROUND_HALF_UP)) if fx else None,
-            price_variance_last_minor=variance_last,
-        )
-        session.add(spend_line)
-        spend.after_spend_line(session, spend_line)
-
-
-def _last_price_paid(session: Session, po_line: PoLine, po: PurchaseOrder) -> Optional[int]:
-    """Unit price of the material on the latest earlier PO line (the price actually paid last time)."""
-    if po_line.material_id is None:
-        return None
-    return session.execute(
-        select(PoLine.unit_price_minor).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
-            PoLine.material_id == po_line.material_id, PoLine.id != po_line.id, PurchaseOrder.created_at < po.created_at,
-            PurchaseOrder.status != "CANCELLED").order_by(PurchaseOrder.created_at.desc()).limit(1)).scalar()
+# The invoice.posted / credit_note.received / debit_note.posted consumers that write the spend lines live in services/spend_feed.py
+# (a credit note is a negative line in the period of the note, a debit note a positive one; see its docstring).
 
 
 def spend_cube(session: Session, dimensions: list[str]) -> dict:

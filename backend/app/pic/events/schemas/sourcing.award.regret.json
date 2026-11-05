@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.award.regret",
+  "title": "sourcing.award.regret",
+  "description": "Payload (outbox_event.payload) of sourcing.award.regret on SOURCING_EVENT. Produced by services/sourcing.py.",
+  "type": "object",
+  "properties": {
+    "supplier": {},
+    "supplierId": {
+      "type": "string"
+    },
+    "reason": {},
+    "detail": {},
+    "round": {},
+    "rank": {},
+    "bidders": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "supplier",
+    "supplierId",
+    "reason",
+    "detail",
+    "round",
+    "rank",
+    "bidders"
+  ],
+  "additionalProperties": true
+}

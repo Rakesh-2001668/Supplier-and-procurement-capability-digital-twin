@@ -609,6 +609,7 @@ def apply(tenant_code: str, password: str) -> dict:
                                  ("category.head", 20, [("SPD201", "QUALITY", 82), ("AAC202", "QUALITY", 79), ("SPD201", "DELIVERY", 85),
                                                         ("AAC202", "DELIVERY", 72), ("SPD201", "ESG", 75), ("AAC202", "ESG", 74)])):
         with sc.act(who, at(d8, 10, minute)) as s:
+            sourcing.declare_conflict(s, s.get(SourcingEvent, event_id), False, "No personal or financial interest in any bidder.")  # SRC-05
             sourcing.score(s, s.get(SourcingEvent, event_id), [{"supplier": a, "criterion": b, "score": c} for a, b, c in entries])
     with sc.act("mdm.quality", at(d8, 10, 30)) as s:
         task = s.execute(select(Task).where(Task.object_id == oil_id, Task.status == "OPEN",

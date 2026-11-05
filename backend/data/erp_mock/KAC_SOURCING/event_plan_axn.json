@@ -1,0 +1,82 @@
+{
+  "events": [
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 3,
+      "category": "FASTENERS",
+      "created": "2027-08-02",
+      "key": "A01",
+      "outcome": "EVAL_RFI",
+      "state": "UNDER_EVALUATION",
+      "type": "RFI"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 4,
+      "category": "ALU-DIECAST",
+      "created": "2027-08-09",
+      "key": "A02",
+      "outcome": "AWARD_BEST_VALUE",
+      "state": "AWARDED",
+      "type": "RFP"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 4,
+      "category": "ALU-DIECAST",
+      "created": "2027-08-16",
+      "key": "A03",
+      "outcome": "AWARD_ROUNDS",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 4,
+      "category": "ALU-DIECAST",
+      "created": "2027-08-23",
+      "key": "A04",
+      "lines": 3,
+      "outcome": "AWARD_LOT",
+      "state": "AWARDED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 3,
+      "category": "FASTENERS",
+      "created": "2027-09-01",
+      "key": "A05",
+      "outcome": "CANCEL_BIDS",
+      "state": "CANCELLED",
+      "type": "RFQ"
+    },
+    {
+      "baselineMethod": "BUDGET",
+      "bidders": 3,
+      "category": "ALU-DIECAST",
+      "created": "2027-09-08",
+      "key": "A06",
+      "openers": 1,
+      "outcome": "CLOSED_WAIT",
+      "state": "CLOSED",
+      "twoPerson": true,
+      "type": "RFQ"
+    }
+  ],
+  "label": "MOCK sample data (sourcing_ops)",
+  "summary": {
+    "byState": {
+      "AWARDED": 3,
+      "CANCELLED": 1,
+      "CLOSED": 1,
+      "UNDER_EVALUATION": 1
+    },
+    "byType": {
+      "RFI": 1,
+      "RFP": 1,
+      "RFQ": 4
+    },
+    "events": 6
+  }
+}

@@ -1,11 +1,13 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api, ApiError } from '@/lib/pic/api';
 import { inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
+import { BASELINE_METHODS, SCORING_METHODS } from '../_lib';
 
 type Requisition = { id: string; number: string; status: string; purpose_text: string | null; plant: string; total_minor: number };
 type PrLine = { line_no: number; description: string; qty: string; uom: string; plant: string; category: string | null;
@@ -17,7 +19,10 @@ type CreatedEvent = { number: string };
 type Source = { requisition: string; line: number; qty: string };
 type LineSel = { key: string; requisition: string; line: number; description: string; uom: string; annual_qty: string; monthly_qty: string;
   lot: string; baseline: string; sources?: Source[] };
-type CriterionRow = { code: string; name: string; weight: string; data_source: string };
+type CriterionRow = { code: string; name: string; weight: string; data_source: string; min_score: string };
+type TemplateRow = { code: string; name: string; eventType: string; category: string | null; payload: { criteria?: { code: string; name: string; weight: number; data_source?: string; min_score?: string | null }[];
+  scoring_method?: string; baseline_method?: string; min_bidders?: number; savings_target_pct?: string; constraints?: Record<string, unknown> } };
+type ScModel = { code: string; version: number; commodity: string; title: string; spec: { inputs?: { code: string; label?: string; unit?: string }[] } };
 type Candidate = { code: string; name: string; status: string; waiverNeeded: boolean; segment: string; riskScore: number; riskLevel: string; openSignals: string[] };
 type CandidateResult = { candidates: Candidate[]; hiddenByFilter: { segment: number; risk: number; signals: number } };
 type BundleItem = { requisition: string; line: number; origin: string; category: string; description: string; plant: string; qty: string; uom: string;
@@ -38,11 +43,11 @@ const CRITERIA_CODES: Record<string, string> = {
 };
 const SEGMENTS = ['STRATEGIC', 'LEVERAGE', 'BOTTLENECK', 'ROUTINE', 'UNSEGMENTED'];
 const DEFAULT_CRITERIA: CriterionRow[] = [
-  { code: 'PRICE_TCO', name: 'Price / TCO', weight: '50', data_source: 'MANUAL' },
-  { code: 'QUALITY', name: 'Quality', weight: '20', data_source: 'MANUAL' },
-  { code: 'DELIVERY', name: 'Delivery', weight: '15', data_source: 'MANUAL' },
-  { code: 'TECHNICAL', name: 'Technical', weight: '10', data_source: 'MANUAL' },
-  { code: 'ESG', name: 'ESG', weight: '5', data_source: 'MANUAL' },
+  { code: 'PRICE_TCO', name: 'Price / TCO', weight: '50', data_source: 'MANUAL', min_score: '' },
+  { code: 'QUALITY', name: 'Quality', weight: '20', data_source: 'MANUAL', min_score: '' },
+  { code: 'DELIVERY', name: 'Delivery', weight: '15', data_source: 'MANUAL', min_score: '' },
+  { code: 'TECHNICAL', name: 'Technical', weight: '10', data_source: 'MANUAL', min_score: '' },
+  { code: 'ESG', name: 'ESG', weight: '5', data_source: 'MANUAL', min_score: '' },
 ];
 // Criteria whose score can come from platform data at close instead of an evaluator: code -> data source.
 const DATA_SOURCE_FOR: Record<string, { value: string; label: string }> = {
@@ -52,12 +57,6 @@ const DATA_SOURCE_FOR: Record<string, { value: string; label: string }> = {
   ESG: { value: 'ESG', label: 'Accepted ESG assessment' },
   RISK: { value: 'RISK', label: 'Open risk signals' },
 };
-const BASELINE_METHODS = [
-  { value: 'LAST_PRICE', label: 'Last price paid (info record)' },
-  { value: 'STANDARD_PRICE', label: 'Standard price' },
-  { value: 'SHOULD_COST', label: 'Should-cost model' },
-  { value: 'BUDGET', label: 'Budget price' },
-];
 const ELIGIBLE = ['QUALIFIED', 'PREFERRED'];
 const SHOULD_COST_FIELDS: { key: string; label: string; hint?: string; required: boolean }[] = [
   { key: 'net_weight_kg', label: 'Net weight (kg)', required: true },
@@ -76,8 +75,29 @@ function toLocalInput(d: Date) {
 const num = (v: string) => (v.trim() === '' ? NaN : Number(v));
 
 export default function NewSourcingEvent() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <NewEventForm />
+    </Suspense>
+  );
+}
+
+function NewEventForm() {
   const router = useRouter();
+  const templateCode = useSearchParams().get('template');
+  const templates = useApi<TemplateRow[]>(templateCode ? '/sourcing/templates' : null);
+  const template = templates.data?.find((t) => t.code === templateCode) ?? null;
+  const scModels = useApi<ScModel[]>('/sourcing/should-cost/models');
   const [type, setType] = useState('RFQ');
+  const [scoringMethod, setScoringMethod] = useState('LOWEST_RATIO');
+  const [referenceDate, setReferenceDate] = useState('');
+  const [clarificationCloseAt, setClarificationCloseAt] = useState('');
+  const [openAt, setOpenAt] = useState('');
+  const [budgetJustification, setBudgetJustification] = useState('');
+  const [minBidders, setMinBidders] = useState('');
+  const [scModel, setScModel] = useState('');
+  const [scInputs, setScInputs] = useState<Record<string, string>>({});
+  const [appliedTemplate, setAppliedTemplate] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('');
   const [lines, setLines] = useState<LineSel[]>([]);
@@ -107,6 +127,25 @@ export default function NewSourcingEvent() {
   const [savingsTarget, setSavingsTarget] = useState('');
   const [attempted, setAttempted] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
+  // A template pre-fills the form once it has loaded (the values stay editable where the template route takes them).
+  if (template && appliedTemplate !== template.code) {
+    setAppliedTemplate(template.code);
+    setType(template.eventType);
+    if (template.category) setCategory(template.category);
+    if (template.payload.criteria?.length) {
+      setCriteria(template.payload.criteria.map((c) => ({ code: c.code, name: c.name, weight: String(c.weight), data_source: c.data_source ?? 'MANUAL', min_score: c.min_score ? String(c.min_score) : '' })));
+    }
+    if (template.payload.scoring_method) setScoringMethod(template.payload.scoring_method);
+    if (template.payload.baseline_method) setBaselineMethod(template.payload.baseline_method);
+    if (template.payload.min_bidders != null) setMinBidders(String(template.payload.min_bidders));
+    if (template.payload.savings_target_pct) setSavingsTarget(template.payload.savings_target_pct);
+    const c = template.payload.constraints;
+    if (c?.max_suppliers != null) setMaxSuppliers(String(c.max_suppliers));
+    if (c?.max_share != null) setMaxShare(String(Math.round(Number(c.max_share) * 100)));
+    if (c?.min_share != null) setMinShare(String(Math.round(Number(c.min_share) * 100)));
+  }
+  const fromTemplate = !!templateCode;
+  const chosenModel = (scModels.data ?? []).find((m) => m.code === scModel);
 
   const suppliers = useList<Supplier>('/suppliers');
   const categoryOptions = useMemo(() => Array.from(new Set(suppliers.items.flatMap((s) => Object.keys(s.categories ?? {})))).sort(), [suppliers.items]);
@@ -117,7 +156,13 @@ export default function NewSourcingEvent() {
     ? `/sourcing/invitee-candidates?category=${encodeURIComponent(category)}${segmentFilter ? `&segment=${segmentFilter}` : ''}${riskFilter ? `&maxRisk=${riskFilter}` : ''}`
     : null;
   const candidates = useApi<CandidateResult>(candidateQuery);
-  const chosen = suppliers.items.filter((s) => invitees[s.code]?.selected);
+  // Suppliers the API says are eligible for the category come first (they may be on a page of the supplier list that is not loaded yet); the loaded suppliers follow.
+  const supplierRows = useMemo<Supplier[]>(() => {
+    const eligible: Supplier[] = (candidates.data?.candidates ?? []).map((c) => ({ id: c.code, code: c.code, legal_name: c.name, status: c.status, categories: { [category]: c.status } }));
+    const known = new Set(eligible.map((c) => c.code));
+    return [...eligible, ...suppliers.items.filter((s) => !known.has(s.code))];
+  }, [candidates.data, suppliers.items, category]);
+  const chosen = supplierRows.filter((s) => invitees[s.code]?.selected);
   const lotCounts = lines.reduce<Record<string, number>>((acc, l) => (l.lot.trim() ? { ...acc, [l.lot.trim().toUpperCase()]: (acc[l.lot.trim().toUpperCase()] ?? 0) + 1 } : acc), {});
   const closeDate = new Date(closeAt);
 
@@ -134,7 +179,18 @@ export default function NewSourcingEvent() {
   if (weightTotal !== 100) problems.push(`Scoring weights must total 100 (currently ${weightTotal}).`);
   if (duplicateCodes.length) problems.push(`Each criterion code can be used once (${Array.from(new Set(duplicateCodes)).join(', ')}).`);
   if (criteria.some((c) => !c.name.trim())) problems.push('Every criterion needs a name.');
-  if (!chosen.length) problems.push('Invite at least one qualified supplier.');
+  if (!chosen.length && !fromTemplate) problems.push('Invite at least one qualified supplier.');
+  const clarifyDate = clarificationCloseAt ? new Date(clarificationCloseAt) : null;
+  const openDate = openAt ? new Date(openAt) : null;
+  if (clarifyDate && (clarifyDate.getTime() >= closeDate.getTime() || clarifyDate.getTime() <= now)) problems.push('Questions must close in the future and before the bid deadline.');
+  if (openDate && (openDate.getTime() >= closeDate.getTime())) problems.push('The scheduled opening must be before the bid deadline.');
+  if (openDate && type === 'REVERSE_AUCTION') problems.push('A live reverse auction cannot have a scheduled opening.');
+  if (minBidders.trim() !== '' && !(Number(minBidders) >= 1 && Number(minBidders) <= 20 && Number.isInteger(Number(minBidders)))) problems.push('Minimum bidders must be a whole number from 1 to 20.');
+  if (budgetJustification.length > 2000) problems.push('The budget justification is at most 2000 characters.');
+  criteria.forEach((c) => { if (c.min_score.trim() !== '' && !(Number(c.min_score) >= 0 && Number(c.min_score) <= 100)) problems.push(`${c.code}: the minimum score (technical gate) is between 0 and 100.`); });
+  if (scModel && useShouldCost) problems.push('Use either a should-cost model from the library or the parametric die-casting model, not both.');
+  if (scModel && lines.length > 1) problems.push('Should-cost is calculated per item: use a single-line event.');
+  if (scModel && chosenModel) (chosenModel.spec.inputs ?? []).forEach((i) => { if (scInputs[i.code] === undefined || scInputs[i.code] === '' || Number.isNaN(Number(scInputs[i.code]))) problems.push(`Should-cost input ${i.label ?? i.code} is required.`); });
   chosen.forEach((s) => {
     if (s.categories?.[category] === 'CONDITIONAL' && !invitees[s.code]?.waiver.trim()) problems.push(`${s.code} is Conditional – a waiver reason is required.`);
   });
@@ -168,7 +224,15 @@ export default function NewSourcingEvent() {
       annual_qty: l.annual_qty, monthly_qty: l.monthly_qty, lot: l.lot.trim() ? l.lot.trim().toUpperCase() : undefined,
       baseline_price_minor: l.baseline ? rupeesToMinor(l.baseline) : undefined,
     })),
-    criteria: criteria.map((c) => ({ code: c.code, name: c.name.trim(), weight: Number(c.weight), data_source: c.data_source === 'MANUAL' ? undefined : c.data_source })),
+    criteria: criteria.map((c) => ({ code: c.code, name: c.name.trim(), weight: Number(c.weight), data_source: c.data_source === 'MANUAL' ? undefined : c.data_source,
+      min_score: c.min_score.trim() === '' ? undefined : c.min_score.trim() })),
+    scoring_method: scoringMethod,
+    reference_date: referenceDate || undefined,
+    clarification_close_at: clarifyDate ? clarifyDate.toISOString() : undefined,
+    open_at: openDate ? openDate.toISOString() : undefined,
+    budget_justification: budgetJustification.trim() || undefined,
+    min_bidders: minBidders.trim() === '' ? undefined : Number(minBidders),
+    should_cost_model: scModel && chosenModel ? { code: scModel, inputs: Object.fromEntries((chosenModel.spec.inputs ?? []).map((i) => [i.code, scInputs[i.code]])) } : undefined,
     invitees: chosen.map((s) => ({ supplier: s.code, waiver_reason: invitees[s.code]?.waiver.trim() || undefined })),
     close_at: closeDate.toISOString(),
     baseline_method: baselineMethod,
@@ -188,7 +252,12 @@ export default function NewSourcingEvent() {
 
   const create = useCommand(async (publish: boolean) => {
     setError(null);
-    const event = await api.post<CreatedEvent>('/sourcing/events', body());
+    // From a template the API takes the title, category, lines, close time and invitees; everything else comes from the template.
+    const full = body();
+    const event = fromTemplate
+      ? await api.post<CreatedEvent>(`/sourcing/templates/${encodeURIComponent(templateCode as string)}/events`,
+        { title: full.title, category: full.category, lines: full.lines, close_at: full.close_at, invitees: full.invitees.length ? full.invitees : undefined })
+      : await api.post<CreatedEvent>('/sourcing/events', full);
     if (publish) {
       try {
         await api.post(`/sourcing/events/${encodeURIComponent(event.number)}/publish`);
@@ -228,6 +297,30 @@ export default function NewSourcingEvent() {
           <Field label="Close date-time" hint={type === 'REVERSE_AUCTION' ? 'The live auction ends at this moment; late bids extend it (soft close). One line per auction.' : 'Bids stay sealed until this moment.'}>{(id) => <Input id={id} type="datetime-local" value={closeAt} onChange={(e) => setCloseAt(e.target.value)} required />}</Field>
           <Field label="Savings target (%)" hint="Optional">{(id) => <Input id={id} type="number" min="0" step="0.1" value={savingsTarget} onChange={(e) => setSavingsTarget(e.target.value)} />}</Field>
         </div>
+      </Card>
+
+      {fromTemplate && (
+        <div role="status" className="rounded-lg border border-blue-200 bg-blue-50/60 px-4 py-3 text-sm text-slate-800">
+          {templates.isLoading ? 'Loading template…' : template ? (
+            <>Creating from template <span className="font-mono font-semibold">{template.code}</span> ({template.name}). The template supplies the criteria, scoring and baseline method, award constraints and, when you name no invitees, the invitation filter.
+              The API takes only the title, category, lines, close time and invitees for a template event; the schedule and budget fields below are shown for reference and are set with the plain form (<Link className="text-[#1A56DB] hover:underline" href="/pic/sourcing/new">without a template</Link>).</>
+          ) : <>Template <span className="font-mono">{templateCode}</span> was not found.</>}
+        </div>
+      )}
+
+      <Card title="1b · Schedule, scoring and rules">
+        <fieldset disabled={fromTemplate} className="grid gap-4 md:grid-cols-4">
+          <legend className="sr-only">Schedule, scoring and rules</legend>
+          <Field label="Price scoring method" hint="How the price part of the score is worked out from total cost.">{(id) => <Select id={id} value={scoringMethod} onChange={(e) => setScoringMethod(e.target.value)} options={SCORING_METHODS} />}</Field>
+          <Field label="Pricing (reference) date" hint="Bid currencies convert at the rate valid on this day. Empty: today.">{(id) => <Input id={id} type="date" value={referenceDate} onChange={(e) => setReferenceDate(e.target.value)} />}</Field>
+          <Field label="Questions close" hint="Suppliers can ask until then. Empty: the policy sets it before the deadline.">{(id) => <Input id={id} type="datetime-local" value={clarificationCloseAt} onChange={(e) => setClarificationCloseAt(e.target.value)} />}</Field>
+          <Field label="Bids open at" hint={type === 'REVERSE_AUCTION' ? 'Not available for a live auction.' : 'Scheduled opening: published and visible now, bids accepted from this time. Empty: opens at publication.'}>{(id) => <Input id={id} type="datetime-local" value={openAt} disabled={type === 'REVERSE_AUCTION'} onChange={(e) => setOpenAt(e.target.value)} />}</Field>
+          <Field label="Minimum bidders" hint="Fewer valid bidders: limited competition, an award then needs a rationale. Empty: policy value.">{(id) => <Input id={id} type="number" min="1" max="20" step="1" value={minBidders} onChange={(e) => setMinBidders(e.target.value)} />}</Field>
+          <div className="md:col-span-3">
+            <Field label="Budget justification" hint="Needed at publication when the event takes the category budget past 100 % (soft stop).">{(id) => <Textarea id={id} value={budgetJustification} maxLength={2000} onChange={(e) => setBudgetJustification(e.target.value)} />}</Field>
+          </div>
+        </fieldset>
+        <p className="mt-2 text-xs text-slate-500">The purpose code (P01) is taken from the requirements the event sources and shown on the event once published; a requirement without a purpose code cannot be published.</p>
       </Card>
 
       <Card title="2 · Requirement lines (approved requisitions; several items and lots per event)">
@@ -275,9 +368,10 @@ export default function NewSourcingEvent() {
           Weights total {weightTotal} / 100 {weightTotal === 100 ? '✓' : `(${weightTotal > 100 ? 'over' : 'short'} by ${Math.abs(100 - weightTotal)})`}
         </span>
       }>
-        <div className="space-y-2">
+        <fieldset disabled={fromTemplate} className="space-y-2">
+          <legend className="sr-only">Scoring criteria</legend>
           {criteria.map((c, i) => (
-            <div key={i} className="grid grid-cols-[1fr_1.5fr_6rem_auto] items-end gap-2">
+            <div key={i} className="grid grid-cols-2 items-end gap-2 md:grid-cols-[1fr_1.5fr_6rem_7rem_auto]">
               <Field label={i === 0 ? 'Code' : ' '}>{(id) => (
                 <Select id={id} aria-label={`Criterion ${i + 1} code`} value={c.code}
                   onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, code: e.target.value, data_source: 'MANUAL', name: x.name === CRITERIA_CODES[x.code] || !x.name ? CRITERIA_CODES[e.target.value] : x.name } : x)))}
@@ -285,9 +379,11 @@ export default function NewSourcingEvent() {
               )}</Field>
               <Field label={i === 0 ? 'Name' : ' '}>{(id) => <Input id={id} aria-label={`Criterion ${i + 1} name`} value={c.name} onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />}</Field>
               <Field label={i === 0 ? 'Weight' : ' '}>{(id) => <Input id={id} aria-label={`Criterion ${i + 1} weight`} type="number" min="0" max="100" value={c.weight} onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, weight: e.target.value } : x)))} />}</Field>
+              <Field label={i === 0 ? 'Gate (min score)' : ' '}>{(id) => <Input id={id} aria-label={`Criterion ${i + 1} minimum score (technical gate)`} type="number" min="0" max="100" placeholder="none" value={c.min_score}
+                disabled={c.code === 'PRICE_TCO'} onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, min_score: e.target.value } : x)))} />}</Field>
               <Button variant="ghost" aria-label={`Remove criterion ${c.code}`} onClick={() => setCriteria((p) => p.filter((_, j) => j !== i))}>Remove</Button>
               {DATA_SOURCE_FOR[c.code] && (
-                <label className="col-span-4 flex items-center gap-2 pl-1 text-xs text-slate-600">
+                <label className="col-span-full flex items-center gap-2 pl-1 text-xs text-slate-600">
                   <input type="checkbox" className="h-3.5 w-3.5" checked={c.data_source !== 'MANUAL'}
                     onChange={(e) => setCriteria((p) => p.map((x, j) => (j === i ? { ...x, data_source: e.target.checked ? DATA_SOURCE_FOR[c.code].value : 'MANUAL' } : x)))} />
                   Score {c.code} from data at close: {DATA_SOURCE_FOR[c.code].label} (no evaluator scoring)
@@ -295,11 +391,11 @@ export default function NewSourcingEvent() {
               )}
             </div>
           ))}
-        </div>
+        </fieldset>
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <Button onClick={() => {
+          <Button disabled={fromTemplate} onClick={() => {
             const unused = Object.keys(CRITERIA_CODES).find((k) => !criteria.some((c) => c.code === k)) ?? 'RISK';
-            setCriteria((p) => [...p, { code: unused, name: CRITERIA_CODES[unused], weight: '0', data_source: 'MANUAL' }]);
+            setCriteria((p) => [...p, { code: unused, name: CRITERIA_CODES[unused], weight: '0', data_source: 'MANUAL', min_score: '' }]);
           }}>Add criterion</Button>
           <p className="text-xs text-slate-500">PRICE_TCO is scored automatically from total cost of ownership per line. ESG, Risk and the scorecard criteria can take their score from platform data at close
             (frozen on the bid); the others are scored by evaluators after close. Weights lock at publish.</p>
@@ -333,7 +429,7 @@ export default function NewSourcingEvent() {
           <Empty title="Choose a category first" hint="Each supplier's qualification status is shown for the chosen category." />
         ) : (
           <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-            {suppliers.items.filter((s) => !candidates.data || (!segmentFilter && !riskFilter) || candidates.data.candidates.some((c) => c.code === s.code)).map((s) => {
+            {supplierRows.filter((s) => !candidates.data || (!segmentFilter && !riskFilter) || candidates.data.candidates.some((c) => c.code === s.code)).map((s) => {
               const st = s.categories?.[category] ?? 'NOT_REGISTERED';
               const eligible = ELIGIBLE.includes(st) || st === 'CONDITIONAL';
               const sel = invitees[s.code];
@@ -370,6 +466,16 @@ export default function NewSourcingEvent() {
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="h-4 w-4" checked={useShouldCost} onChange={(e) => setUseShouldCost(e.target.checked)} /> Add a parametric should-cost model</label>
           </div>
         </div>
+        <fieldset disabled={fromTemplate} className="mt-4 rounded-lg bg-slate-50 p-4">
+          <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Should-cost model from the library (single-line events)</legend>
+          <div className="grid gap-3 md:grid-cols-4">
+            <Field label="Model" hint="Index-linked, versioned. Empty: none.">{(id) => <Select id={id} value={scModel} onChange={(e) => { setScModel(e.target.value); setScInputs({}); }}
+              options={[{ value: '', label: 'No library model' }, ...(scModels.data ?? []).map((m) => ({ value: m.code, label: `${m.code} v${m.version} · ${m.title}` }))]} />}</Field>
+            {chosenModel && (chosenModel.spec.inputs ?? []).map((i) => (
+              <Field key={i.code} label={`${i.label ?? i.code}${i.unit ? ` (${i.unit})` : ''}`}>{(id) => <Input id={id} type="number" min="0" step="any" value={scInputs[i.code] ?? ''} onChange={(e) => setScInputs((p) => ({ ...p, [i.code]: e.target.value }))} />}</Field>
+            ))}
+          </div>
+        </fieldset>
         {useShouldCost && (
           <div className="mt-4 rounded-lg bg-slate-50 p-4">
             <div className="grid gap-3 md:grid-cols-4">

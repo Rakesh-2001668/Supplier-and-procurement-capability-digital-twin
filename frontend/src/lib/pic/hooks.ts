@@ -43,7 +43,9 @@ export function useCommand<TArgs = void, TResult = unknown>(
   return useMutation<TResult, ApiError, TArgs>({
     mutationFn: run,
     onSuccess: async (result) => {
-      await client.invalidateQueries();
+      // Refresh what is on screen, but do not hold the dialog and its toast hostage to a slow query (a KPI strip or a large list can take
+      // many seconds): wait briefly for fast refetches so the screen is current when the dialog closes, then carry on while the rest loads.
+      await Promise.race([client.invalidateQueries(), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
       if (options.success) toast.success(typeof options.success === 'function' ? options.success(result) : options.success);
       options.onSuccess?.(result);
     },

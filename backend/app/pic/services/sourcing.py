@@ -10,26 +10,29 @@ import itertools
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant, tenant_tx
 from app.pic.models import (
-    AwardDecision, AwardScenario, Bid, BidLine, BidLot, CategoryPlan, Criterion, EventLine, EventLineSource, Evaluation, InfoRecord, Invitee,
-    Material, PrLine, Requisition, Scorecard, SourcingEvent, Supplier, SupplierCategoryStatus, SupplierSegment, Task, Timer,
+    AwardDecision, AwardScenario, Bid, BidLine, BidLot, BidOpening, CategoryPlan, Criterion, EvaluatorDeclaration, EventLine, EventLineSource,
+    AuditEvent, Evaluation, InfoRecord, Invitee, Material, PrLine, Requisition, Scorecard, SourcingEvent, Supplier, SupplierCategoryStatus, SupplierSegment,
+    Task, Timer,
 )
 from app.pic.platform import abac
-from app.pic.platform import agents, audit, clock, crypto, outbox, rules, sod, workflow
+from app.pic.platform import agents, audit, clock, crypto, outbox, rules, sod, sourcing_defaults, workflow
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition, not_found, rule_violation
 from app.pic.platform.money import D, fmt_inr
 from app.pic.services import auction as auction_svc
 from app.pic.services import ind_healthcare
 from app.pic.services import risk as risk_svc
+from app.pic.services import sourcing_tco as tco_svc
 from app.pic.services import supplier as supplier_svc
 from app.pic.services.common import category_status, principal, supplier_by_code
 
@@ -59,20 +62,41 @@ AWARD_RISK_RULE = "AWARD-RISK"
 AWARD_RISK_DEFAULT = {"maxRiskScore": None, "maxSingleSourcePct": None, "maxConditionalSharePct": None, "noDataScore": 50}
 BNB_NODE_LIMIT = 200_000
 QUANT4, QUANT3 = Decimal("0.0001"), Decimal("0.001")
+EPS = Decimal("1e-9")  # shares are decimal fractions of a division (capacity / quantity): equal within this is equal
+EVENT_TYPES = ("RFI", "RFQ", "RFP", "REVERSE_AUCTION")
+SCORING_METHODS = ("LOWEST_RATIO", "MIN_MAX", "RANK")
+BID_FIELDS = ("line", "unit_price", "freight", "duty", "packaging", "payment_terms_days", "lead_time_days", "capacity_per_month", "currency",
+              "incoterm", "origin", "moq", "price_uom", "uom_factor", "tax_included", "tax_rate_pct", "hs_code")
+EXCEPTION_NEEDS_RATIONALE = ("NOT_LOWEST", "LIMITED_COMPETITION", "INCOMPLETE_TCO", "UNVERIFIED_CAPACITY", "NEGATIVE_SAVINGS")
+
+
+def aware(value: Optional[datetime]) -> Optional[datetime]:
+    """A deadline without a zone is read as Indian Standard Time (the business time of the tenant), never compared naive."""
+    if value is not None and value.tzinfo is None:
+        return value.replace(tzinfo=clock.IST)
+    return value
+
+
+def policy_of(session: Session, event: Optional[SourcingEvent] = None, *, category: Optional[str] = None) -> dict:
+    return sourcing_defaults.policy(session, category=category or (event.category if event else None)).body
+
+
+def log_refusal(session: Session, event: SourcingEvent, action: str, reason: str, **after) -> None:
+    """A refused attempt (late bid, uninvited or blocked supplier, early access) is audited in its own transaction: the command's own
+    transaction is rolled back by the error, and the BP asks for the attempt to be logged."""
+    p = principal(session)
+    try:
+        with tenant_tx(event.tenant_id, p.user_id, p) as s:
+            s.execute(text("SET LOCAL lock_timeout = '1500ms'"))  # the caller's transaction may hold the audit chain lock: do not wait for it
+            audit.record(s, "SOURCING_EVENT", event.id, action, object_ref=event.number, reason=reason, after=after or None)
+    except DBAPIError:
+        audit.record(session, "SOURCING_EVENT", event.id, action, object_ref=event.number, reason=reason, after=after or None)
 
 
 def should_cost(params: dict) -> dict:
-    """Parametric should-cost by commodity (die-casting): material + conversion + tooling + packaging, then margin."""
-    material = D(params["net_weight_kg"]) * D(params["alloy_rate_per_kg"])
-    conversion = D(params["cycle_time_min"]) * D(params["machine_rate_per_min"])
-    tooling = D(params.get("tooling_amortisation", 0))
-    packaging = D(params.get("packaging", 0))
-    subtotal = material + conversion + tooling + packaging
-    total = (subtotal * (1 + D(params["overhead_margin_pct"]) / 100)).quantize(Decimal("0.01"), ROUND_HALF_UP)
-    return {"model": params.get("model", "diecast-param-v1"), "material": str(material), "conversion": str(conversion),
-            "tooling": str(tooling), "packaging": str(packaging), "subtotal": str(subtotal),
-            "overheadMarginPct": str(params["overhead_margin_pct"]), "unitCost": str(total),
-            "unitCostMinor": int(total * 100)}
+    """Parametric should-cost by commodity (die-casting): material + conversion + tooling + packaging, then margin (validated: services/should_cost.py)."""
+    from app.pic.services import should_cost as should_cost_svc
+    return should_cost_svc.parametric(params)
 
 
 # ---------------------------------------------------------------- build (F3-01/02)
@@ -132,32 +156,68 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
                  invitees: list[dict], close_at: datetime, baseline_method: str = "LAST_PRICE",
                  baseline_price_minor: Optional[int] = None, should_cost_params: Optional[dict] = None,
                  constraints: Optional[dict] = None, tco_params: Optional[dict] = None,
-                 savings_target_pct: Optional[Decimal] = None, bundle: Optional[dict] = None) -> SourcingEvent:
+                 savings_target_pct: Optional[Decimal] = None, bundle: Optional[dict] = None, scoring_method: str = "LOWEST_RATIO",
+                 reference_date: Optional[date] = None, clarification_close_at: Optional[datetime] = None,
+                 budget_justification: Optional[str] = None, min_bidders: Optional[int] = None, template_code: Optional[str] = None,
+                 cloned_from: Optional[str] = None, should_cost_model: Optional[dict] = None, open_at: Optional[datetime] = None) -> SourcingEvent:
     p = principal(session)
+    type = (type or "").upper()
+    if type not in EVENT_TYPES:
+        raise Problem(422, "INVALID_EVENT_TYPE", f"type must be one of {', '.join(EVENT_TYPES)}", rule_ref="SRC-TYPE")
+    title, category = (title or "").strip(), (category or "").strip()
+    if not title or len(title) > 200 or not category:
+        raise Problem(422, "INVALID_EVENT", "An event needs a title (up to 200 characters) and a category", rule_ref="SRC-MANDATORY")
+    scoring_method = (scoring_method or "LOWEST_RATIO").upper()
+    if scoring_method not in SCORING_METHODS:
+        raise Problem(422, "INVALID_SCORING_METHOD", f"scoring_method must be one of {', '.join(SCORING_METHODS)}", rule_ref="SRC-CRITERIA")
+    pol = sourcing_defaults.policy(session, category=category)
+    baseline_method = (baseline_method or "LAST_PRICE").upper()
+    if baseline_method not in pol.body["baselineMethods"]:
+        raise Problem(422, "INVALID_BASELINE_METHOD", f"baseline_method must be one of {', '.join(pol.body['baselineMethods'])}", rule_ref="SRC-BASELINE")
+    close_at, clarification_close_at = aware(close_at), aware(clarification_close_at)
+    if close_at is None:
+        raise Problem(422, "INVALID_EVENT", "An event needs a close time", rule_ref="SRC-MANDATORY")
+    if clarification_close_at is not None and clarification_close_at >= close_at:
+        raise Problem(422, "INVALID_CLARIFICATION_DEADLINE", "Questions must close before the bid deadline", rule_ref="SRC-CLARIFY")
+    open_at = aware(open_at)
+    if open_at is not None and (open_at >= close_at or type == "REVERSE_AUCTION"):
+        raise Problem(422, "INVALID_OPEN_AT", "A scheduled opening is before the close time and is not available for a live reverse auction", rule_ref="SRC-OPEN")
+    if min_bidders is not None and not 1 <= int(min_bidders) <= 20:
+        raise Problem(422, "INVALID_EVENT", "min_bidders must be a whole number from 1 to 20", rule_ref="SRC-COMPETITION")
     _require_lines(lines)
     multi = len(lines) > 1 or any(len(_line_sources(l)) > 1 for l in lines) or bundle is not None
-    if len(lines) > 1 and type.upper() == "REVERSE_AUCTION":
+    if len(lines) > 1 and type == "REVERSE_AUCTION":
         raise rule_violation("A live reverse auction ranks one price ladder: it runs per item (one event line). Use an RFQ or RFP for several lines",
                              "SRC-AUCTION")
-    if len(lines) > 1 and should_cost_params:
+    if len(lines) > 1 and (should_cost_params or should_cost_model):
         raise rule_violation("Should-cost is calculated per item: use a single-line event", "SRC-SHOULDCOST")
+    if should_cost_params and should_cost_model:
+        raise rule_violation("Give either should_cost_params (parametric die-casting model) or should_cost_model, not both", "SRC-SHOULDCOST")
     _check_lots([l.get("lot") and str(l["lot"]).upper() for l in lines])
     constraints = _validate_constraints(constraints or {"max_suppliers": 2, "max_share": "0.60", "min_share": "0.20"})
     _check_criteria(criteria)
+    if len({i["supplier"] for i in invitees}) != len(invitees):
+        raise Problem(422, "DUPLICATE_INVITEE", "A supplier can be invited once to an event", rule_ref="SRC-INVITE")
+    tco_snapshot = tco_svc.snapshot(session, tco_params)
+    reference_date = reference_date or clock.today()
     event = SourcingEvent(
-        tenant_id=current_tenant(session), number=next_number(session, "SOURCING_EVENT"), type=type.upper(), title=title,
+        tenant_id=current_tenant(session), number=next_number(session, "SOURCING_EVENT"), type=type, title=title,
         category=category, status="DRAFT", owner_id=p.user_id, close_at=close_at, baseline_method=baseline_method,
-        constraints=constraints,
-        tco_params=tco_params or {"carrying_rate_pct": "18", "cost_of_capital_pct": "12", "copq_per_defect_minor": 500000},
-        savings_target_pct=savings_target_pct, should_cost=should_cost(should_cost_params) if should_cost_params else None,
-        created_by=p.user_id,
+        constraints=constraints, tco_params=tco_snapshot, savings_target_pct=savings_target_pct,
+        should_cost=should_cost(should_cost_params) if should_cost_params else None, scoring_method=scoring_method,
+        reference_date=reference_date, clarification_close_at=clarification_close_at, budget_justification=(budget_justification or None), open_at=open_at,
+        min_bidders=int(min_bidders) if min_bidders is not None else int(pol.body["minBidders"]), template_code=template_code, cloned_from=cloned_from,
+        rule_versions={sourcing_defaults.POLICY_KEY: pol.ref, sourcing_defaults.TCO_KEY: tco_snapshot["_rule"]}, created_by=p.user_id,
     )
     session.add(event)
     session.flush()
+    if should_cost_model:
+        from app.pic.services import should_cost as should_cost_svc
+        event.should_cost = should_cost_svc.evaluate(session, should_cost_model["code"], should_cost_model.get("inputs") or {}, on=reference_date)
     instance = workflow.start(session, PROCESS, "SOURCING_EVENT", event.id, event.number)
     # P06: events start only from approved requirements.
-    company_codes, seen, origins, requisitions = set(), set(), set(), []
-    baseline_value, baselines_complete = 0, True
+    company_codes, seen, origins, requisitions, purposes, plants = set(), set(), set(), [], [], set()
+    baseline_value, baselines_complete, baseline_detail, mismatches = 0, True, [], []
     for index, data in enumerate(lines, start=1):
         sources = []
         for src in _line_sources(data):
@@ -170,12 +230,18 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
             if (pr.id, pr_line.line_no) in seen:
                 raise rule_violation(f"Requisition line {pr.number}/{pr_line.line_no} is in the event twice", "SRC-BUNDLE")
             seen.add((pr.id, pr_line.line_no))
+            line_category = pr_line.category or pr_line.material_group
             if multi:
                 if pr_line.sourcing_status != "OPEN":
                     raise rule_violation(f"Requisition line {pr.number}/{pr_line.line_no} is {pr_line.sourcing_status}; bundle only open lines", "SRC-BUNDLE")
-                line_category = pr_line.category or pr_line.material_group
-                if line_category != category:
-                    raise rule_violation(f"Requisition line {pr.number}/{pr_line.line_no} is category {line_category}, not {category}", "SRC-BUNDLE")
+            if line_category and line_category != category:
+                mismatch = f"Requisition line {pr.number}/{pr_line.line_no} is category {line_category}, not {category}"
+                if multi or str(pol.body.get("lineCategoryCheck", "WARN")).upper() == "ENFORCE":
+                    raise rule_violation(mismatch, "SRC-BUNDLE")
+                mismatches.append(mismatch)  # policy WARN: sourced under the event's category, and the audit trail says so
+            if pr.purpose_code and pr.purpose_code not in purposes:
+                purposes.append(pr.purpose_code)
+            plants.add(pr_line.plant)
             company_codes.add(pr.company_code)
             origins.add(pr.origin)
             if pr.number not in requisitions:
@@ -193,7 +259,8 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
         line = EventLine(tenant_id=event.tenant_id, event_id=event.id, line_no=index * 10,
                          material_id=material.id if material else None, description=pr_line.description, plant=pr_line.plant,
                          annual_qty=D(data["annual_qty"]), monthly_qty=D(data["monthly_qty"]), uom=pr_line.uom,
-                         requisition_id=pr.id, pr_line_no=pr_line.line_no, lot_code=lot, created_by=p.user_id)
+                         requisition_id=pr.id, pr_line_no=pr_line.line_no, lot_code=lot, created_by=p.user_id,
+                         need_date=min((x[1].need_date for x in sources if x[1].need_date), default=None))
         if line.annual_qty <= 0 or line.monthly_qty <= 0:
             raise Problem(422, "INVALID_LINES", f"Line {index * 10}: annual and monthly quantity must be positive", rule_ref="SRC-LINES")
         session.add(line)
@@ -207,10 +274,15 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
         line_baseline = data.get("baseline_price_minor")
         if line_baseline is None and len(lines) == 1:
             line_baseline = baseline_price_minor
-        if line_baseline is None and material is not None and baseline_method == "LAST_PRICE":
-            info = session.execute(select(InfoRecord).where(InfoRecord.material_id == material.id)
-                                   .order_by(InfoRecord.updated_at.desc().nullslast(), InfoRecord.created_at.desc())).scalars().first()
-            line_baseline = info.last_price_minor if info else None
+        if line_baseline is None:
+            from app.pic.services import should_cost as should_cost_svc
+            found = should_cost_svc.baseline_price(session, baseline_method, material=material, plant=pr_line.plant, category=category,
+                                                   should_cost_minor=(event.should_cost or {}).get("unitCostMinor") if len(lines) == 1 else None,
+                                                   on=reference_date)
+            line_baseline = found["priceMinor"]
+            baseline_detail.append({"line": index * 10, "method": baseline_method, **{k: v for k, v in found.items() if k != "priceMinor"}})
+        elif int(line_baseline) < 0:
+            raise Problem(422, "INVALID_BASELINE", f"Line {index * 10}: the baseline price cannot be negative", rule_ref="SRC-BASELINE")
         line.baseline_price_minor = line_baseline
         if line_baseline is None:
             baselines_complete = False
@@ -224,7 +296,8 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
         event.bundle = _bundle_meta(session, bundle, lines, requisitions, origins, category)
     for c in criteria:
         session.add(Criterion(tenant_id=event.tenant_id, event_id=event.id, code=c["code"], name=c["name"], weight=int(c["weight"]),
-                              data_source=str(c.get("data_source") or "MANUAL").upper(), created_by=p.user_id))
+                              data_source=str(c.get("data_source") or "MANUAL").upper(),
+                              min_score=D(c["min_score"]) if c.get("min_score") not in (None, "") else None, created_by=p.user_id))
     for inv in invitees:
         supplier = supplier_by_code(session, inv["supplier"])
         status = category_status(session, supplier.id, category)
@@ -233,12 +306,22 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
             raise rule_violation(f"{supplier.code} is {status} for {category}; only Qualified suppliers (or Conditional with waiver) may be invited", "P06/SRC-INVITE")
         session.add(Invitee(tenant_id=event.tenant_id, event_id=event.id, supplier_id=supplier.id, category_status=status,
                             waiver_reason=waiver, created_by=p.user_id))
+    event.purpose_code = ", ".join(purposes)[:40] or None
+    event.need_date = min((l.need_date for l in session.execute(select(EventLine).where(EventLine.event_id == event.id)).scalars() if l.need_date),
+                          default=None)
+    for plant in sorted(plants):
+        abac.guard(session, "SOURCING_CREATE", event, plant=plant, company_code=next(iter(company_codes)))
     session.flush()
     workflow.wait(session, instance, "F3-02", outcome="event drafted; scoring model and invitees set")
     audit.record(session, "SOURCING_EVENT", event.id, "CREATED", object_ref=event.number,
                  after={"type": event.type, "lines": len(lines), "invitees": [i["supplier"] for i in invitees],
-                        "baselineMinor": event.baseline_price_minor, "shouldCost": event.should_cost,
-                        **({"bundle": event.bundle} if event.bundle else {})})
+                        "baselineMinor": event.baseline_price_minor, "baselineMethod": baseline_method, "baselines": baseline_detail,
+                        "shouldCost": event.should_cost, "scoringMethod": scoring_method, "purposeCode": event.purpose_code,
+                        "needDate": event.need_date.isoformat() if event.need_date else None,
+                        **({"categoryMismatch": mismatches} if mismatches else {}),
+                        **({"templateCode": template_code} if template_code else {}), **({"clonedFrom": cloned_from} if cloned_from else {}),
+                        **({"bundle": event.bundle} if event.bundle else {})},
+                 rule_set_version=";".join(v for _, v in sorted(event.rule_versions.items()))[:80] or None)
     return event
 
 
@@ -261,7 +344,25 @@ def _bundle_meta(session: Session, bundle: Optional[dict], lines: list, requisit
 
 
 def _check_criteria(criteria: list[dict]) -> None:
+    codes = [str(c.get("code") or "").strip() for c in criteria]
+    if any(not code for code in codes) or len(set(codes)) != len(codes):
+        raise Problem(422, "INVALID_CRITERION", "Each scoring criterion needs its own code", rule_ref="SRC-CRITERIA")
     for c in criteria:
+        try:
+            weight = Decimal(str(c.get("weight")))
+            valid_weight = not isinstance(c.get("weight"), bool) and weight == weight.to_integral_value() and 0 <= weight <= 100
+        except Exception:  # noqa: BLE001
+            valid_weight = False
+        if not valid_weight:
+            raise Problem(422, "INVALID_CRITERION", f"Criterion {c.get('code')}: the weight is a whole number from 0 to 100", rule_ref="SRC-WEIGHTS")
+        if c.get("min_score") not in (None, ""):
+            try:
+                minimum = D(c["min_score"])
+            except Exception:  # noqa: BLE001
+                minimum = Decimal(-1)
+            if not Decimal(0) <= minimum <= Decimal(100) or str(c.get("code")) == "PRICE_TCO":
+                raise Problem(422, "INVALID_CRITERION", f"Criterion {c.get('code')}: min_score is a score from 0 to 100 and does not apply to PRICE_TCO",
+                              rule_ref="SRC-CRITERIA")
         source = str(c.get("data_source") or "MANUAL").upper()
         if source not in DATA_SOURCES:
             raise Problem(422, "INVALID_CRITERION", f"data_source must be one of {', '.join(DATA_SOURCES)}", rule_ref="SRC-CRITERIA")
@@ -295,24 +396,128 @@ def _published_lines(session: Session, event: SourcingEvent) -> list[dict]:
                             "lot": l.lot_code} for l in lines]}]
 
 
+def category_budget_check(session: Session, event: SourcingEvent, lines: list[EventLine], mode: str) -> dict:
+    """Budget check of the Draft to Published guard (TD 6.1): the value the event is expected to award above what its requirements already
+    commit, against the category plan's remaining budget (rule CATEGORY-BUDGET semantics: the committed spend of the requisition module).
+    HARD: refused above 100 %. SOFT: refused without a justification. No approved plan with a budget: not applicable."""
+    from app.pic.services import requisition as requisition_svc
+
+    if mode == "OFF":
+        return {"outcome": "OFF"}
+    fiscal_year = clock.fiscal_year(clock.today())
+    plan = session.execute(select(CategoryPlan).where(CategoryPlan.category == event.category, CategoryPlan.fiscal_year == fiscal_year,
+                                                      CategoryPlan.status == "APPROVED", CategoryPlan.budget_minor.is_not(None))
+                           .order_by(CategoryPlan.created_at.desc()).limit(1).with_for_update()).scalar_one_or_none()
+    if plan is None:
+        return {"outcome": "NOT_APPLICABLE", "fiscalYear": fiscal_year}
+    estimate, requirement = Decimal(0), Decimal(0)
+    for line in lines:
+        sources = line_sources(session, line)
+        source_value = Decimal(0)
+        for requisition_id, pr_line_no in sources:
+            pr_line = session.execute(select(PrLine).where(PrLine.requisition_id == requisition_id, PrLine.line_no == pr_line_no)).scalar_one_or_none()
+            if pr_line is not None:
+                source_value += Decimal(pr_line.price_est_minor) * pr_line.qty
+        requirement += source_value
+        estimate += (Decimal(line.baseline_price_minor) * line.annual_qty) if line.baseline_price_minor else source_value
+    incremental = max(Decimal(0), estimate - requirement)
+    committed = requisition_svc.category_committed(session, {event.category}, fiscal_year)[event.category]
+    projected = Decimal(committed) + incremental
+    used = (projected * 100 / Decimal(plan.budget_minor)).quantize(Decimal("0.1")) if plan.budget_minor > 0 else Decimal(999)
+    result = {"outcome": "OK" if projected <= plan.budget_minor else "EXCEEDED", "fiscalYear": fiscal_year, "plan": plan.number, "mode": mode,
+              "budgetMinor": plan.budget_minor, "committedMinor": int(committed), "eventEstimateMinor": int(estimate), "requirementsMinor": int(requirement),
+              "incrementalMinor": int(incremental), "projectedMinor": int(projected), "usedPct": str(used)}
+    if result["outcome"] == "EXCEEDED":
+        message = (f"{event.category}: the event takes the {fiscal_year} category budget ({plan.number}) to {used}% "
+                   f"(committed {int(committed)} + above-requirement {int(incremental)} of {plan.budget_minor} paise)")
+        if mode == "HARD":
+            raise Problem(422, "CATEGORY_BUDGET_EXCEEDED", f"{message}; hard stop", rule_ref="SRC-BUDGET", budget=result)
+        if not (event.budget_justification or "").strip():
+            raise Problem(422, "BUDGET_JUSTIFICATION_REQUIRED", f"{message}; add a budget justification to the event", rule_ref="SRC-BUDGET", budget=result)
+        result["outcome"] = "EXCEEDED_JUSTIFIED"
+        result["justification"] = event.budget_justification.strip()
+    return result
+
+
+def publish_checks(session: Session, event: SourcingEvent, lines: list[EventLine], pol: dict) -> dict:
+    """The guards of Draft to Published (TD 6.1) that depend on the policy: purpose code (P01), mandatory fields of the event type, how long the
+    event stays open, the clarification deadline, close time against the need date and the budget. Returns the findings kept in the audit trail."""
+    findings: dict = {}
+    if not event.purpose_code:
+        codes = []
+        for line in lines:
+            for requisition_id, _ in line_sources(session, line):
+                code = session.get(Requisition, requisition_id).purpose_code
+                if code and code not in codes:
+                    codes.append(code)
+        event.purpose_code = ", ".join(codes)[:40] or None
+    if not event.purpose_code:
+        raise rule_violation("A sourcing event needs the purpose code of the requirements it sources", "P01")
+    missing = [f for f in (pol.get("mandatoryFields") or {}).get(event.type, []) if not getattr(event, f, None)]
+    if missing:
+        raise Problem(422, "MANDATORY_FIELDS", f"{event.type} needs {', '.join(missing)} before it is published", rule_ref="SRC-MANDATORY", fields=missing)
+    open_hours = int((pol.get("minOpenHours") or {}).get(event.type, 0))
+    if open_hours and event.close_at - clock.now() < timedelta(hours=open_hours):
+        raise rule_violation(f"A {event.type} stays open at least {open_hours} hours: close no earlier than "
+                             f"{(clock.now() + timedelta(hours=open_hours)).astimezone(clock.IST).strftime('%d %b %Y %H:%M')} IST", "SRC-OPEN-HOURS")
+    hours = int(pol.get("clarificationCloseHours") or 0)
+    if event.clarification_close_at is None and hours:
+        event.clarification_close_at = event.close_at - timedelta(hours=hours)
+    if event.clarification_close_at is not None and event.clarification_close_at >= event.close_at:
+        raise rule_violation("Questions must close before the bid deadline", "SRC-CLARIFY")
+    if event.clarification_close_at is not None and event.clarification_close_at <= clock.now():
+        raise rule_violation("The clarification deadline must be in the future when the event is published", "SRC-CLARIFY")
+    if event.need_date is not None and event.close_at.astimezone(clock.IST).date() >= event.need_date:
+        if event.need_date >= clock.today():
+            raise rule_violation(f"Bids close on {event.close_at.astimezone(clock.IST).date()}, on or after the need date {event.need_date}: "
+                                 "there is no time left to award, contract and deliver", "SRC-NEEDDATE")
+        findings["needDateAlreadyPassed"] = event.need_date.isoformat()  # the requirement is already late: sourcing it is not refused, the audit trail says so
+    event.budget_check = category_budget_check(session, event, lines, str(pol.get("budgetCheck", "SOFT")).upper())
+    findings["budget"] = event.budget_check.get("outcome")
+    invited = session.execute(select(func.count()).select_from(Invitee).where(Invitee.event_id == event.id)).scalar()
+    minimum = int(event.min_bidders or pol.get("minBidders", 1))
+    if invited < minimum and event.type != "RFI":
+        findings["fewerInviteesThanMinBidders"] = {"invited": invited, "minBidders": minimum}
+    return findings
+
+
 def publish(session: Session, event: SourcingEvent) -> SourcingEvent:
     auction_svc._require_manager(session, event)
+    abac.guard(session, "SOURCING_MANAGE", event)
+    if not SM.can(event.status, "publish"):
+        raise illegal_transition("Sourcing event", event.number, event.status, "publish")
     lines = _lines(session, event)
     _require_lines(lines)
     _check_lots([l.lot_code for l in lines])
-    weights = sum(c.weight for c in _criteria(session, event))
+    criteria = _criteria(session, event)
+    weights = sum(c.weight for c in criteria)
     if weights != 100:
         raise rule_violation(f"Scoring weights must sum to 100 (currently {weights})", "SRC-WEIGHTS")
+    if event.type in ("RFQ", "REVERSE_AUCTION") and not any(c.code == "PRICE_TCO" and c.weight > 0 for c in criteria):
+        raise rule_violation(f"A {event.type} is awarded on price: include the PRICE_TCO criterion with a weight above zero", "SRC-CRITERIA")
     if not session.execute(select(Invitee).where(Invitee.event_id == event.id)).first():
         raise rule_violation("Invite at least one qualified supplier", "P06")
     if event.close_at <= clock.now():
         raise rule_violation("Close time must be in the future", "SRC-CLOSE")
+    pol = policy_of(session, event)
+    findings = publish_checks(session, event, lines, pol)
+    event.min_bidders = int(event.min_bidders or pol.get("minBidders", 1))
     if event.type == "REVERSE_AUCTION":
         auction_svc.on_publish(session, event)  # freeze AUCTION settings, start the live clock
     event.weights_locked = True
     event.published_at = clock.now()
+    audit.record(session, "SOURCING_EVENT", event.id, "PUBLISH_CHECKED", object_ref=event.number,
+                 after={"purposeCode": event.purpose_code, "needDate": event.need_date.isoformat() if event.need_date else None,
+                        "clarificationCloseAt": event.clarification_close_at.isoformat() if event.clarification_close_at else None,
+                        "budget": event.budget_check, "minBidders": event.min_bidders, **findings},
+                 rule_set_version=(event.rule_versions or {}).get(sourcing_defaults.POLICY_KEY))
     SM.apply(session, event, "publish", reason="weights locked")
-    SM.apply(session, event, "open")
+    scheduled = event.open_at is not None and event.open_at > clock.now()
+    if scheduled:
+        # Published but not open: suppliers see the requirement and may ask questions; bids are accepted from open_at (timer SOURCING_OPEN).
+        workflow.create_timer(session, "SOURCING_OPEN", "SOURCING_EVENT", event.id, event.open_at, {"round": event.round})
+    else:
+        SM.apply(session, event, "open")
     workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, event.close_at, {"round": event.round})
     outbox.emit(session, "sourcing.event.published", "SOURCING_EVENT", event.id, event.number,
                 {"category": event.category, "baselineMinor": event.baseline_price_minor, "closeAt": event.close_at.isoformat(),
@@ -321,8 +526,18 @@ def publish(session: Session, event: SourcingEvent) -> SourcingEvent:
     workflow.step(session, instance, "F3-02", outcome="published; weights locked")
     workflow.wait(session, instance, "F3-03", outcome=(f"round {event.round}: live reverse auction until {event.close_at.isoformat()} (soft close)"
                                                        if event.type == "REVERSE_AUCTION" else
+                                                       f"round {event.round}: opens {event.open_at.isoformat()}, bids sealed until {event.close_at.isoformat()}" if scheduled else
                                                        f"round {event.round}: bids sealed until {event.close_at.isoformat()}"))
     return event
+
+
+@workflow.on_timer("SOURCING_OPEN")
+def _open_timer(session: Session, timer) -> None:
+    """Scheduled opening: a published event starts accepting bids at its open time."""
+    event = session.get(SourcingEvent, timer.object_id)
+    if event and event.status == "PUBLISHED" and timer.payload.get("round") == event.round and clock.now() >= event.open_at:
+        SM.apply(session, event, "open", reason="scheduled opening")
+        audit.record(session, "SOURCING_EVENT", event.id, "OPENED_FOR_BIDS", object_ref=event.number, after={"openAt": event.open_at.isoformat()})
 
 
 def _lines(session: Session, event: SourcingEvent) -> list[EventLine]:
@@ -343,29 +558,64 @@ def line_sources(session: Session, line: EventLine) -> list[tuple[uuid.UUID, int
 
 
 # ---------------------------------------------------------------- sealed bids (F3-03)
-def submit_bid(session: Session, event: SourcingEvent, supplier: Supplier, lines: list[dict], lots: Optional[list[dict]] = None) -> Bid:
-    p = principal(session)
+def _bid_gate(session: Session, event: SourcingEvent, supplier: Supplier, action: str) -> Invitee:
+    """The checks every supplier command on a sealed event shares. A refused attempt is logged in its own transaction."""
     if event.status != "OPEN":
-        raise illegal_transition("Sourcing event", event.number, event.status, "bid")
+        log_refusal(session, event, f"{action.upper()}_REFUSED", f"event is {event.status}", supplier=supplier.code)
+        raise illegal_transition("Sourcing event", event.number, event.status, action)
     if event.type == "REVERSE_AUCTION":
         raise Problem(409, "USE_AUCTION_BIDDING", f"{event.number} is a live reverse auction; bid through /auction/bids", rule_ref="SRC-AUCTION")
     if clock.now() >= event.close_at:
+        log_refusal(session, event, f"LATE_{action.upper()}_REFUSED", f"closed at {event.close_at.isoformat()}", supplier=supplier.code,
+                    attemptedAt=clock.now().isoformat())
         raise Problem(409, "EVENT_CLOSED", f"{event.number} closed at {event.close_at.isoformat()}")
-    if not session.execute(select(Invitee).where(Invitee.event_id == event.id, Invitee.supplier_id == supplier.id)).first():
+    invitee = session.execute(select(Invitee).where(Invitee.event_id == event.id, Invitee.supplier_id == supplier.id)).scalar_one_or_none()
+    if invitee is None:
+        log_refusal(session, event, f"UNINVITED_{action.upper()}_REFUSED", "supplier is not an invitee", supplier=supplier.code)
         raise Problem(403, "NOT_INVITED", f"{supplier.code} is not invited to {event.number}")
-    _require_eligible(session, event, supplier, "bid")
+    if session.execute(select(Bid.id).where(Bid.event_id == event.id, Bid.supplier_id == supplier.id, Bid.status == "DISQUALIFIED").limit(1)).first():
+        log_refusal(session, event, f"DISQUALIFIED_{action.upper()}_REFUSED", "supplier was disqualified from this event", supplier=supplier.code)
+        raise Problem(403, "DISQUALIFIED", f"{supplier.code} was disqualified from {event.number} and cannot bid again", rule_ref="SRC-DISQUALIFY")
+    try:
+        _require_eligible(session, event, supplier, action)
+    except Problem as exc:
+        log_refusal(session, event, f"INELIGIBLE_{action.upper()}_REFUSED", exc.detail if hasattr(exc, "detail") else str(exc), supplier=supplier.code)
+        raise
+    return invitee
+
+
+def submit_bid(session: Session, event: SourcingEvent, supplier: Supplier, lines: list[dict], lots: Optional[list[dict]] = None,
+               valid_until: Optional[date] = None) -> Bid:
+    """A sealed bid. Submitting again before the close replaces the earlier bid of the round (the number of edits is kept); a withdrawn bid can be
+    re-submitted. Nothing of the commercial content is readable until the close: only the hash is stored in clear."""
+    p = principal(session)
+    _bid_gate(session, event, supplier, "bid")
     event_lines = _lines(session, event)
-    lots = _check_bid_lines(event, event_lines, lines, lots or [])
+    pol = policy_of(session, event)
+    lines, lots = _check_bid_lines(session, event, event_lines, lines, lots or [], pol)
+    if valid_until is not None:
+        if valid_until <= event.close_at.astimezone(clock.IST).date():
+            raise Problem(422, "INVALID_BID_VALIDITY", f"{event.number}: the offer must stay valid beyond the close date "
+                          f"{event.close_at.astimezone(clock.IST).date().isoformat()}", rule_ref="SRC-BID")
+        if (valid_until - clock.today()).days > int(pol["maxValidityDays"]):
+            raise Problem(422, "INVALID_BID_VALIDITY", f"{event.number}: an offer is valid at most {pol['maxValidityDays']} days", rule_ref="SRC-BID")
     body = {"lines": lines}
     if lots:
         body["lots"] = lots
+    if valid_until is not None:
+        body["valid_until"] = valid_until.isoformat()
     payload = json.dumps(body, sort_keys=True, default=str)
     previous = session.execute(select(Bid).where(Bid.event_id == event.id, Bid.supplier_id == supplier.id,
-                                                 Bid.round == event.round)).scalar_one_or_none()
+                                                 Bid.round == event.round).with_for_update()).scalar_one_or_none()
+    edited = False
     if previous:
+        edited = previous.status in ("SEALED", "WITHDRAWN")
         previous.sealed_payload = crypto.encrypt(event.tenant_id, f"bid:{event.id}", payload)
         previous.payload_hash = hashlib.sha256(payload.encode()).hexdigest()
         previous.submitted_at = clock.now()
+        previous.submitted_by = p.user_id
+        previous.status, previous.withdrawn_at, previous.withdrawn_reason = "SEALED", None, None
+        previous.edits = (previous.edits or 0) + 1
         bid = previous
     else:
         bid = Bid(tenant_id=event.tenant_id, event_id=event.id, supplier_id=supplier.id, round=event.round,
@@ -374,46 +624,143 @@ def submit_bid(session: Session, event: SourcingEvent, supplier: Supplier, lines
                   submitted_by=p.user_id, created_by=p.user_id)
         session.add(bid)
     session.flush()
-    audit.record(session, "SOURCING_EVENT", event.id, "BID_SUBMITTED", object_ref=event.number,
-                 after={"supplier": supplier.code, "round": event.round, "hash": bid.payload_hash, "lines": len(lines),
+    audit.record(session, "SOURCING_EVENT", event.id, "BID_REPLACED" if edited else "BID_SUBMITTED", object_ref=event.number,
+                 after={"supplier": supplier.code, "round": event.round, "hash": bid.payload_hash, "lines": len(lines), "edits": bid.edits,
                         **({"lots": [l["lot"] for l in lots]} if lots else {})})
     outbox.emit(session, "sourcing.bid.submitted", "SOURCING_EVENT", event.id, event.number,
                 {"supplier": supplier.code, "round": event.round})
     return bid
 
 
-def _check_bid_lines(event: SourcingEvent, event_lines: list[EventLine], lines: list[dict], lots: list[dict]) -> list[dict]:
+def withdraw_bid(session: Session, event: SourcingEvent, supplier: Supplier, reason: str) -> Bid:
+    """The supplier withdraws its sealed bid before the close (the bid is not opened and not evaluated; it can bid again until the close)."""
+    p = principal(session)
+    reason = (reason or "").strip()
+    if len(reason) < 3:
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for withdrawing the bid", rule_ref="SRC-BID")
+    _bid_gate(session, event, supplier, "withdraw")
+    bid = session.execute(select(Bid).where(Bid.event_id == event.id, Bid.supplier_id == supplier.id, Bid.round == event.round)
+                          .with_for_update()).scalar_one_or_none()
+    if bid is None or bid.status != "SEALED":
+        raise Problem(409, "NO_BID_TO_WITHDRAW", f"{supplier.code} has no sealed bid in round {event.round} of {event.number}")
+    bid.status, bid.withdrawn_at, bid.withdrawn_reason = "WITHDRAWN", clock.now(), reason
+    bid.sealed_payload = None  # the content is destroyed: a withdrawn bid is never opened
+    session.flush()
+    audit.record(session, "SOURCING_EVENT", event.id, "BID_WITHDRAWN", object_ref=event.number, reason=reason,
+                 after={"supplier": supplier.code, "round": event.round, "hash": bid.payload_hash})
+    outbox.emit(session, "sourcing.bid.withdrawn", "SOURCING_EVENT", event.id, event.number, {"supplier": supplier.code, "round": event.round})
+    return bid
+
+
+def _finite(value, name: str, bad) -> Decimal:
+    try:
+        number = D(value)
+    except (TypeError, ValueError, ArithmeticError):
+        raise bad(f"{name} must be a number")
+    if not number.is_finite():
+        raise bad(f"{name} must be a finite number")
+    return number
+
+
+def _check_bid_lines(session: Session, event: SourcingEvent, event_lines: list[EventLine], lines: list[dict], lots: list[dict],
+                     pol: dict) -> tuple[list[dict], list[dict]]:
     """Well-formed bid lines (a malformed sealed bid would otherwise only fail at close). A single-line event, or one that sets
     ``require_all_lines``, needs a price for every line; otherwise a supplier may bid some lines. Lot terms (bundle discount, all-or-nothing)
-    need a price for every line of the lot."""
+    need a price for every line of the lot. Prices must be plausible against the line's baseline (a misplaced decimal point is refused, not
+    ranked), in one currency per bid that has a rate on the event's pricing date.
+    Returns the normalised lines (only the known fields) and the lot terms."""
     line_nos = [l.line_no for l in event_lines]
+    by_no = {l.line_no: l for l in event_lines}
 
     def bad(detail: str) -> Problem:
         return Problem(422, "INVALID_BID_LINES", f"{event.number}: {detail}", rule_ref="SRC-BID")
 
     if not lines:
         raise bad("a bid needs one line per event line" if len(line_nos) == 1 else "a bid needs at least one line")
-    seen = []
+    from app.pic.models import Currency
+    known_currencies = set(session.execute(select(Currency.code).where(Currency.active.is_(True))).scalars())
+    band = pol.get("priceBand") or {}
+    max_price = Decimal(str(band.get("maxUnitPriceMinor", 10 ** 12)))
+    on = event.reference_date or clock.today()
+    seen, clean_lines, currencies = [], [], set()
     for data in lines:
+        if not isinstance(data, dict):
+            raise bad("each bid line is an object")
         try:
             line_no = int(data["line"])
-            price = D(data["unit_price"])
             terms, lead = int(data["payment_terms_days"]), int(data["lead_time_days"])
-            for key in ("freight", "duty", "packaging"):
-                if D(data.get(key) or 0) < 0:
-                    raise bad(f"line {line_no}: {key} cannot be negative")
-            capacity = D(data["capacity_per_month"]) if data.get("capacity_per_month") not in (None, "") else None
-        except Problem:
-            raise
+            price_value = data["unit_price"]
         except (KeyError, TypeError, ValueError, ArithmeticError):
             raise bad("each bid line needs line, unit_price, payment_terms_days and lead_time_days as numbers")
+        price = _finite(price_value, "unit_price", bad)
+        extras = {}
+        for key in ("freight", "duty", "packaging"):
+            if data.get(key) not in (None, ""):
+                extras[key] = _finite(data[key], key, bad)
+                if extras[key] < 0:
+                    raise bad(f"line {line_no}: {key} cannot be negative")
+        capacity = _finite(data["capacity_per_month"], "capacity_per_month", bad) if data.get("capacity_per_month") not in (None, "") else None
+        moq = _finite(data["moq"], "moq", bad) if data.get("moq") not in (None, "") else None
         if line_no not in line_nos:
             raise bad(f"line {line_no} is not a line of the event (lines: {', '.join(str(n) for n in line_nos)})")
         if line_no in seen:
             raise bad(f"line {line_no} is bid twice")
-        if price <= 0 or terms < 0 or lead < 0 or (capacity is not None and capacity < 0):
-            raise bad(f"line {line_no}: unit price must be positive; terms, lead time and capacity cannot be negative")
+        if price <= 0 or terms < 0 or lead < 0 or (capacity is not None and capacity < 0) or (moq is not None and moq < 0):
+            raise bad(f"line {line_no}: unit price must be positive; terms, lead time, capacity and MOQ cannot be negative")
+        if terms > int(pol["maxPaymentTermsDays"]) or lead > int(pol["maxLeadTimeDays"]):
+            raise bad(f"line {line_no}: payment terms are at most {pol['maxPaymentTermsDays']} days and lead time at most {pol['maxLeadTimeDays']} days")
+        if moq is not None and capacity is not None and moq > capacity:
+            raise bad(f"line {line_no}: the minimum order quantity {moq} is above the offered capacity {capacity}")
+        currency = str(data.get("currency") or "INR").upper()
+        if currency not in known_currencies and currency != "INR":
+            raise bad(f"line {line_no}: currency {currency} is not set up for this tenant")
+        currencies.add(currency)
+        incoterm = str(data.get("incoterm") or "").upper() or None
+        if incoterm and incoterm not in tco_svc.INCOTERMS:
+            raise bad(f"line {line_no}: incoterm {incoterm} is unknown (use {', '.join(tco_svc.INCOTERMS)})")
+        origin = str(data.get("origin") or "").upper() or None
+        if origin and origin not in ("DOMESTIC", "IMPORT"):
+            raise bad(f"line {line_no}: origin is DOMESTIC or IMPORT")
+        factor = _finite(data["uom_factor"], "uom_factor", bad) if data.get("uom_factor") not in (None, "") else None
+        if factor is not None and factor <= 0:
+            raise bad(f"line {line_no}: uom_factor must be positive")
+        tax_rate = _finite(data["tax_rate_pct"], "tax_rate_pct", bad) if data.get("tax_rate_pct") not in (None, "") else None
+        if tax_rate is not None and not Decimal(0) <= tax_rate <= Decimal(50):
+            raise bad(f"line {line_no}: tax_rate_pct is from 0 to 50")
+        if data.get("tax_included") and tax_rate is None:
+            raise bad(f"line {line_no}: the price includes tax: give tax_rate_pct")
+        hs = str(data.get("hs_code") or "") or None
+        if hs and not (hs.isdigit() and 2 <= len(hs) <= 10):
+            raise bad(f"line {line_no}: hs_code is 2 to 10 digits")
+        # plausibility: unit price in INR per base unit against the line's baseline
+        try:
+            rate, _ = tco_svc.fx_rate_on(session, currency, on)
+        except tco_svc.TcoInputError as exc:
+            raise bad(f"line {line_no}: {exc}")
+        in_inr = price * 100 * rate / (factor or Decimal(1))
+        if in_inr > max_price:
+            raise bad(f"line {line_no}: the unit price is above the limit of {int(max_price) // 100:,} rupees per unit; check the decimal point")
+        baseline = by_no[line_no].baseline_price_minor
+        if baseline:
+            low, high = Decimal(str(band.get("minVsBaseline", "0"))) * baseline, Decimal(str(band.get("maxVsBaseline", "1000000"))) * baseline
+            if not low <= in_inr <= high:
+                raise bad(f"line {line_no}: the unit price is {(in_inr / baseline).quantize(Decimal('0.01'))} times the baseline; outside "
+                          f"{band.get('minVsBaseline')} to {band.get('maxVsBaseline')} times it is refused as an input error (check the decimal point and the unit)")
         seen.append(line_no)
+        item = {"line": line_no, "unit_price": str(price), "payment_terms_days": terms, "lead_time_days": lead}
+        for key, value in (("freight", extras.get("freight")), ("duty", extras.get("duty")), ("packaging", extras.get("packaging")),
+                           ("capacity_per_month", capacity), ("moq", moq), ("uom_factor", factor), ("tax_rate_pct", tax_rate)):
+            if value is not None:
+                item[key] = str(value)
+        for key, value in (("currency", currency if currency != "INR" else None), ("incoterm", incoterm), ("origin", origin), ("hs_code", hs),
+                           ("price_uom", (str(data["price_uom"])[:5] if data.get("price_uom") else None))):
+            if value:
+                item[key] = value
+        if data.get("tax_included"):
+            item["tax_included"] = True
+        clean_lines.append(item)
+    if len(currencies) > 1:
+        raise bad(f"a bid is quoted in one currency (got {', '.join(sorted(currencies))}); submit a single currency")
     missing = [n for n in line_nos if n not in seen]
     if missing and (len(line_nos) == 1 or event.constraints.get("require_all_lines")):
         raise bad(f"no bid for line(s) {', '.join(str(n) for n in missing)}")
@@ -433,7 +780,7 @@ def _check_bid_lines(event: SourcingEvent, event_lines: list[EventLine], lines: 
             raise bad(f"lot {code} is not a lot of the event (lots: {', '.join(sorted(lot_lines)) or 'none'})")
         if code in seen_lots:
             raise bad(f"lot {code} appears twice")
-        if discount < 0 or discount >= 100:
+        if not discount.is_finite() or discount < 0 or discount >= 100:
             raise bad(f"lot {code}: the discount must be at least 0 and below 100 percent")
         absent = [n for n in lot_lines[code] if n not in seen]
         if (discount > 0 or all_or_nothing) and absent:
@@ -442,23 +789,27 @@ def _check_bid_lines(event: SourcingEvent, event_lines: list[EventLine], lines: 
         seen_lots.add(code)
         if discount > 0 or all_or_nothing:
             clean.append({"lot": code, "discount_pct": str(discount), "all_or_nothing": all_or_nothing})
-    return clean
+    return clean_lines, clean
 
 
 def bids_view(session: Session, event: SourcingEvent) -> list[dict]:
-    """Commercial bid content. Before close the attempt is blocked and logged (§11.4)."""
+    """Commercial bid content. Before the opening the attempt is blocked and logged (§11.4)."""
     if event.status in ("DRAFT", "PUBLISHED", "OPEN") or event.unsealed_at is None:
-        p = principal(session)
-        with tenant_tx(event.tenant_id, p.user_id, p) as s:
-            audit.record(s, "SOURCING_EVENT", event.id, "BID_ACCESS_DENIED", object_ref=event.number,
-                         reason="bids are sealed until close")
-        raise Problem(423, "BIDS_SEALED", f"Bids for {event.number} stay sealed until {event.close_at.isoformat()}", rule_ref="SRC-SEALED")
+        log_refusal(session, event, "BID_ACCESS_DENIED", "bids are sealed until close" if event.status != "CLOSED" else "bids are sealed until two people open them")
+        raise Problem(423, "BIDS_SEALED", f"Bids for {event.number} stay sealed until {event.close_at.isoformat()}"
+                      + (" and are then opened by two people" if event.status == "CLOSED" else ""), rule_ref="SRC-SEALED")
+    abac.guard(session, "SOURCING_MANAGE", event)
     return evaluation_matrix(session, event)
+
+
+def two_person_opening(session: Session, event: SourcingEvent) -> bool:
+    return bool(policy_of(session, event).get("twoPersonOpening")) or bool((event.constraints or {}).get("two_person_opening"))
 
 
 def close(session: Session, event: SourcingEvent, by_timer: bool = False) -> dict:
     if not by_timer:
         auction_svc._require_manager(session, event)  # the close timer (system) closes on time without an owner check
+        abac.guard(session, "SOURCING_MANAGE", event)
     closes_at = auction_svc.ends_at(event)  # a reverse auction may have been extended (soft close)
     if clock.now() < closes_at:
         raise Problem(409, "CLOSE_TIME_NOT_REACHED", f"{event.number} closes at {closes_at.isoformat()}")
@@ -466,8 +817,48 @@ def close(session: Session, event: SourcingEvent, by_timer: bool = False) -> dic
     event.closed_at = clock.now()
     if event.type == "REVERSE_AUCTION":
         auction_svc.to_sealed_bids(session, event)  # last auction prices become sealed bids for the normal evaluation
+    if two_person_opening(session, event):
+        # Opening ceremony: the event stays CLOSED and every bid sealed until two different people have opened them (open_bids).
+        event.opening = {"required": True, "round": event.round, "openers": []}
+        audit.record(session, "SOURCING_EVENT", event.id, "AWAITING_OPENING", object_ref=event.number,
+                     after={"round": event.round, "sealedBids": session.execute(select(func.count()).select_from(Bid).where(
+                         Bid.event_id == event.id, Bid.round == event.round, Bid.status == "SEALED")).scalar()},
+                     reason="two-person bid opening: the bids stay sealed until two people open them")
+        instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
+        workflow.step(session, instance, "F3-03", outcome=f"round {event.round} closed; waiting for the two-person bid opening")
+        workflow.wait(session, instance, "F3-03", outcome=f"round {event.round}: bids closed, waiting for the two-person opening")
+        return {"event": event.number, "unsealed": 0, "awaitingOpening": True, "matrix": [], "aiRef": None}
+    return _open_and_evaluate(session, event)
+
+
+def open_bids(session: Session, event: SourcingEvent) -> dict:
+    """Bid opening ceremony (two-person rule): each call records one opener; the second different opener unseals the bids and starts the evaluation."""
+    p = principal(session)
+    if event.status != "CLOSED" or not (event.opening or {}).get("required"):
+        raise illegal_transition("Sourcing event", event.number, event.status, "open bids")
+    abac.guard(session, "SOURCING_MANAGE", event)
+    already = session.execute(select(BidOpening).where(BidOpening.event_id == event.id, BidOpening.round == event.round,
+                                                       BidOpening.user_id == p.user_id)).scalar_one_or_none()
+    if already is not None:
+        raise Problem(409, "ALREADY_OPENED_BY_YOU", "You have already opened these bids: a second, different person must open them too", rule_ref="SRC-OPENING")
+    session.add(BidOpening(tenant_id=event.tenant_id, event_id=event.id, round=event.round, user_id=p.user_id, opened_at=clock.now(), created_by=p.user_id))
+    session.flush()
+    openers = session.execute(select(BidOpening.user_id).where(BidOpening.event_id == event.id, BidOpening.round == event.round)).scalars().all()
+    event.opening = {**event.opening, "openers": [str(u) for u in openers]}
+    audit.record(session, "SOURCING_EVENT", event.id, "BIDS_OPEN_WITNESS", object_ref=event.number, after={"round": event.round, "opener": p.email,
+                                                                                                         "openers": len(openers)})
+    if len(openers) < 2:
+        return {"event": event.number, "unsealed": 0, "openers": len(openers), "remaining": 2 - len(openers), "awaitingOpening": True}
+    return _open_and_evaluate(session, event)
+
+
+def _open_and_evaluate(session: Session, event: SourcingEvent) -> dict:
+    pol = policy_of(session, event)
     unsealed = _unseal(session, event)
+    event.competitive = len(_latest_bids(session, event)) >= int(event.min_bidders or pol.get("minBidders", 1))
     SM.apply(session, event, "evaluate")
+    outbox.emit(session, "sourcing.bids.unsealed", "SOURCING_EVENT", event.id, event.number,
+                {"round": event.round, "bids": unsealed, "competitive": event.competitive, "minBidders": event.min_bidders})
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
     workflow.step(session, instance, "F3-03", outcome=f"round {event.round} closed; {unsealed} bid(s) unsealed")
     matrix = evaluation_matrix(session, event)
@@ -481,7 +872,7 @@ def close(session: Session, event: SourcingEvent, by_timer: bool = False) -> dic
     workflow.step(session, instance, "F3-04", outcome=("annual TCO: " if multi else "TCO: ") + ", ".join(
         f"{m['supplier']} {m['priceMinor']/100:.2f}→{m['tcoMinor']/100:.2f}" for m in matrix))
     workflow.wait(session, instance, "F3-05", outcome="another round or proceed to award scenarios")
-    return {"event": event.number, "unsealed": unsealed, "matrix": matrix, "aiRef": ai_ref,
+    return {"event": event.number, "unsealed": unsealed, "competitive": event.competitive, "matrix": matrix, "aiRef": ai_ref,
             **({"lineMatrix": line_matrix(session, event)} if multi else {})}
 
 
@@ -493,16 +884,56 @@ def _close_timer(session: Session, timer) -> None:
         close(session, event, by_timer=True)
 
 
+def _audit_key_mismatch(session: Session, event: SourcingEvent) -> None:
+    """FIELD_KEY_MISMATCH on the event, once (the same shape as finance_controls.supplier_gstin): in its own transaction so it outlives the failed command, in
+    the caller's session when the audit-chain lock is held. Never the ciphertext."""
+    def exists(s: Session) -> bool:
+        return s.execute(select(AuditEvent.seq).where(AuditEvent.object_type == "SOURCING_EVENT", AuditEvent.object_id == event.id,
+                                                      AuditEvent.action == "FIELD_KEY_MISMATCH").limit(1)).first() is not None
+
+    p = session.info.get("principal")
+    if p is None or exists(session):
+        return
+    reason = "sealed bids cannot be opened with the configured PIC_FIELD_KEY"
+    try:
+        with tenant_tx(p.tenant_id, p.user_id, p) as s:
+            s.execute(text("SET LOCAL lock_timeout = '1500ms'"))
+            if not exists(s):
+                audit.record(s, "SOURCING_EVENT", event.id, "FIELD_KEY_MISMATCH", object_ref=event.number, after={"round": event.round}, reason=reason)
+    except DBAPIError:
+        audit.record(session, "SOURCING_EVENT", event.id, "FIELD_KEY_MISMATCH", object_ref=event.number, after={"round": event.round}, reason=reason)
+
+
+def policy_summary(session: Session, event: SourcingEvent) -> dict:
+    """The policy values the screens need next to an event (so the UI does not read the admin rules): limits of a bid and an auction, award rules."""
+    rule = sourcing_defaults.policy(session, category=event.category)
+    keys = ("minBidders", "maxExtensions", "priceBand", "minRationaleChars", "twoPersonOpening", "requireAllCriteriaScored", "minOpenHours", "clarificationCloseHours",
+            "leadTimeCheck", "budgetCheck", "unverifiedCapacity", "incompleteTcoNeedsRationale", "unverifiedCapacityNeedsRationale",
+            "limitedCompetitionNeedsRationale", "maxLeadTimeDays", "maxPaymentTermsDays", "maxValidityDays", "tieBreak", "baselineMethods")
+    return {"rule": rule.ref, **{k: rule.body[k] for k in keys if k in rule.body}, "twoPersonOpeningForThisEvent": two_person_opening(session, event)}
+
+
 def _unseal(session: Session, event: SourcingEvent) -> int:
     count = 0
+    params = tco_svc.effective(event.tco_params)
+    on = event.reference_date or (event.published_at.astimezone(clock.IST).date() if event.published_at else clock.today())
+    lines = {l.line_no: l for l in _lines(session, event)}
+    lot_codes = {l.lot_code for l in lines.values() if l.lot_code}
     for bid in session.execute(select(Bid).where(Bid.event_id == event.id, Bid.round == event.round,
-                                                 Bid.status == "SEALED")).scalars():
-        payload = json.loads(crypto.decrypt(event.tenant_id, f"bid:{event.id}", bid.sealed_payload))
+                                                 Bid.status == "SEALED").order_by(Bid.submitted_at, Bid.id)).scalars():
+        try:
+            payload = json.loads(crypto.decrypt(event.tenant_id, f"bid:{event.id}", bid.sealed_payload))
+        except Exception as exc:  # noqa: BLE001 - InvalidToken or an unknown key id: the bid cannot be opened with this configuration
+            _audit_key_mismatch(session, event)
+            raise Problem(503, "FIELD_KEY_MISMATCH", f"The sealed bids of {event.number} cannot be opened with the configured PIC_FIELD_KEY: it differs from the key "
+                          "they were encrypted with. Restore the original key (or re-encrypt with tools/reencrypt.py); nothing was opened and no data was changed",
+                          rule_ref="SEC-FIELD") from None
         if hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest() != bid.payload_hash:
             raise Problem(500, "BID_INTEGRITY", "Bid content does not match its submission hash")
-        lines = {l.line_no: l for l in _lines(session, event)}
-        lot_codes = {l.lot_code for l in lines.values() if l.lot_code}
+        supplier = session.get(Supplier, bid.supplier_id)
         valid, rejected, seen = 0, [], set()
+        if payload.get("valid_until"):
+            bid.valid_until = date.fromisoformat(payload["valid_until"])
         for data in payload.get("lines") or []:
             # Bids are validated on submission; a malformed or foreign line (e.g. from an older submission) is skipped and
             # recorded instead of failing the close for every bidder.
@@ -511,30 +942,49 @@ def _unseal(session: Session, event: SourcingEvent) -> int:
                 if event_line is None or event_line.id in seen:
                     raise ValueError("unknown or duplicate line")
                 components = {k: str(data.get(k) or 0) for k in ("freight", "duty", "packaging")}
+                material = session.get(Material, event_line.material_id) if event_line.material_id else None
+                norm = tco_svc.normalise_price(session, data, on, params)
+                if norm["minor"] <= 0:
+                    raise ValueError("unit price must be positive")
+                origin = str(data.get("origin") or ("IMPORT" if (supplier.country or "IN") != "IN" else "DOMESTIC")).upper()
+                hs_code = data.get("hs_code") or (material.hsn_code if material else None)
+                result = tco_svc.compute(
+                    session, params=event.tco_params, supplier_id=bid.supplier_id, category=event.category, price_minor=norm["minor"],
+                    price_exact=norm["exact"], lead_time_days=int(data["lead_time_days"]), payment_terms_days=int(data["payment_terms_days"]),
+                    annual_qty=event_line.annual_qty, material=material,
+                    freight=D(data["freight"]) if data.get("freight") not in (None, "") else None,
+                    duty=D(data["duty"]) if data.get("duty") not in (None, "") else None,
+                    packaging=D(data["packaging"]) if data.get("packaging") not in (None, "") else None,
+                    incoterm=data.get("incoterm"), origin=origin, hs_code=hs_code)
+                if result["totalMinor"] <= 0:
+                    raise ValueError("the total cost of ownership is not positive")
                 line = BidLine(tenant_id=event.tenant_id, bid_id=bid.id, event_line_id=event_line.id,
-                               unit_price_minor=int(D(data["unit_price"]) * 100), tco_components=components,
+                               unit_price_minor=norm["minor"], tco_components=components,
                                payment_terms_days=int(data["payment_terms_days"]), lead_time_days=int(data["lead_time_days"]),
                                offered_capacity_per_month=D(data["capacity_per_month"]) if data.get("capacity_per_month") else None,
-                               created_by=bid.submitted_by)
-                if line.unit_price_minor <= 0:
-                    raise ValueError("unit price must be positive")
-                tco, breakdown = _tco(session, event, bid.supplier_id, line)
-            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as exc:
+                               price_quoted_minor=norm["quotedMinor"], currency=norm["currency"], fx_rate=norm["fxRate"], fx_date=norm["fxDate"],
+                               incoterm=(data.get("incoterm") or None), origin=origin, moq=D(data["moq"]) if data.get("moq") else None,
+                               price_uom=data.get("price_uom"), uom_factor=D(data["uom_factor"]) if data.get("uom_factor") else None,
+                               tax_included=bool(data.get("tax_included")), tax_rate_pct=D(data["tax_rate_pct"]) if data.get("tax_rate_pct") else None,
+                               hs_code=hs_code, created_by=bid.submitted_by)
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError) as exc:  # TcoInputError is a ValueError
                 rejected.append({"line": data.get("line") if isinstance(data, dict) else None, "error": str(exc)[:200]})
                 continue
-            line.tco_minor, line.tco_breakdown = tco, breakdown
+            line.tco_minor, line.tco_breakdown = result["totalMinor"], result["parts"]
+            line.tco_incomplete, line.tco_trace = result["incomplete"], [*result["trace"], {"component": "normalisation", "steps": norm["steps"]},
+                                                                      {"component": "rounding", "valueMinor": result["rounding"]}]
             session.add(line)
             seen.add(event_line.id)
             valid += 1
         if valid == 0:
             bid.status = "INVALID"
             audit.record(session, "SOURCING_EVENT", event.id, "BID_INVALID", object_ref=event.number,
-                         after={"supplier": session.get(Supplier, bid.supplier_id).code, "round": event.round, "rejectedLines": rejected},
+                         after={"supplier": supplier.code, "round": event.round, "rejectedLines": rejected},
                          reason="sealed bid has no valid line for this event; it is not evaluated")
             continue
         if rejected:
             audit.record(session, "SOURCING_EVENT", event.id, "BID_LINES_SKIPPED", object_ref=event.number,
-                         after={"supplier": session.get(Supplier, bid.supplier_id).code, "round": event.round, "rejectedLines": rejected})
+                         after={"supplier": supplier.code, "round": event.round, "rejectedLines": rejected})
         for entry in payload.get("lots") or []:
             try:
                 code = str(entry["lot"]).upper()
@@ -554,24 +1004,9 @@ def _unseal(session: Session, event: SourcingEvent) -> int:
     event.unsealed_at = clock.now()
     session.flush()
     audit.record(session, "SOURCING_EVENT", event.id, "BIDS_UNSEALED", object_ref=event.number,
-                 after={"round": event.round, "bids": count}, reason="close time reached")
+                 after={"round": event.round, "bids": count, "openers": (event.opening or {}).get("openers") or []},
+                 reason="close time reached" if not (event.opening or {}).get("required") else "two-person opening")
     return count
-
-
-def _tco(session: Session, event: SourcingEvent, supplier_id: uuid.UUID, line: BidLine) -> tuple[int, dict]:
-    """tco = price + freight + duty + packaging + carrying(lead time) + quality(ppm × CoPQ) − payment-term value."""
-    params = event.tco_params
-    price = Decimal(line.unit_price_minor)
-    twin = supplier_svc.twin(session, supplier_id, event.category)
-    ppm = Decimal(twin.ppm) if twin and twin.ppm is not None else Decimal(0)
-    carrying = price * D(params["carrying_rate_pct"]) / 100 * line.lead_time_days / 365
-    quality = ppm / 1_000_000 * D(params["copq_per_defect_minor"])
-    payment = price * D(params["cost_of_capital_pct"]) / 100 * line.payment_terms_days / 365
-    parts = {"price": price, "freight": D(line.tco_components.get("freight", 0)) * 100,
-             "duty": D(line.tco_components.get("duty", 0)) * 100, "packaging": D(line.tco_components.get("packaging", 0)) * 100,
-             "carrying": carrying, "quality": quality, "paymentTermValue": -payment}
-    total = sum(parts.values(), Decimal(0)).quantize(Decimal("1"), ROUND_HALF_UP)
-    return int(total), {k: int(v.quantize(Decimal("1"), ROUND_HALF_UP)) for k, v in parts.items()}
 
 
 # ---------------------------------------------------------------- data-driven criteria (ESG, risk, scorecard)
@@ -634,18 +1069,44 @@ def _latest_bids(session: Session, event: SourcingEvent) -> list[Bid]:
 
 def _line_row(line: BidLine, event_line: EventLine, twin) -> dict:
     capacity = min([c for c in (line.offered_capacity_per_month, twin.free_capacity_per_month if twin else None) if c is not None], default=None)
+    missing = [t["component"] for t in (line.tco_trace or []) if t.get("status") == "MISSING"]
     return {"line": event_line.line_no, "eventLineId": str(event_line.id), "lot": event_line.lot_code, "priceMinor": line.unit_price_minor,
-            "tcoMinor": line.tco_minor, "tco": line.tco_breakdown, "leadTimeDays": line.lead_time_days,
+            "tcoMinor": line.tco_minor, "tco": line.tco_breakdown, "tcoTrace": line.tco_trace or [], "leadTimeDays": line.lead_time_days,
             "paymentTermsDays": line.payment_terms_days, "verifiedCapacityPerMonth": str(capacity) if capacity is not None else None,
-            "twinCapacityPerMonth": str(twin.free_capacity_per_month) if twin and twin.free_capacity_per_month is not None else None}
+            "capacityVerified": capacity is not None, "moq": str(line.moq) if line.moq is not None else None,
+            "twinCapacityPerMonth": str(twin.free_capacity_per_month) if twin and twin.free_capacity_per_month is not None else None,
+            "currency": line.currency or "INR", "quotedPriceMinor": line.price_quoted_minor, "fxRate": str(line.fx_rate) if line.fx_rate is not None else None,
+            "incoterm": line.incoterm, "origin": line.origin, "tcoIncomplete": bool(line.tco_incomplete), "tcoMissing": missing}
+
+
+def price_scores(method: str, values: list[int]) -> list[Decimal]:
+    """The price score (0..100) of each total cost in ``values`` (all bids on one line). LOWEST_RATIO: lowest / this x 100 (the lowest scores 100);
+    MIN_MAX: (highest - this) / (highest - lowest) x 100 (all equal: 100); RANK: 100 x (n - rank + 1) / n with rank 1 + the number of cheaper bids."""
+    if not values:
+        return []
+    low, high, n = min(values), max(values), len(values)
+    out = []
+    for value in values:
+        if method == "MIN_MAX":
+            out.append(Decimal(100) if high == low else Decimal(high - value) * 100 / Decimal(high - low))
+        elif method == "RANK":
+            rank = 1 + sum(1 for v in values if v < value)
+            out.append(Decimal(100) * (n - rank + 1) / n)
+        else:
+            out.append(Decimal(low) / Decimal(value) * 100)
+    return out
 
 
 def evaluation_matrix(session: Session, event: SourcingEvent) -> list[dict]:
+    """The normalised comparison of the valid bids: total cost of ownership per line, price score by the event's scoring method, the manual and
+    data-driven scores, the weighted score, the technical gate and the ranking. Equal total cost is ranked by the weighted score, then by the
+    earlier submission, then by supplier code (so the order never depends on how the rows were read)."""
     criteria = _criteria(session, event)
     bids = _latest_bids(session, event)
     event_lines = _lines(session, event)
     multi = len(event_lines) > 1
     by_id = {l.id: l for l in event_lines}
+    method = event.scoring_method or "LOWEST_RATIO"
     rows = []
     for bid in bids:
         supplier = session.get(Supplier, bid.supplier_id)
@@ -658,14 +1119,18 @@ def evaluation_matrix(session: Session, event: SourcingEvent) -> list[dict]:
                 for b in session.execute(select(BidLot).where(BidLot.bid_id == bid.id).order_by(BidLot.lot_code)).scalars()]
         line_rows = [_line_row(bid_lines[l.line_no], l, twin) for l in event_lines if l.line_no in bid_lines]
         base = {"supplier": supplier.code, "supplierId": str(supplier.id), "round": bid.round, "bidId": str(bid.id),
+                "submittedAt": bid.submitted_at.isoformat(), "validUntil": bid.valid_until.isoformat() if bid.valid_until else None,
                 "lateDeliveryProb": str(twin.late_delivery_prob) if twin else None, "lines": line_rows, "lots": lots,
                 "autoScores": bid.auto_scores or {}, "basis": "ANNUAL_VALUE" if multi else "UNIT",
-                "coverage": {"bid": len(line_rows), "of": len(event_lines)}, "complete": len(line_rows) == len(event_lines)}
+                "coverage": {"bid": len(line_rows), "of": len(event_lines)}, "complete": len(line_rows) == len(event_lines),
+                "tcoIncomplete": any(r["tcoIncomplete"] for r in line_rows),
+                "tcoMissing": sorted({m for r in line_rows for m in r["tcoMissing"]})}
         if not multi:
             first = line_rows[0]
-            rows.append({**base, "priceMinor": first["priceMinor"], "tcoMinor": first["tcoMinor"], "tco": first["tco"],
+            rows.append({**base, "priceMinor": first["priceMinor"], "tcoMinor": first["tcoMinor"], "tco": first["tco"], "tcoTrace": first["tcoTrace"],
                          "leadTimeDays": first["leadTimeDays"], "paymentTermsDays": first["paymentTermsDays"],
-                         "verifiedCapacityPerMonth": first["verifiedCapacityPerMonth"],
+                         "verifiedCapacityPerMonth": first["verifiedCapacityPerMonth"], "capacityVerified": first["capacityVerified"],
+                         "moq": first["moq"],
                          "shouldCostDeltaMinor": first["priceMinor"] - event.should_cost["unitCostMinor"] if event.should_cost else None})
         else:
             annual = {l.line_no: l.annual_qty for l in event_lines}
@@ -673,19 +1138,25 @@ def evaluation_matrix(session: Session, event: SourcingEvent) -> list[dict]:
                          "tcoMinor": int(sum(Decimal(r["tcoMinor"]) * annual[r["line"]] for r in line_rows)),
                          "leadTimeDays": max(r["leadTimeDays"] for r in line_rows),
                          "paymentTermsDays": min(r["paymentTermsDays"] for r in line_rows),
-                         "verifiedCapacityPerMonth": None, "shouldCostDeltaMinor": None})
+                         "verifiedCapacityPerMonth": None, "capacityVerified": all(r["capacityVerified"] for r in line_rows), "moq": None,
+                         "shouldCostDeltaMinor": None})
     if rows:
         rounds = {b.id: b.round for b in session.execute(select(Bid).where(Bid.event_id == event.id)).scalars()}
-        # price score per line against the best TCO bid on that line; a supplier's price score is the value-weighted mean over all lines
-        best_line = {l.line_no: min((r_l["tcoMinor"] for r in rows for r_l in r["lines"] if r_l["line"] == l.line_no), default=None) for l in event_lines}
+        # price score per line against the other bids on that line; a supplier's price score is the value-weighted mean over all lines
+        line_score: dict = {}
+        best_line = {}
+        for l in event_lines:
+            entries = [(r["supplierId"], r_l["tcoMinor"]) for r in rows for r_l in r["lines"] if r_l["line"] == l.line_no]
+            best_line[l.line_no] = min((t for _, t in entries), default=None)
+            scored = price_scores(method, [t for _, t in entries])
+            for (sid, _), value in zip(entries, scored):
+                line_score[(sid, l.line_no)] = value
         weight_line = {l.line_no: Decimal(best_line[l.line_no] or 0) * l.annual_qty for l in event_lines}
         total_weight = sum(weight_line.values()) or Decimal(1)
         for r in rows:
-            line_price_scores = {}
-            for r_l in r["lines"]:
-                line_price_scores[r_l["line"]] = Decimal(best_line[r_l["line"]]) / Decimal(r_l["tcoMinor"]) * 100
+            line_price_scores = {r_l["line"]: line_score[(r["supplierId"], r_l["line"])] for r_l in r["lines"]}
             if multi:
-                price_score = sum(weight_line[n] * s for n, s in line_price_scores.items()) / total_weight
+                price_score = sum(weight_line[n] * s_ for n, s_ in line_price_scores.items()) / total_weight
             else:
                 price_score = next(iter(line_price_scores.values()))
             scores = {"PRICE_TCO": price_score}
@@ -708,14 +1179,24 @@ def evaluation_matrix(session: Session, event: SourcingEvent) -> list[dict]:
             weighted = sum(Decimal(c.weight) * Decimal(final.get(c.code, 0)) / 100 for c in criteria)
             r["scores"] = {k: str(Decimal(v).quantize(Decimal("0.01"))) for k, v in final.items() if not isinstance(v, list)}
             r["weightedScore"] = str(weighted.quantize(Decimal("0.01")))
+            r["priceScore"] = str(Decimal(price_score).quantize(Decimal("0.01")))
+            r["evaluators"] = len({ev_id for (_, ev_id) in latest})
+            # criteria nobody scored yet count as zero in the weighted score; they are listed so nobody mistakes the zero for a judgement
+            r["unscored"] = sorted(c.code for c in criteria if c.code != "PRICE_TCO" and c.weight > 0 and c.code not in final)
+            failed = sorted(c.code for c in criteria if c.min_score is not None and c.code in final and Decimal(final[c.code]) < c.min_score)
+            pending = sorted(c.code for c in criteria if c.min_score is not None and c.code not in final)
+            r["technicalGate"] = {"passed": not failed, "failed": failed, "pending": pending,
+                                  "thresholds": {c.code: str(c.min_score) for c in criteria if c.min_score is not None}}
             # the weighted score of each line: that line's price score with the supplier's other criteria
             for r_l in r["lines"]:
                 other = sum(Decimal(c.weight) * Decimal(final.get(c.code, 0)) / 100 for c in criteria if c.code != "PRICE_TCO")
                 price_weight = next((Decimal(c.weight) for c in criteria if c.code == "PRICE_TCO"), Decimal(0))
                 r_l["weightedScore"] = str((price_weight * line_price_scores[r_l["line"]] / 100 + other).quantize(Decimal("0.01")))
-    if multi:
-        return sorted(rows, key=lambda r: (not r["complete"], r["tcoMinor"]))
-    return sorted(rows, key=lambda r: r["tcoMinor"])
+    rows.sort(key=lambda r: ((not r["complete"]) if multi else False, r["tcoMinor"], -Decimal(r.get("weightedScore", "0")), r["submittedAt"], r["supplier"]))
+    for rank, r in enumerate(rows, start=1):
+        r["rank"] = rank
+        r["tiedWithPrevious"] = rank > 1 and rows[rank - 2]["tcoMinor"] == r["tcoMinor"]
+    return rows
 
 
 def line_matrix(session: Session, event: SourcingEvent) -> list[dict]:
@@ -734,29 +1215,103 @@ def line_matrix(session: Session, event: SourcingEvent) -> list[dict]:
     return out
 
 
+def declare_conflict(session: Session, event: SourcingEvent, has_conflict: bool, declaration: str) -> EvaluatorDeclaration:
+    """The evaluator's conflict-of-interest declaration for this event (BP M05 SRC-05). Required before the user scores; a user who declares a
+    conflict is barred from scoring and from proposing the award of the event. A declaration can be tightened (no conflict to conflict), never relaxed."""
+    p = principal(session)
+    text_ = (declaration or "").strip()
+    if len(text_) < 10:
+        raise Problem(422, "DECLARATION_REQUIRED", "Write the declaration: say whether you have any personal or financial interest in a bidder", rule_ref="SRC-05")
+    existing = session.execute(select(EvaluatorDeclaration).where(EvaluatorDeclaration.event_id == event.id,
+                                                                  EvaluatorDeclaration.user_id == p.user_id)).scalar_one_or_none()
+    if existing is not None:
+        if existing.has_conflict and not has_conflict:
+            raise Problem(409, "CONFLICT_STANDS", "A declared conflict of interest cannot be withdrawn; ask the event owner to replace the evaluator", rule_ref="SRC-05")
+        existing.has_conflict, existing.declaration, existing.declared_at = bool(has_conflict), text_, clock.now()
+        declared = existing
+    else:
+        declared = EvaluatorDeclaration(tenant_id=event.tenant_id, event_id=event.id, user_id=p.user_id, has_conflict=bool(has_conflict),
+                                        declaration=text_, declared_at=clock.now(), created_by=p.user_id)
+        session.add(declared)
+    session.flush()
+    audit.record(session, "SOURCING_EVENT", event.id, "EVALUATOR_DECLARED", object_ref=event.number,
+                 after={"evaluator": p.email, "hasConflict": bool(has_conflict)}, reason=text_[:300])
+    return declared
+
+
+def _require_declaration(session: Session, event: SourcingEvent) -> None:
+    p = principal(session)
+    declared = session.execute(select(EvaluatorDeclaration).where(EvaluatorDeclaration.event_id == event.id,
+                                                                  EvaluatorDeclaration.user_id == p.user_id)).scalar_one_or_none()
+    if declared is None:
+        raise Problem(422, "DECLARATION_REQUIRED", f"Declare any conflict of interest in {event.number} before you score its bids", rule_ref="SRC-05")
+    if declared.has_conflict:
+        raise Problem(403, "EVALUATOR_CONFLICT", f"You declared a conflict of interest in {event.number}: you cannot score its bids", rule_ref="SRC-05")
+
+
+def disqualify(session: Session, event: SourcingEvent, supplier: Supplier, reason: str) -> Bid:
+    """Take a bidder out of the evaluation with a written reason (non-compliance, failed technical gate, conflict, integrity). The bid stays on record,
+    is no longer ranked or awardable, and the supplier is told. Allowed while the bids are evaluated, before an award is proposed."""
+    p = principal(session)
+    reason = (reason or "").strip()
+    if len(reason) < 10:
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for the disqualification (at least a sentence)", rule_ref="SRC-DISQUALIFY")
+    auction_svc._require_manager(session, event)
+    abac.guard(session, "SOURCING_MANAGE", event)
+    if event.status != "UNDER_EVALUATION":
+        raise illegal_transition("Sourcing event", event.number, event.status, "disqualify")
+    bid = session.execute(select(Bid).where(Bid.event_id == event.id, Bid.supplier_id == supplier.id, Bid.status == "UNSEALED")
+                          .with_for_update()).scalar_one_or_none()
+    if bid is None:
+        raise Problem(422, "NO_VALID_BID", f"{supplier.code} has no evaluated bid in {event.number}")
+    bid.status, bid.disqualified_at, bid.disqualified_by, bid.disqualified_reason = "DISQUALIFIED", clock.now(), p.user_id, reason
+    # earlier scenarios included the bid: they are stale (kept as evidence, marked superseded) and must be rebuilt
+    for old in session.execute(select(AwardScenario).where(AwardScenario.event_id == event.id)).scalars():
+        if not (old.explanation or {}).get("supersededAt"):
+            old.explanation = {**(old.explanation or {}), "supersededAt": clock.now().isoformat(), "supersededBy": f"{supplier.code} disqualified"}
+    session.flush()
+    audit.record(session, "SOURCING_EVENT", event.id, "BID_DISQUALIFIED", object_ref=event.number, reason=reason,
+                 after={"supplier": supplier.code, "round": bid.round})
+    outbox.emit(session, "sourcing.bid.disqualified", "SOURCING_EVENT", event.id, event.number,
+                {"supplier": supplier.code, "supplierId": str(supplier.id), "reason": reason, "round": bid.round, "ownerId": str(event.owner_id)})
+    return bid
+
+
 def score(session: Session, event: SourcingEvent, scores: list[dict]) -> dict:
     p = principal(session)
     if event.status != "UNDER_EVALUATION":
         raise illegal_transition("Sourcing event", event.number, event.status, "score")
     criteria = {c.code: c for c in _criteria(session, event)}
+    if not scores:
+        raise Problem(422, "NO_SCORES", "Send at least one score", rule_ref="SRC-CRITERIA")
+    checked = []
     for item in scores:
         if item["criterion"] not in criteria or item["criterion"] == "PRICE_TCO":
             raise Problem(422, "INVALID_CRITERION", f"{item['criterion']} is not a manually scored criterion of {event.number}")
         if criteria[item["criterion"]].data_source != "MANUAL":
             raise Problem(422, "INVALID_CRITERION", f"{item['criterion']} is scored from {criteria[item['criterion']].data_source} data at close, "
                           "not by an evaluator", rule_ref="SRC-CRITERIA")
+        try:
+            value = D(item["score"])
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            raise Problem(422, "INVALID_SCORE", "A score is a number from 0 to 100", rule_ref="SRC-CRITERIA")
+        if not value.is_finite() or not Decimal(0) <= value <= Decimal(100):
+            raise Problem(422, "INVALID_SCORE", f"A score is from 0 to 100 (got {item['score']})", rule_ref="SRC-CRITERIA")
         supplier = supplier_by_code(session, item["supplier"])
         bid = session.execute(select(Bid).where(Bid.event_id == event.id, Bid.supplier_id == supplier.id,
                                                 Bid.status == "UNSEALED")).scalar_one_or_none()
         if bid is None:
             raise Problem(422, "NO_VALID_BID", f"{supplier.code} has no evaluated bid in {event.number}")
+        checked.append((item, bid, value))
+    _require_declaration(session, event)  # after the input checks: a malformed request is told what is wrong with it first
+    for item, bid, value in checked:
         existing = session.execute(select(Evaluation).where(Evaluation.bid_id == bid.id, Evaluation.criterion_code == item["criterion"],
                                                             Evaluation.evaluator_id == p.user_id)).scalar_one_or_none()
         if existing:
-            existing.score = D(item["score"])
+            existing.score = value
         else:
             session.add(Evaluation(tenant_id=event.tenant_id, event_id=event.id, bid_id=bid.id, criterion_code=item["criterion"],
-                                   evaluator_id=p.user_id, score=D(item["score"]), comment=item.get("comment"), created_by=p.user_id))
+                                   evaluator_id=p.user_id, score=value, comment=item.get("comment"), created_by=p.user_id))
     session.flush()
     sod.record(session, "BID_SCORE", {"event_id": event.id})
     audit.record(session, "SOURCING_EVENT", event.id, "SCORED", object_ref=event.number, after={"entries": len(scores)})
@@ -765,7 +1320,9 @@ def score(session: Session, event: SourcingEvent, scores: list[dict]) -> dict:
 
 def new_round(session: Session, event: SourcingEvent, close_at: datetime, note: str = "") -> SourcingEvent:
     auction_svc._require_manager(session, event)
-    if close_at <= clock.now():
+    abac.guard(session, "SOURCING_MANAGE", event)
+    close_at = aware(close_at)
+    if close_at is None or close_at <= clock.now():
         raise rule_violation("Close time must be in the future", "SRC-CLOSE")
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
     workflow.step(session, instance, "F3-05", outcome=f"yes: negotiation round {event.round + 1}" + (f" ({note})" if note else ""))
@@ -773,6 +1330,9 @@ def new_round(session: Session, event: SourcingEvent, close_at: datetime, note: 
     event.round += 1
     event.close_at = close_at
     event.unsealed_at = None
+    event.competitive = None
+    event.opening = {}
+    event.clarification_close_at = None  # the questions of a new round run until its close
     auction_svc.on_new_round(event)
     workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, close_at, {"round": event.round})
     workflow.wait(session, instance, "F3-03", outcome=f"round {event.round}: sealed bids until {close_at.isoformat()}")
@@ -788,14 +1348,19 @@ def _line_candidates(rows: list[dict], q: Decimal, constraints: dict, single_onl
     max_share = Decimal(str(constraints.get("max_share", 1))) if not single_only else Decimal(1)
     min_share = Decimal(str(constraints.get("min_share", 0)))
     cond_cap = Decimal(str(constraints["max_conditional_share_pct"])) / 100 if constraints.get("max_conditional_share_pct") not in (None, "") else None
+    block_unverified = bool(constraints.get("_block_unverified"))
     for k in range(1, max_k + 1):
         for subset in itertools.combinations(rows, k):
-            uppers = []
+            uppers, lowers = [], []
             for r in subset:
-                cap = Decimal(r["verifiedCapacityPerMonth"]) / q if r["verifiedCapacityPerMonth"] else Decimal(1)
+                if r.get("verifiedCapacityPerMonth"):
+                    cap = Decimal(r["verifiedCapacityPerMonth"]) / q
+                else:  # nobody verified this supplier's capacity: assumed enough (and flagged on the award) unless the policy blocks it
+                    cap = Decimal(0) if block_unverified else Decimal(1)
                 uppers.append(min(max_share, cap))  # max_share binds a single supplier too (sole source only if max_share is 1)
-            lowers = [min_share if k > 1 else Decimal(1)] * k
-            if any(lo > up for lo, up in zip(lowers, uppers)) or sum(uppers) < 1 or sum(lowers) > 1:
+                moq_share = Decimal(str(r["moq"])) / q if r.get("moq") not in (None, "") and q > 0 else Decimal(0)  # a selected supplier gets at least its MOQ
+                lowers.append(max(min_share if k > 1 else Decimal(1), moq_share))
+            if any(lo > up + EPS for lo, up in zip(lowers, uppers)) or sum(uppers) < 1 - EPS or sum(lowers) > 1 + EPS:
                 continue
             shares = list(lowers)
             remaining = Decimal(1) - sum(lowers)
@@ -809,8 +1374,10 @@ def _line_candidates(rows: list[dict], q: Decimal, constraints: dict, single_onl
                 remaining -= add
                 if subset[index].get("conditional"):
                     cond_used += add
-            if remaining > 0 or (cond_cap is not None and cond_used > cond_cap):
+            if remaining > EPS or (cond_cap is not None and cond_used > cond_cap + EPS):
                 continue
+            if remaining > 0:   # a division left less than EPS over (equal thirds of capacity): the cheapest supplier takes it so the shares add up to exactly 1
+                shares[min(range(k), key=lambda i: subset[i]["tcoMinor"])] += remaining
             cost = sum(s * r["tcoMinor"] for s, r in zip(shares, subset))
             yield cost, [(r, s) for r, s in zip(subset, shares) if s > 0]
 
@@ -917,8 +1484,13 @@ def build_scenarios(session: Session, event: SourcingEvent) -> list[dict]:
     session.flush()
     matrix = evaluation_matrix(session, event)
     rc = _risk_constraints(session, event)
+    if str(policy_of(session, event).get("unverifiedCapacity", "FLAG")).upper() == "BLOCK":
+        rc["_block_unverified"] = True
     info = _supplier_risk_info(session, event, [uuid.UUID(r["supplierId"]) for r in matrix])
     excluded = _exclusions(info, rc)
+    for r in matrix:  # a bid that failed the technical gate is not awardable (the gate is a precondition, not a score)
+        if not r["technicalGate"]["passed"]:
+            excluded.setdefault(r["supplierId"], f"{r['supplier']} scored below the minimum on {', '.join(r['technicalGate']['failed'])}")
     event_lines = _lines(session, event)
     if len(event_lines) == 1:
         results = _single_line_scenarios(session, event, event_lines[0], matrix, rc, info, excluded)
@@ -935,13 +1507,27 @@ def build_scenarios(session: Session, event: SourcingEvent) -> list[dict]:
              "annualSavingsMinor": s.annual_savings_minor, "explanation": s.explanation} for s in results]
 
 
+def _scenario_risk(allocations: list, explanation: dict) -> Optional[int]:
+    """Value-weighted supplier risk score (0 best .. 100) of the suppliers an allocation uses, from the risk scores the scenario was built on."""
+    scores = {code: item.get("riskScore") for code, item in ((explanation.get("risk") or {}).get("suppliers") or {}).items()}
+    total, weighted = Decimal(0), Decimal(0)
+    for a in allocations or []:
+        weight = Decimal(a["valueMinor"]) if a.get("valueMinor") is not None else Decimal(a.get("share") or 0) * Decimal(a.get("priceMinor") or 0)
+        if scores.get(a["supplier"]) is None or weight <= 0:
+            continue
+        total += weight
+        weighted += weight * Decimal(scores[a["supplier"]])
+    return int((weighted / total).quantize(Decimal(1), ROUND_HALF_UP)) if total > 0 else None
+
+
 def _store(session: Session, event: SourcingEvent, results: list, kind: str, allocations: list, feasible: bool, explanation: dict,
            weighted_price, weighted_tco, savings) -> AwardScenario:
     scenario = AwardScenario(
         tenant_id=event.tenant_id, event_id=event.id, kind=kind, feasible=feasible, allocations=allocations,
         weighted_price_minor=int(weighted_price.quantize(Decimal("1"), ROUND_HALF_UP)) if weighted_price is not None else None,
         weighted_tco_minor=int(weighted_tco.quantize(Decimal("1"), ROUND_HALF_UP)) if weighted_tco is not None else None,
-        annual_savings_minor=savings, explanation=explanation, created_by=principal(session).user_id)
+        annual_savings_minor=savings, explanation=explanation, created_by=principal(session).user_id,
+        risk_score=_scenario_risk(allocations, explanation))
     session.add(scenario)
     session.flush()
     results.append(scenario)
@@ -953,6 +1539,8 @@ def _single_line_scenarios(session: Session, event: SourcingEvent, line: EventLi
     rows = _supplier_rows(matrix, info, excluded)
     # With one line the value share equals the volume share: the single-source cap is a cap on the share of the line.
     constraints = dict(event.constraints or {})
+    if str(policy_of(session, event).get("unverifiedCapacity", "FLAG")).upper() == "BLOCK":
+        constraints["_block_unverified"] = True
     if rc.get("max_single_source_pct") not in (None, ""):
         constraints["max_share"] = str(min(Decimal(str(constraints.get("max_share", 1))), Decimal(str(rc["max_single_source_pct"])) / 100))
     if rc.get("max_conditional_share_pct") not in (None, ""):
@@ -972,19 +1560,29 @@ def _single_line_scenarios(session: Session, event: SourcingEvent, line: EventLi
             session, event, results, kind,
             [{"supplier": r["supplier"], "supplierId": r["supplierId"], "share": str(s.quantize(QUANT4)),
               "monthlyQty": str((q * s).quantize(Decimal("1"))), "annualQty": str((line.annual_qty * s).quantize(Decimal("1"))),
-              "priceMinor": r["priceMinor"], "tcoMinor": r["tcoMinor"]} for r, s in allocations],
+              "priceMinor": r["priceMinor"], "tcoMinor": r["tcoMinor"], "capacityVerified": bool(r.get("capacityVerified", True)),
+              "tcoIncomplete": bool(r.get("tcoIncomplete"))} for r, s in allocations],
             feasible, explanation, weighted_price, weighted_tco, savings)
+
+    block = bool(constraints.get("_block_unverified"))
+
+    def sole_feasible(row: dict) -> bool:
+        cap = Decimal(row["verifiedCapacityPerMonth"] or q)
+        moq = Decimal(str(row["moq"])) if row.get("moq") not in (None, "") else Decimal(0)
+        return cap >= q and moq <= q and not (block and not row.get("capacityVerified", True))
 
     lowest = rows[0] if rows else None
     if lowest:
         cap = Decimal(lowest["verifiedCapacityPerMonth"] or q)
-        store("LOWEST_COST", [(lowest, Decimal(1))], cap >= q,
-              {"rule": "all volume to lowest TCO", "capacityCheck": f"{lowest['supplier']} verified capacity {cap} vs {q}/month"})
-    best_value = max(rows, key=lambda r: Decimal(r.get("weightedScore", "0"))) if rows else None
+        store("LOWEST_COST", [(lowest, Decimal(1))], sole_feasible(lowest),
+              {"rule": "all volume to lowest TCO", "capacityCheck": f"{lowest['supplier']} verified capacity {cap} vs {q}/month"
+               + ("" if lowest.get("capacityVerified", True) else " (capacity not verified)")})
+    best_value = max(rows, key=lambda r: (Decimal(r.get("weightedScore", "0")), -r["tcoMinor"])) if rows else None
     if best_value:
         cap = Decimal(best_value["verifiedCapacityPerMonth"] or q)
-        store("BEST_VALUE", [(best_value, Decimal(1))], cap >= q,
-              {"rule": "all volume to highest weighted score", "capacityCheck": f"{best_value['supplier']} verified capacity {cap} vs {q}/month"})
+        store("BEST_VALUE", [(best_value, Decimal(1))], sole_feasible(best_value),
+              {"rule": "all volume to highest weighted score", "capacityCheck": f"{best_value['supplier']} verified capacity {cap} vs {q}/month"
+               + ("" if best_value.get("capacityVerified", True) else " (capacity not verified)")})
     optimum = _optimise(rows, q, constraints)
     if optimum:
         store("CAPACITY_CONSTRAINED", optimum["allocations"], True,
@@ -1066,7 +1664,8 @@ class _Plan:
                     "line": n, "eventLineId": str(line.id), "lot": line.lot_code, "bundle": line.lot_code in self.bundles
                     and self.bundles[line.lot_code] == row["supplierId"], "share": str(share.quantize(QUANT4)),
                     "monthlyQty": str((line.monthly_qty * share).quantize(QUANT3)), "annualQty": str((line.annual_qty * share).quantize(QUANT3)),
-                    "priceMinor": int(price), "tcoMinor": int(tco),
+                    "priceMinor": int(price), "tcoMinor": int(tco), "capacityVerified": bool(row.get("capacityVerified", True)),
+                    "tcoIncomplete": bool(row.get("tcoIncomplete")),
                     "valueMinor": int((Decimal(price) * share * line.annual_qty).quantize(Decimal("1"), ROUND_HALF_UP))})
         total = sum(sum(l["valueMinor"] for l in e["lines"]) for e in by_supplier.values()) or 1
         for entry in by_supplier.values():
@@ -1082,6 +1681,9 @@ class _AwardContext:
         self.event, self.event_lines, self.rows, self.info, self.rc = event, event_lines, rows, info, rc
         self.line_by_no = {l.line_no: l for l in event_lines}
         self.constraints = dict(event.constraints or {})
+        self.block_unverified = bool(rc.get("_block_unverified"))
+        if self.block_unverified:
+            self.constraints["_block_unverified"] = True
         if rc.get("max_conditional_share_pct") not in (None, ""):
             self.constraints["max_conditional_share_pct"] = rc["max_conditional_share_pct"]
         self.lots: dict = {}
@@ -1100,6 +1702,7 @@ class _AwardContext:
                     "supplier": r["supplier"], "supplierId": r["supplierId"], "priceMinor": lr["priceMinor"], "tcoMinor": lr["tcoMinor"],
                     "verifiedCapacityPerMonth": lr["verifiedCapacityPerMonth"], "weightedScore": lr.get("weightedScore", "0"),
                     "twinCapacity": Decimal(lr["twinCapacityPerMonth"]) if lr.get("twinCapacityPerMonth") is not None else None,
+                    "moq": lr.get("moq"), "capacityVerified": bool(lr.get("capacityVerified", True)), "tcoIncomplete": bool(lr.get("tcoIncomplete")),
                     "conditional": info[r["supplierId"]]["conditional"], "allOrNothing": bool(term and term["allOrNothing"])})
             for t in r["lots"]:
                 self.lot_terms[(r["supplierId"], t["lot"])] = t
@@ -1147,7 +1750,8 @@ class _AwardContext:
 
         def single(line: EventLine, only_split: bool) -> Optional[list]:
             rows = [r for r in self.by_line[line.line_no] if not (only_split and r["allOrNothing"])
-                    and (Decimal(r["verifiedCapacityPerMonth"]) >= line.monthly_qty if r["verifiedCapacityPerMonth"] else True)]
+                    and (Decimal(r["verifiedCapacityPerMonth"]) >= line.monthly_qty if r["verifiedCapacityPerMonth"] else not self.block_unverified)
+                    and (r.get("moq") in (None, "") or Decimal(str(r["moq"])) <= line.monthly_qty)]
             if not rows:
                 return None
             key = (lambda r: r["tcoMinor"]) if mode == "tco" else (lambda r: -Decimal(r["weightedScore"]))
@@ -1305,11 +1909,216 @@ class _AwardContext:
         return best["plan"], nodes[0], exhausted[0]
 
 
+# ---------------------------------------------------------------- manual split scenario (SRC-04 Award Scenario Studio)
+def _split_error(detail: str, **extra) -> Problem:
+    return Problem(422, "INVALID_SPLIT", detail, rule_ref="SRC-AWARD-SPLIT", **extra)
+
+
+def custom_scenario(session: Session, event: SourcingEvent, allocations: list[dict]) -> dict:
+    """A split the buyer entered, by percentage (``share_pct``) or by monthly quantity (``qty_per_month``) per supplier (and per ``line`` of a
+    several-line event), checked like the optimiser's output: every supplier has an evaluated bid, the shares of a line add up to exactly 100 %,
+    no supplier is above its verified capacity or below its MOQ, the share bounds and the supplier count of the event hold, and the risk caps
+    hold. A split that does not add up to 100 % is refused (422); one that breaks a constraint is stored as an infeasible scenario with the
+    violations listed, so the Studio can show why and the award refuses it. Lot bundle discounts are not applied to a manual split."""
+    auction_svc._require_manager(session, event)
+    abac.guard(session, "SOURCING_MANAGE", event)
+    if event.status != "UNDER_EVALUATION":
+        raise illegal_transition("Sourcing event", event.number, event.status, "scenarios")
+    if not allocations:
+        raise _split_error("Give at least one supplier with its share or quantity")
+    event_lines = _lines(session, event)
+    multi = len(event_lines) > 1
+    matrix = evaluation_matrix(session, event)
+    rc = _risk_constraints(session, event)
+    info = _supplier_risk_info(session, event, [uuid.UUID(r["supplierId"]) for r in matrix])
+    excluded = _exclusions(info, rc)
+    for r in matrix:
+        if not r["technicalGate"]["passed"]:
+            excluded.setdefault(r["supplierId"], f"{r['supplier']} failed the technical gate")
+    by_code = {r["supplier"]: r for r in matrix}
+    constraints = dict(event.constraints or {})
+    violations: list[str] = []
+    per_line: dict = {}
+    for entry in allocations:
+        code = entry.get("supplier")
+        row = by_code.get(code)
+        if row is None:
+            raise _split_error(f"{code} has no evaluated bid in {event.number}")
+        if row["supplierId"] in excluded:
+            violations.append(excluded[row["supplierId"]])
+        line_no = int(entry["line"]) if entry.get("line") is not None else (event_lines[0].line_no if not multi else None)
+        if line_no is None or line_no not in {l.line_no for l in event_lines}:
+            raise _split_error(f"Give the line of the event this share is for (lines: {', '.join(str(l.line_no) for l in event_lines)})")
+        line = next(l for l in event_lines if l.line_no == line_no)
+        if (entry.get("share_pct") is None) == (entry.get("qty_per_month") is None):
+            raise _split_error(f"{code}: give either share_pct or qty_per_month, not both and not neither")
+        try:
+            share = D(entry["share_pct"]) / 100 if entry.get("share_pct") is not None else D(entry["qty_per_month"]) / line.monthly_qty
+        except (TypeError, ValueError, ArithmeticError):
+            raise _split_error(f"{code}: the share must be a number")
+        if not share.is_finite() or share <= 0 or share > 1:
+            raise _split_error(f"{code}: the share must be above 0 and at most 100 %")
+        if any(code == c for c, _ in per_line.get(line_no, [])):
+            raise _split_error(f"{code} appears twice for line {line_no}")
+        per_line.setdefault(line_no, []).append((code, share))
+    for line in event_lines:
+        entries = per_line.get(line.line_no, [])
+        total = sum((sh for _, sh in entries), Decimal(0))
+        if not entries or abs(total - 1) > Decimal("0.0001"):
+            raise _split_error(f"Line {line.line_no}: the shares add up to {(total * 100).quantize(Decimal('0.01'))} %, not 100 %",
+                               line=line.line_no, totalPct=str((total * 100).quantize(Decimal("0.01"))))
+        line_row = {code: next(l for l in by_code[code]["lines"] if l["line"] == line.line_no) for code, _ in entries if any(l["line"] == line.line_no for l in by_code[code]["lines"])}
+        for code, share in entries:
+            lr = line_row.get(code)
+            if lr is None:
+                violations.append(f"{code} did not bid on line {line.line_no}")
+                continue
+            qty = share * line.monthly_qty
+            if lr["verifiedCapacityPerMonth"] and qty > Decimal(lr["verifiedCapacityPerMonth"]) + EPS:
+                violations.append(f"{code}: {qty.quantize(Decimal('1'))} per month on line {line.line_no} is above its verified capacity {lr['verifiedCapacityPerMonth']}")
+            if lr["moq"] and qty < Decimal(lr["moq"]) - EPS:
+                violations.append(f"{code}: {qty.quantize(Decimal('1'))} per month on line {line.line_no} is below its minimum order quantity {lr['moq']}")
+            if not lr["capacityVerified"] and str(policy_of(session, event).get("unverifiedCapacity", "FLAG")).upper() == "BLOCK":
+                violations.append(f"{code}: capacity on line {line.line_no} is not verified and the policy blocks it")
+            if len(entries) > 1 and constraints.get("min_share") not in (None, "") and share < D(constraints["min_share"]) - EPS:
+                violations.append(f"{code}: {(share * 100).quantize(Decimal('0.1'))} % is below the minimum share {D(constraints['min_share']) * 100} %")
+            if constraints.get("max_share") not in (None, "") and share > D(constraints["max_share"]) + EPS:   # binds a sole source too, like the optimiser
+                violations.append(f"{code}: {(share * 100).quantize(Decimal('0.1'))} % is above the maximum share {D(constraints['max_share']) * 100} %")
+        if constraints.get("max_suppliers") and len(entries) > int(constraints["max_suppliers"]):
+            violations.append(f"line {line.line_no}: {len(entries)} suppliers, the event allows {constraints['max_suppliers']}")
+        for lot_line in [l for l in event_lines if l.lot_code and l.line_no == line.line_no]:
+            for code, share in entries:
+                row = by_code[code]
+                if any(t["lot"] == lot_line.lot_code and t["allOrNothing"] for t in row["lots"]) and len(entries) > 1:
+                    violations.append(f"{code} accepts lot {lot_line.lot_code} only as a whole: line {line.line_no} cannot be split")
+    results: list = []
+    if not multi:
+        line = event_lines[0]
+        pairs = [(by_code[code], share) for code, share in per_line[line.line_no]]
+        weighted_price = sum(Decimal(r["priceMinor"]) * sh for r, sh in pairs)
+        weighted_tco = sum(Decimal(r["tcoMinor"]) * sh for r, sh in pairs)
+        savings = int((Decimal(event.baseline_price_minor) - weighted_price) * line.annual_qty) if event.baseline_price_minor else None
+        checks = _share_checks({r["supplierId"]: Decimal(r["tcoMinor"]) * sh for r, sh in pairs}, info, rc)
+        for c in checks:
+            if not c["ok"]:
+                violations.append(f"{c['rule']}: limit {c['limit']} exceeded")
+        scenario = _store(session, event, results, "CUSTOM", [
+            {"supplier": r["supplier"], "supplierId": r["supplierId"], "share": str(sh.quantize(QUANT4)), "monthlyQty": str((line.monthly_qty * sh).quantize(Decimal("1"))),
+             "annualQty": str((line.annual_qty * sh).quantize(Decimal("1"))), "priceMinor": r["priceMinor"], "tcoMinor": r["tcoMinor"],
+             "capacityVerified": bool(r.get("capacityVerified", True)), "tcoIncomplete": bool(r.get("tcoIncomplete"))} for r, sh in pairs],
+            not violations, {"rule": "manual split entered by the buyer", "violations": violations, "risk": _risk_explanation(info, rc, excluded, checks)},
+            weighted_price, weighted_tco, savings)
+    else:
+        context = _AwardContext(event, event_lines, [r for r in matrix if r["supplierId"] not in excluded], info, rc)
+        plan = _Plan()
+        plan.annual = {l.line_no: l.annual_qty for l in event_lines}
+        for line_no, entries in per_line.items():
+            plan.lines[line_no] = []
+            for code, share in entries:
+                row = next((r for r in context.by_line[line_no] if r["supplier"] == code), None)
+                if row is None:
+                    violations.append(f"{code} is not an eligible bidder on line {line_no}")
+                    continue
+                plan.lines[line_no].append((row, share, row["priceMinor"], row["tcoMinor"]))
+        checks = _share_checks(plan.supplier_values(), info, rc)
+        for c in checks:
+            if not c["ok"]:
+                violations.append(f"{c['rule']}: limit {c['limit']} exceeded")
+        baseline_value = (sum(Decimal(l.baseline_price_minor) * l.annual_qty for l in event_lines)
+                          if all(l.baseline_price_minor is not None for l in event_lines) else None)
+        price = plan.price_value()
+        scenario = _store(session, event, results, "CUSTOM", plan.allocations(context), not violations,
+                          {"rule": "manual split entered by the buyer", "basis": "ANNUAL_VALUE", "violations": violations, "lots": [],
+                           "risk": _risk_explanation(info, rc, excluded, checks)}, price, plan.tco_value(),
+                          int(baseline_value - price) if baseline_value is not None else None)
+    audit.record(session, "SOURCING_EVENT", event.id, "SCENARIO_CUSTOM", object_ref=event.number,
+                 after={"scenario": str(scenario.id), "feasible": scenario.feasible, "violations": violations})
+    return {"id": str(scenario.id), "kind": scenario.kind, "feasible": scenario.feasible, "allocations": scenario.allocations,
+            "weightedPriceMinor": scenario.weighted_price_minor, "weightedTcoMinor": scenario.weighted_tco_minor,
+            "annualSavingsMinor": scenario.annual_savings_minor, "riskScore": scenario.risk_score, "explanation": scenario.explanation}
+
+
 # ---------------------------------------------------------------- award (F3-07/08/09)
+def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, rows: list[dict], pol: dict, rationale: Optional[str]) -> dict:
+    """Everything that must hold before an award is proposed, and the exceptions that make a written rationale mandatory.
+
+    Blocks (422): a supplier whose bid is no longer in the evaluation (disqualified, withdrawn), an offer whose validity has ended, a failed or
+    pending technical gate, criteria nobody scored (policy requireAllCriteriaScored), a lead time that cannot meet the need date (policy
+    leadTimeCheck ENFORCE). Exceptions: NOT_LOWEST (a bid that is not the lowest eligible price), LIMITED_COMPETITION (fewer valid bidders than
+    the minimum), INCOMPLETE_TCO (a missing TCO input), UNVERIFIED_CAPACITY (volume to a supplier nobody verified), NEGATIVE_SAVINGS (the award costs
+    more than the baseline), LEAD_TIME_AFTER_NEED (policy WARN). The first five need the rationale of at least ``minRationaleChars`` characters."""
+    by_supplier = {r["supplier"]: r for r in rows}
+    awarded = [a["supplier"] for a in scenario.allocations]
+    lines_of = {a["supplier"]: a.get("lines") for a in scenario.allocations}
+    for code in awarded:
+        row = by_supplier.get(code)
+        if row is None:
+            raise Problem(422, "BID_NOT_EVALUATED", f"{code} has no evaluated bid in {event.number} any more (disqualified or withdrawn): rebuild the scenarios",
+                          rule_ref="SRC-AWARD")
+        if row.get("validUntil") and date.fromisoformat(row["validUntil"]) < clock.today():
+            raise Problem(422, "OFFER_EXPIRED", f"{code}'s offer was valid until {row['validUntil']}: ask for an extension in a new round before awarding",
+                          rule_ref="SRC-AWARD")
+        gate = row["technicalGate"]
+        if not gate["passed"] or gate["pending"]:
+            raise Problem(422, "TECHNICAL_GATE", f"{code} " + (f"scored below the minimum on {', '.join(gate['failed'])}" if gate["failed"]
+                                                                 else f"has no score yet on {', '.join(gate['pending'])} (technical gate)"), rule_ref="SRC-AWARD")
+        if pol.get("requireAllCriteriaScored", True) and row["unscored"]:
+            raise Problem(422, "UNSCORED_CRITERIA", f"{code} was not scored on {', '.join(row['unscored'])}: every manual criterion needs a score before the award",
+                          rule_ref="SRC-AWARD")
+    # lowest eligible price (the bids the award could have gone to)
+    excluded_ids = {e["supplierId"] for e in ((scenario.explanation or {}).get("risk") or {}).get("excluded", [])}
+    eligible = [r for r in rows if r["technicalGate"]["passed"] and r["supplierId"] not in excluded_ids] or rows
+    multi = len(_lines(session, event)) > 1
+    exceptions: list[dict] = []
+    if multi:
+        lowest = {}
+        for r in eligible:
+            for l in r["lines"]:
+                lowest[l["line"]] = min(lowest.get(l["line"], l["priceMinor"]), l["priceMinor"])
+        not_lowest = any(l["priceMinor"] > lowest.get(l["line"], 0) for a in scenario.allocations for l in a["lines"])
+    else:
+        lowest_price = min(r["priceMinor"] for r in eligible)
+        not_lowest = any(a["priceMinor"] > lowest_price for a in scenario.allocations)
+    if not_lowest:
+        exceptions.append({"code": "NOT_LOWEST", "detail": "the award includes a bid that is not the lowest eligible price"})
+    if pol.get("limitedCompetitionNeedsRationale", True) and len(rows) < int(event.min_bidders or 1):
+        exceptions.append({"code": "LIMITED_COMPETITION", "detail": f"{len(rows)} valid bidder(s); the minimum is {event.min_bidders}"})
+    incomplete = sorted(code for code in awarded if by_supplier[code]["tcoIncomplete"])
+    if incomplete:
+        exceptions.append({"code": "INCOMPLETE_TCO", "detail": "total cost has a missing input for " + ", ".join(
+            f"{c} ({', '.join(by_supplier[c]['tcoMissing'])})" for c in incomplete)})
+    unverified = sorted(code for code in awarded if not by_supplier[code]["capacityVerified"])
+    if unverified:
+        exceptions.append({"code": "UNVERIFIED_CAPACITY", "detail": "capacity is not verified (no bid capacity and no twin figure) for " + ", ".join(unverified)})
+    if scenario.annual_savings_minor is not None and scenario.annual_savings_minor < 0:
+        exceptions.append({"code": "NEGATIVE_SAVINGS", "detail": f"the award costs {abs(int(scenario.annual_savings_minor)) / 100:,.2f} a year more than the baseline"})
+    check = str(pol.get("leadTimeCheck", "WARN")).upper()
+    if check != "OFF" and event.need_date is not None:
+        late = sorted(code for code in awarded if clock.today() + timedelta(days=int(by_supplier[code]["leadTimeDays"])) > event.need_date)
+        if late and check == "ENFORCE":
+            raise Problem(422, "LEAD_TIME_AFTER_NEED", f"{', '.join(late)} cannot deliver by the need date {event.need_date}: their lead time starts today",
+                          rule_ref="SRC-NEEDDATE")
+        if late:
+            exceptions.append({"code": "LEAD_TIME_AFTER_NEED", "detail": f"{', '.join(late)} cannot deliver by the need date {event.need_date} (lead time from today)"})
+    optional = {"INCOMPLETE_TCO": "incompleteTcoNeedsRationale", "UNVERIFIED_CAPACITY": "unverifiedCapacityNeedsRationale"}   # recorded always, a rationale when the policy says so
+    needs = [e for e in exceptions if e["code"] in EXCEPTION_NEEDS_RATIONALE and (e["code"] not in optional or pol.get(optional[e["code"]], False))]
+    minimum = int(pol.get("minRationaleChars", 15))
+    if needs and not (rationale or "").strip():
+        first = needs[0]
+        raise rule_violation("Award to a non-lowest bid needs a written rationale" if first["code"] == "NOT_LOWEST" else
+                             f"This award needs a written rationale: {first['detail']}", "SRC-RATIONALE", exceptions=needs)
+    if needs and len((rationale or "").strip()) < minimum:
+        raise rule_violation(f"The written rationale is at least {minimum} characters (say why: {needs[0]['detail']})", "SRC-RATIONALE", exceptions=needs)
+    return {"exceptions": exceptions, "notLowest": not_lowest, "needsApproval": bool(needs), "bidders": len(rows)}
+
+
 def propose_award(session: Session, event: SourcingEvent, scenario_id: uuid.UUID, rationale: Optional[str],
                   conflict_declaration: str) -> AwardDecision:
     p = principal(session)
     auction_svc._require_manager(session, event)
+    abac.guard(session, "SOURCING_MANAGE", event)
+    if event.status != "UNDER_EVALUATION":
+        raise illegal_transition("Sourcing event", event.number, event.status, "propose_award")
     scenario = session.get(AwardScenario, scenario_id)
     if scenario is None or scenario.event_id != event.id or not scenario.feasible:
         raise rule_violation("Choose a feasible scenario of this event", "SRC-AWARD")
@@ -1317,46 +2126,47 @@ def propose_award(session: Session, event: SourcingEvent, scenario_id: uuid.UUID
         _require_eligible(session, event, session.get(Supplier, uuid.UUID(allocation["supplierId"])), "be awarded")
     if (scenario.explanation or {}).get("supersededAt"):
         raise rule_violation("This scenario was superseded when the scenarios were rebuilt; choose a current one", "SRC-AWARD")
-    if not conflict_declaration:
+    if not (conflict_declaration or "").strip():
         raise rule_violation("A conflict-of-interest declaration is required", "SRC-05")
+    declared = session.execute(select(EvaluatorDeclaration).where(EvaluatorDeclaration.event_id == event.id,
+                                                                  EvaluatorDeclaration.user_id == p.user_id)).scalar_one_or_none()
+    if declared is not None and declared.has_conflict:
+        raise Problem(403, "EVALUATOR_CONFLICT", f"You declared a conflict of interest in {event.number}: you cannot propose its award", rule_ref="SRC-05")
+    pol = policy_of(session, event)
     rows = evaluation_matrix(session, event)
     event_lines = _lines(session, event)
     multi = len(event_lines) > 1
-    if multi:
-        lowest = {}
-        for r in rows:
-            for l in r["lines"]:
-                lowest[l["line"]] = min(lowest.get(l["line"], l["priceMinor"]), l["priceMinor"])
-        not_lowest = any(l["priceMinor"] > lowest.get(l["line"], 0) for a in scenario.allocations for l in a["lines"])
-        annual_value = int(scenario.weighted_price_minor)
-    else:
-        lowest_price = min(r["priceMinor"] for r in rows)
-        not_lowest = any(a["priceMinor"] > lowest_price for a in scenario.allocations)
-        annual_value = int(Decimal(scenario.weighted_price_minor) * event_lines[0].annual_qty)
-    if not_lowest and not rationale:
-        raise rule_violation("Award to a non-lowest bid needs a written rationale", "SRC-RATIONALE")
+    gate = award_gate(session, event, scenario, rows, pol, rationale)
+    not_lowest = gate["notLowest"]
+    annual_value = int(scenario.weighted_price_minor) if multi else int(Decimal(scenario.weighted_price_minor) * event_lines[0].annual_qty)
     abac.guard(session, "AWARD_APPROVE", event, value_minor=annual_value)
     sod.guard_and_record(session, "SOURCING_AWARD", {"event_id": event.id})
     rule = rules.resolve(session, "AWARD-APPROVAL", category=event.category)
-    chain = ind_healthcare.award_chain(rule, rules.band_chain(rule, annual_value), event.category)  # + clinical sign-off (healthcare rule)
+    band_chain = rules.band_chain(rule, annual_value)
+    chain = ind_healthcare.award_chain(rule, band_chain, event.category)  # + clinical sign-off (healthcare rule)
     decision = AwardDecision(tenant_id=event.tenant_id, event_id=event.id, scenario_id=scenario.id, status="PENDING",
                              rationale=rationale, conflict_declarations=[{"user": p.email, "declaration": conflict_declaration}],
-                             proposed_by=p.user_id, annual_value_minor=annual_value, rule_set_version=rule.ref, created_by=p.user_id)
+                             proposed_by=p.user_id, annual_value_minor=annual_value, rule_set_version=rule.ref, created_by=p.user_id,
+                             authority={"valueMinor": annual_value, "chain": chain, "bandChain": band_chain, "approvalAboveMinor": rule.body["approvalAboveMinor"],
+                                        "rule": rule.ref}, exceptions=gate["exceptions"])
     session.add(decision)
     session.flush()
     SM.apply(session, event, "propose_award", reason=rationale, rule_set_version=rule.ref)
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
     workflow.step(session, instance, "F3-06", outcome=f"{scenario.kind} proposed")
-    needs_approval = annual_value >= rule.body["approvalAboveMinor"] or not_lowest or ind_healthcare.signoff_required(rule, event.category)
+    needs_approval = (annual_value >= rule.body["approvalAboveMinor"] or not_lowest or gate["needsApproval"]
+                      or ind_healthcare.signoff_required(rule, event.category))
     workflow.step(session, instance, "F3-07", outcome=("yes" if needs_approval else "no") +
-                  f": annual value {fmt_inr(annual_value)}" + (", not lowest bid" if not_lowest else ""))
+                  f": annual value {fmt_inr(annual_value)}" + (", not lowest bid" if not_lowest else "")
+                  + (f", {len(gate['exceptions'])} exception(s): " + ", ".join(e["code"] for e in gate["exceptions"]) if gate["exceptions"] else ""))
     if not needs_approval:
         _award(session, event, decision, instance)
         return decision
     workflow.start_approval(session, instance, "AWARD_APPROVAL", object_type="SOURCING_EVENT", object_id=event.id,
                             object_ref=event.number, chain=chain, step_id="F3-08", initiator_id=p.user_id,
                             scopes={"CATEGORY_MANAGER": {"category": event.category}}, rule_set_version=rule.ref,
-                            evidence={"scenario": scenario.kind, "allocations": scenario.allocations, "rationale": rationale})
+                            evidence={"scenario": scenario.kind, "allocations": scenario.allocations, "rationale": rationale,
+                                      "exceptions": gate["exceptions"]})
     return decision
 
 
@@ -1388,7 +2198,14 @@ def _award_decided(session: Session, task: Task, outcome: str) -> None:
 def _award_payload(session: Session, event: SourcingEvent, scenario: AwardScenario, decision: AwardDecision, event_lines: list[EventLine]) -> dict:
     first = event_lines[0]
     requisition = session.get(Requisition, first.requisition_id) if first.requisition_id else None
+    from app.pic.services import should_cost as should_cost_svc
+
+    multi = len(event_lines) > 1
     payload = {"category": event.category, "baselineMinor": event.baseline_price_minor, "weightedPriceMinor": scenario.weighted_price_minor,
+               "baselineMethod": event.baseline_method, "scenario": scenario.kind, "exceptions": [e["code"] for e in (decision.exceptions or [])],
+               "savings": should_cost_svc.savings_summary(event.baseline_price_minor, scenario.weighted_price_minor,
+                                                          Decimal(1) if multi else event_lines[0].annual_qty, event.baseline_method),
+               "needDate": event.need_date.isoformat() if event.need_date else None,
                "allocations": scenario.allocations, "ownerId": str(event.owner_id), "rationale": decision.rationale,
                "companyCode": requisition.company_code if requisition else None,  # the award contract's company code
                "inviteeSupplierIds": [str(i.supplier_id) for i in session.execute(select(Invitee).where(Invitee.event_id == event.id)).scalars()]}
@@ -1407,6 +2224,31 @@ def _award_payload(session: Session, event: SourcingEvent, scenario: AwardScenar
     return payload
 
 
+def _regret_letters(session: Session, event: SourcingEvent, decision: AwardDecision, awarded: set) -> list[dict]:
+    """One regret letter per bidder that was not awarded (not selected, disqualified, bid not evaluable). The letter says what happened to the
+    supplier's own bid and its own rank, never a competitor's name, price or score. Withdrawn bids get none (the supplier withdrew)."""
+    rows = {r["supplier"]: r for r in evaluation_matrix(session, event)}
+    letters = []
+    for bid in session.execute(select(Bid).where(Bid.event_id == event.id, Bid.status.in_(("UNSEALED", "DISQUALIFIED", "INVALID")))
+                               .order_by(Bid.created_at)).scalars():
+        supplier = session.get(Supplier, bid.supplier_id)
+        if supplier.code in awarded:
+            continue
+        if bid.status == "UNSEALED":
+            row = rows.get(supplier.code)
+            reason, detail = "NOT_SELECTED", f"your bid ranked {row['rank']} of {len(rows)} on total cost of ownership and score" if row else "your bid was not selected"
+        elif bid.status == "DISQUALIFIED":
+            reason, detail = "DISQUALIFIED", bid.disqualified_reason or "your bid was disqualified"
+        else:
+            reason, detail = "NOT_EVALUABLE", "your bid had no line that could be evaluated against the event"
+        letters.append({"supplier": supplier.code, "supplierId": str(supplier.id), "reason": reason})
+        outbox.emit(session, "sourcing.award.regret", "SOURCING_EVENT", event.id, event.number,
+                    {"supplier": supplier.code, "supplierId": str(supplier.id), "reason": reason, "detail": detail, "round": bid.round,
+                     "rank": rows[supplier.code]["rank"] if supplier.code in rows else None, "bidders": len(rows)})
+    decision.regret_sent_at = clock.now()
+    return letters
+
+
 def _award(session: Session, event: SourcingEvent, decision: AwardDecision, instance) -> None:
     decision.status = "APPROVED"
     scenario = session.get(AwardScenario, decision.scenario_id)
@@ -1417,12 +2259,15 @@ def _award(session: Session, event: SourcingEvent, decision: AwardDecision, inst
         for requisition_id, pr_line_no in line_sources(session, line):
             for pr_line in session.execute(select(PrLine).where(PrLine.requisition_id == requisition_id, PrLine.line_no == pr_line_no)).scalars():
                 pr_line.sourcing_status = "SOURCED"
-    outbox.emit(session, "sourcing.event.awarded", "SOURCING_EVENT", event.id, event.number,
-                _award_payload(session, event, scenario, decision, event_lines))
     awarded = {a["supplier"] for a in scenario.allocations}
+    regrets = _regret_letters(session, event, decision, awarded)
+    payload = _award_payload(session, event, scenario, decision, event_lines)
+    payload["regretSupplierIds"] = [r["supplierId"] for r in regrets]  # told by their own letter: the generic "awarded elsewhere" notice skips them
+    outbox.emit(session, "sourcing.event.awarded", "SOURCING_EVENT", event.id, event.number, payload)
     audit.record(session, "SOURCING_EVENT", event.id, "AWARD_NOTIFIED", object_ref=event.number,
                  after={"awarded": [a["supplier"] for a in scenario.allocations],
-                        "notifiedUnsuccessful": [r["supplier"] for r in evaluation_matrix(session, event) if r["supplier"] not in awarded]})
+                        "notifiedUnsuccessful": [r["supplier"] for r in evaluation_matrix(session, event) if r["supplier"] not in awarded],
+                        "regretLetters": [r["supplier"] for r in regrets]})
     workflow.step(session, instance, "F3-09", outcome="suppliers notified; handed off to contract (CLM)")
     if len(event_lines) == 1:
         summary = " / ".join(f"{a['supplier']} {Decimal(a['share'])*100:.0f}% @ {a['priceMinor']/100:.2f}" for a in scenario.allocations) \

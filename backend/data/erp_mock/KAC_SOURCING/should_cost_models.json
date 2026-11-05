@@ -1,0 +1,1002 @@
+[
+  {
+    "category": "FERROUS-CASTINGS",
+    "code": "SC-CASTING",
+    "commodity": "castings",
+    "defaultInputs": {
+      "margin": "14",
+      "minute_rate": "14",
+      "minutes": "6",
+      "packaging": "5",
+      "qty": "12",
+      "rate": "48",
+      "tooling": "6"
+    },
+    "indexCode": "CAST_IRON_SCRAP",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "CAST_IRON_SCRAP"
+          },
+          "label": "Melt metal",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Fettling and machining",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Melt metal quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Melt metal rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Fettling and machining time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Fettling and machining rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Grey / SG iron casting"
+  },
+  {
+    "category": "FORGINGS",
+    "code": "SC-FORGING",
+    "commodity": "forgings",
+    "defaultInputs": {
+      "margin": "13",
+      "minute_rate": "22",
+      "minutes": "4",
+      "packaging": "4",
+      "qty": "7.5",
+      "rate": "74",
+      "tooling": "9"
+    },
+    "indexCode": "MS_BILLET",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "MS_BILLET"
+          },
+          "label": "Steel billet",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Forging and heat treatment",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Steel billet quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Steel billet rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Forging and heat treatment time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Forging and heat treatment rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Hot-forged steel component"
+  },
+  {
+    "category": "FASTENERS",
+    "code": "SC-FASTENER",
+    "commodity": "fasteners",
+    "defaultInputs": {
+      "margin": "15",
+      "minute_rate": "9",
+      "minutes": "0.12",
+      "packaging": "0.1",
+      "qty": "0.09",
+      "rate": "88",
+      "tooling": "0.2"
+    },
+    "indexCode": "WIRE_ROD",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "WIRE_ROD"
+          },
+          "label": "Wire rod",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Heading, threading and plating",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Wire rod quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Wire rod rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Heading, threading and plating time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Heading, threading and plating rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Cold-headed fastener"
+  },
+  {
+    "category": "MRO",
+    "code": "SC-BEARING",
+    "commodity": "bearings",
+    "defaultInputs": {
+      "margin": "17",
+      "minute_rate": "18",
+      "minutes": "3",
+      "packaging": "3",
+      "qty": "0.35",
+      "rate": "140",
+      "tooling": "2"
+    },
+    "indexCode": "BEARING_STEEL",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "BEARING_STEEL"
+          },
+          "label": "Bearing steel",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Grinding and assembly",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Bearing steel quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Bearing steel rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Grinding and assembly time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Grinding and assembly rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Rolling bearing"
+  },
+  {
+    "category": "ELECTRONICS",
+    "code": "SC-WIRING",
+    "commodity": "wiring",
+    "defaultInputs": {
+      "margin": "16",
+      "minute_rate": "8",
+      "minutes": "8",
+      "packaging": "6",
+      "qty": "1.4",
+      "rate": "760",
+      "tooling": "3"
+    },
+    "indexCode": "COPPER_LME",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "COPPER_LME"
+          },
+          "label": "Copper conductor",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Cutting, crimping and assembly",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Copper conductor quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Copper conductor rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Cutting, crimping and assembly time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Cutting, crimping and assembly rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Wiring harness / cable"
+  },
+  {
+    "category": "ELECTRONICS",
+    "code": "SC-PLASTIC",
+    "commodity": "plastics",
+    "defaultInputs": {
+      "margin": "15",
+      "minute_rate": "16",
+      "minutes": "1.1",
+      "packaging": "1.5",
+      "qty": "0.18",
+      "rate": "118",
+      "tooling": "4"
+    },
+    "indexCode": "PP_GRADE",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "PP_GRADE"
+          },
+          "label": "Polymer granules",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Moulding cycle",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Polymer granules quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Polymer granules rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Moulding cycle time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Moulding cycle rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Injection-moulded plastic part"
+  },
+  {
+    "category": "RUBBER-SEALS",
+    "code": "SC-RUBBER",
+    "commodity": "rubber",
+    "defaultInputs": {
+      "margin": "16",
+      "minute_rate": "12",
+      "minutes": "0.9",
+      "packaging": "0.8",
+      "qty": "0.12",
+      "rate": "190",
+      "tooling": "2.5"
+    },
+    "indexCode": "NATURAL_RUBBER",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "NATURAL_RUBBER"
+          },
+          "label": "Compound",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Moulding and deflashing",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Compound quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Compound rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Moulding and deflashing time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Moulding and deflashing rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Moulded rubber seal"
+  },
+  {
+    "category": "PACKAGING",
+    "code": "SC-PACKAGING",
+    "commodity": "packaging",
+    "defaultInputs": {
+      "margin": "12",
+      "minute_rate": "6",
+      "minutes": "1.5",
+      "packaging": "0",
+      "qty": "1.8",
+      "rate": "62",
+      "tooling": "1"
+    },
+    "indexCode": "KRAFT_PAPER",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "KRAFT_PAPER"
+          },
+          "label": "Kraft board",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Conversion and printing",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Kraft board quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Kraft board rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Conversion and printing time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Conversion and printing rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Corrugated / returnable packaging"
+  },
+  {
+    "category": "MRO-LUBRICANTS",
+    "code": "SC-MRO",
+    "commodity": "MRO",
+    "defaultInputs": {
+      "margin": "14",
+      "minute_rate": "7",
+      "minutes": "2",
+      "packaging": "4",
+      "qty": "4",
+      "rate": "95",
+      "tooling": "0.5"
+    },
+    "indexCode": "MRO_PPI",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "MRO_PPI"
+          },
+          "label": "Base material",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Blending and filling",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Base material quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Base material rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Blending and filling time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Blending and filling rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "MRO consumable / spare"
+  },
+  {
+    "category": "PROF-SERVICES",
+    "code": "SC-SERVICES",
+    "commodity": "services",
+    "defaultInputs": {
+      "margin": "12",
+      "minute_rate": "14",
+      "minutes": "200",
+      "packaging": "150",
+      "qty": "96",
+      "rate": "310",
+      "tooling": "400"
+    },
+    "indexCode": "WAGE_INDEX",
+    "spec": {
+      "components": [
+        {
+          "code": "MATERIAL",
+          "index": {
+            "baseDate": "2025-04-01",
+            "code": "WAGE_INDEX"
+          },
+          "label": "Skilled labour (hours)",
+          "qty": "qty",
+          "rate": "rate",
+          "type": "QTY_RATE",
+          "yieldLossPct": "5"
+        },
+        {
+          "code": "CONVERSION",
+          "label": "Supervision and tools",
+          "minutes": "minutes",
+          "rate": "minute_rate",
+          "type": "TIME_RATE"
+        },
+        {
+          "amount": "tooling",
+          "code": "TOOLING",
+          "label": "Tooling and fixtures",
+          "type": "FIXED"
+        },
+        {
+          "amount": "packaging",
+          "code": "PACKAGING",
+          "label": "Packaging",
+          "type": "FIXED"
+        },
+        {
+          "code": "LOGISTICS",
+          "label": "Inbound logistics",
+          "of": [
+            "MATERIAL",
+            "CONVERSION"
+          ],
+          "pct": "2",
+          "type": "PCT_OF"
+        }
+      ],
+      "inputs": [
+        {
+          "code": "qty",
+          "label": "Skilled labour (hours) quantity per unit",
+          "unit": "kg"
+        },
+        {
+          "code": "rate",
+          "label": "Skilled labour (hours) rate",
+          "unit": "INR/kg"
+        },
+        {
+          "code": "minutes",
+          "label": "Supervision and tools time",
+          "unit": "min"
+        },
+        {
+          "code": "minute_rate",
+          "label": "Supervision and tools rate",
+          "unit": "INR/min"
+        },
+        {
+          "code": "tooling",
+          "label": "Tooling and fixtures per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "packaging",
+          "label": "Packaging per unit",
+          "unit": "INR"
+        },
+        {
+          "code": "margin",
+          "label": "Overhead and profit",
+          "unit": "%"
+        }
+      ],
+      "marginPct": "margin",
+      "unit": "EA"
+    },
+    "title": "Contracted service (per activity unit)"
+  }
+]
