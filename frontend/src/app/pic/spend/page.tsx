@@ -14,6 +14,7 @@ import { LinesTab } from './_components/lines';
 import { MaverickTab } from './_components/maverick';
 import { OverviewTab } from './_components/overview';
 import { ParetoTab } from './_components/pareto';
+import { PipelineTab } from './_components/pipeline';
 import { QualityTab } from './_components/quality';
 import { StrategyTab } from './_components/strategy';
 import { SuppliersTab } from './_components/suppliers';
@@ -43,6 +44,7 @@ const GROUPS: Group[] = [
   ] },
   { id: 'planning', label: 'Planning', tabs: [
     { id: 'strategy', label: 'Category strategy (SPD-07)', render: () => <StrategyTab /> },
+    { id: 'pipeline', label: 'Savings pipeline (SPD-08)', render: () => <PipelineTab /> },
     { id: 'forecast', label: 'Forecast (SPD-09)', render: () => <ForecastTab /> },
   ] },
 ];

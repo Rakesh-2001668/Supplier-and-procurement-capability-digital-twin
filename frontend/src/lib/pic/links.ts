@@ -11,6 +11,7 @@ const ROUTES: Record<string, string> = {
   MATERIAL_REQUEST: '/pic/materials/',
   MRP_RUN: '/pic/mrp/',
   SUPPLIER: '/pic/suppliers/',
+  SAVINGS_INITIATIVE: '/pic/spend?tab=pipeline&ref=',
 };
 
 export function docHref(type: string, ref: string, id?: string): string | null {

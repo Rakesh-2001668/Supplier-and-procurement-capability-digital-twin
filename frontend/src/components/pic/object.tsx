@@ -57,23 +57,411 @@ export function ProcessPath({ type, objectRef }: { type: string; objectRef: stri
 }
 
 // ---------------------------------------------------------------- lineage (P10)
+type LineageNode = { type: string; id: string; ref: string };
+type LineageEdge = { from: string; to: string; type: string; fromLine: number | null; toLine: number | null };
+type LineageResponse = { nodes: LineageNode[]; edges: LineageEdge[] };
+
+const LIFECYCLE_STAGES: { id: string; label: string; icon: string; types: string[] }[] = [
+  { id: 'DEMAND', label: 'Requisition & Demand', icon: '📝', types: ['MRP_RUN', 'MATERIAL_REQUEST', 'PLANNED_ORDER', 'REQUISITION'] },
+  { id: 'SOURCING', label: 'Sourcing & Contract', icon: '🤝', types: ['SOURCING_EVENT', 'BID', 'CONTRACT'] },
+  { id: 'ORDER', label: 'Purchase Order', icon: '📦', types: ['PURCHASE_ORDER'] },
+  { id: 'RECEIPT', label: 'Fulfillment & Receipt', icon: '🚚', types: ['ASN', 'GOODS_RECEIPT', 'SERVICE_ENTRY', 'RETURN_DELIVERY'] },
+  { id: 'SETTLEMENT', label: 'Invoice & Settlement', icon: '💳', types: ['INVOICE', 'CREDIT_NOTE', 'PAYMENT', 'ERP_DOCUMENT'] },
+  { id: 'VALUE', label: 'Savings & Governance', icon: '📈', types: ['SAVINGS_INITIATIVE'] },
+];
+
 export function LineageView({ type, objectRef }: { type: string; objectRef: string }) {
-  const { data, isLoading, error } = useApi<{ nodes: { type: string; id: string; ref: string }[]; edges: { from: string; to: string; type: string; fromLine: number | null; toLine: number | null }[] }>(
-    `/lineage/${type}/${encodeURIComponent(objectRef)}`);
+  const { data, isLoading, error } = useApi<LineageResponse>(`/lineage/${type}/${encodeURIComponent(objectRef)}`);
+  const [viewMode, setViewMode] = useState<'graph' | 'list'>('graph');
+  const [selectedRef, setSelectedRef] = useState<string>(objectRef);
+  const [search, setSearch] = useState<string>('');
+
   if (isLoading) return <Loading />;
   if (error) return <ProblemBox error={error} />;
-  if (!data?.edges.length) return <Empty title="No linked documents yet" />;
+  if (!data?.nodes.length && !data?.edges.length) return <Empty title="No linked documents yet" />;
+
   const nodes = Object.fromEntries(data.nodes.map((n) => [n.ref, n]));
+  const edges = data.edges;
+
+  // Active focused node
+  const activeNode = nodes[selectedRef] ?? nodes[objectRef] ?? data.nodes[0];
+
+  // Upstream (edges where to === activeNode.ref)
+  const incomingEdges = edges.filter((e) => e.to === activeNode?.ref);
+  // Downstream (edges where from === activeNode.ref)
+  const outgoingEdges = edges.filter((e) => e.from === activeNode?.ref);
+
+  // Group nodes into stages
+  const stageGroups: { stage: (typeof LIFECYCLE_STAGES)[number]; nodes: LineageNode[] }[] = [];
+  const assignedRefs = new Set<string>();
+
+  for (const st of LIFECYCLE_STAGES) {
+    const stageNodes = data.nodes.filter((n) => st.types.includes(n.type));
+    if (stageNodes.length > 0) {
+      stageNodes.forEach((n) => assignedRefs.add(n.ref));
+      stageGroups.push({ stage: st, nodes: stageNodes });
+    }
+  }
+
+  // Any remaining nodes not matching the predefined stages
+  const otherNodes = data.nodes.filter((n) => !assignedRefs.has(n.ref));
+  if (otherNodes.length > 0) {
+    stageGroups.push({
+      stage: { id: 'OTHER', label: 'Other Documents', icon: '📑', types: [] },
+      nodes: otherNodes,
+    });
+  }
+
+  // Filtered edges for audit search
+  const filteredEdges = edges.filter((e) => {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return e.from.toLowerCase().includes(q) || e.to.toLowerCase().includes(q) || e.type.toLowerCase().includes(q);
+  });
+
   return (
-    <ul className="space-y-2">
-      {data.edges.map((e, i) => (
-        <li key={i} className="flex flex-wrap items-center gap-2 text-sm">
-          <DocLink node={nodes[e.from]} line={e.fromLine} />
-          <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-600">{e.type.replace(/_/g, ' ')} →</span>
-          <DocLink node={nodes[e.to]} line={e.toLine} />
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-4">
+      {/* View Switcher & Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Document Flow:</span>
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => setViewMode('graph')}
+              className={`rounded-md px-2.5 py-1 transition ${
+                viewMode === 'graph' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Visual Flow Diagram
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              className={`rounded-md px-2.5 py-1 transition ${
+                viewMode === 'list' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Audit Trace List ({edges.length})
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-slate-500">
+          <span>{data.nodes.length} documents linked</span>
+          <span>·</span>
+          <span>{edges.length} relationships</span>
+        </div>
+      </div>
+
+      {viewMode === 'graph' ? (
+        <div className="space-y-4">
+          {/* Active Node Detail Strip */}
+          {activeNode && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-white to-blue-50/30 p-3.5 shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#1A56DB] text-xs font-bold text-white shadow-sm">
+                  {activeNode.ref === objectRef ? '★' : '•'}
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-bold text-slate-900">{activeNode.ref}</span>
+                    <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
+                      {TYPE_LABEL[activeNode.type] ?? label(activeNode.type)}
+                    </span>
+                    {activeNode.ref === objectRef && (
+                      <span className="flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                        CURRENT DOCUMENT
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-3 text-xs text-slate-600">
+                    <span>{incomingEdges.length} upstream predecessor(s)</span>
+                    <span>·</span>
+                    <span>{outgoingEdges.length} downstream dependent(s)</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {activeNode.ref !== objectRef && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedRef(objectRef)}
+                    className="text-xs font-semibold text-[#1A56DB] hover:underline"
+                  >
+                    Reset to current ({objectRef})
+                  </button>
+                )}
+                {docHref(activeNode.type, activeNode.ref, activeNode.id) && (
+                  <Link
+                    href={docHref(activeNode.type, activeNode.ref, activeNode.id)!}
+                    className="rounded-lg bg-[#1A56DB] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1747b8] shadow-sm transition"
+                  >
+                    Open Document →
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sequential Stage Columns (Swimlanes DAG) */}
+          <div className="overflow-x-auto pb-2">
+            <div className="flex min-w-[760px] items-start gap-3">
+              {stageGroups.map((group, gIdx) => {
+                const isFirst = gIdx === 0;
+                return (
+                  <div key={group.stage.id} className="flex flex-1 items-start gap-2">
+                    {!isFirst && (
+                      <div className="mt-8 flex flex-col items-center justify-center text-slate-300" aria-hidden>
+                        <span className="text-lg font-bold">→</span>
+                      </div>
+                    )}
+                    <div className="flex-1 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+                      <div className="mb-3 flex items-center justify-between border-b border-slate-200/70 pb-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm">{group.stage.icon}</span>
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                            {group.stage.label}
+                          </h4>
+                        </div>
+                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700">
+                          {group.nodes.length}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2.5">
+                        {group.nodes.map((n) => {
+                          const isCurrent = n.ref === objectRef;
+                          const isSelected = n.ref === activeNode?.ref;
+                          const href = docHref(n.type, n.ref, n.id);
+                          const nodeIncoming = edges.filter((e) => e.to === n.ref);
+                          const nodeOutgoing = edges.filter((e) => e.from === n.ref);
+
+                          return (
+                            <div
+                              key={n.ref}
+                              onClick={() => setSelectedRef(n.ref)}
+                              role="button"
+                              tabIndex={0}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setSelectedRef(n.ref);
+                                }
+                              }}
+                              className={`group relative cursor-pointer rounded-lg border p-2.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${
+                                isSelected
+                                  ? 'border-[#1A56DB] bg-white ring-2 ring-[#1A56DB] shadow-md'
+                                  : isCurrent
+                                  ? 'border-blue-300 bg-blue-50/50 hover:border-[#1A56DB]'
+                                  : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                                  {TYPE_LABEL[n.type] ?? label(n.type)}
+                                </span>
+                                {isCurrent && (
+                                  <span className="flex h-2 w-2 rounded-full bg-blue-600 ring-4 ring-blue-100" title="Current Document" />
+                                )}
+                              </div>
+
+                              <p className="mt-1 font-mono text-xs font-bold text-slate-900 group-hover:text-[#1A56DB]">
+                                {n.ref}
+                              </p>
+
+                              {/* Connected Badges */}
+                              <div className="mt-2 flex flex-wrap items-center gap-1">
+                                {nodeIncoming.map((edge, eIdx) => (
+                                  <span
+                                    key={eIdx}
+                                    className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[9px] text-slate-600"
+                                    title={`From ${edge.from}`}
+                                  >
+                                    ← {edge.type.replace(/_/g, ' ').toLowerCase()}
+                                  </span>
+                                ))}
+                                {nodeOutgoing.map((edge, eIdx) => (
+                                  <span
+                                    key={eIdx}
+                                    className="rounded bg-blue-50 px-1 py-0.5 font-mono text-[9px] text-blue-700 font-semibold"
+                                    title={`To ${edge.to}`}
+                                  >
+                                    {edge.type.replace(/_/g, ' ').toLowerCase()} →
+                                  </span>
+                                ))}
+                              </div>
+
+                              {href && (
+                                <div className="mt-2 flex justify-end border-t border-slate-100 pt-1.5 text-[10px]">
+                                  <Link
+                                    href={href}
+                                    prefetch={false}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="font-medium text-[#1A56DB] hover:underline"
+                                  >
+                                    View details ↗
+                                  </Link>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Trace Relationship Cards */}
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-3">
+              Direct Relationships for {activeNode?.ref}
+            </h4>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {/* Predecessors */}
+              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+                  Upstream Predecessors ({incomingEdges.length})
+                </span>
+                {!incomingEdges.length ? (
+                  <p className="mt-2 text-xs text-slate-400 italic">No upstream documents (origin in lineage)</p>
+                ) : (
+                  <ul className="mt-2 space-y-1.5">
+                    {incomingEdges.map((e, idx) => {
+                      const fromNode = nodes[e.from];
+                      return (
+                        <li key={idx} className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-slate-400">←</span>
+                            <DocLink node={fromNode} line={e.fromLine} />
+                          </div>
+                          <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                            {e.type.replace(/_/g, ' ').toLowerCase()}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              {/* Successors */}
+              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
+                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+                  Downstream Successors ({outgoingEdges.length})
+                </span>
+                {!outgoingEdges.length ? (
+                  <p className="mt-2 text-xs text-slate-400 italic">No downstream documents yet</p>
+                ) : (
+                  <ul className="mt-2 space-y-1.5">
+                    {outgoingEdges.map((e, idx) => {
+                      const toNode = nodes[e.to];
+                      return (
+                        <li key={idx} className="flex items-center justify-between text-xs">
+                          <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] text-blue-800 font-semibold">
+                            {e.type.replace(/_/g, ' ').toLowerCase()}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-slate-400">→</span>
+                            <DocLink node={toNode} line={e.toLine} />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Audit Trace List View */
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <input
+              type="text"
+              placeholder="Filter trace by reference or relation…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="max-w-sm rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:border-[#1A56DB] focus:outline-none focus:ring-1 focus:ring-[#1A56DB]"
+            />
+            <span className="text-xs text-slate-500">
+              Showing {filteredEdges.length} of {edges.length} link(s)
+            </span>
+          </div>
+
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-full divide-y divide-slate-200 text-xs">
+              <thead className="bg-slate-50 text-left uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="px-3 py-2.5">Origin Document</th>
+                  <th className="px-3 py-2.5 text-center">Relationship</th>
+                  <th className="px-3 py-2.5">Target Document</th>
+                  <th className="px-3 py-2.5 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredEdges.map((e, idx) => {
+                  const fromNode = nodes[e.from];
+                  const toNode = nodes[e.to];
+                  const involvesCurrent = e.from === objectRef || e.to === objectRef;
+
+                  return (
+                    <tr
+                      key={idx}
+                      className={`hover:bg-slate-50/60 ${involvesCurrent ? 'bg-blue-50/30' : ''}`}
+                    >
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <DocLink node={fromNode} line={e.fromLine} />
+                          {e.from === objectRef && (
+                            <span className="rounded bg-blue-100 px-1 py-0.5 text-[9px] font-bold text-blue-800">
+                              CURRENT
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <span className="inline-block rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-700">
+                          {e.type.replace(/_/g, ' ').toLowerCase()} →
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <DocLink node={toNode} line={e.toLine} />
+                          {e.to === objectRef && (
+                            <span className="rounded bg-blue-100 px-1 py-0.5 text-[9px] font-bold text-blue-800">
+                              CURRENT
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedRef(e.from === objectRef ? e.to : e.from);
+                            setViewMode('graph');
+                          }}
+                          className="font-medium text-[#1A56DB] hover:underline"
+                        >
+                          View in diagram
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
