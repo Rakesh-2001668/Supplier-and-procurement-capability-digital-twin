@@ -67,7 +67,6 @@ EXTRA_OBLIGATIONS = {
 }
 CURRENCIES = [
     ("INR", "Indian rupee"), ("USD", "US dollar"), ("EUR", "Euro"), ("GBP", "Pound sterling"), ("JPY", "Japanese yen"),
-    ("SGD", "Singapore dollar"), ("AED", "UAE dirham"), ("CNY", "Chinese yuan renminbi"), ("CHF", "Swiss franc"),
 ]
 
 RULE_SETS = {

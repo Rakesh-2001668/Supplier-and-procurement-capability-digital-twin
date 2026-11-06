@@ -12,3 +12,5 @@ section,category,nature_of_payment,payee_type,rate_pct,single_threshold_minor,an
 194H,COMMISSION,Commission and Brokerage,ALL,2.0,0,1500000,false,"Section 194H: commission or brokerage for procurement or agency services (annual > ₹15,000)"
 206AB,HIGHER_RATE,Special Provision for Deduction of Tax at Source for Non-Filers,NON_FILER,20.0,0,0,false,"Section 206AB: higher rate of TDS for specified persons who have not filed income tax returns (higher of 2x rate or 5%, up to 20%)"
 206C_1H,TCS_GOODS,Tax Collected at Source on Sale of Goods (Turnover Exceeding 10 Crore),BUYER,0.1,0,50000000,true,"Section 206C(1H): TCS collected by seller on receipt of sale consideration exceeding ₹50,000,000 in FY (0.1% on excess)"
+194A,INTEREST,Interest Other than Interest on Securities,ALL,10.0,0,4000000,false,"Section 194A: deduction of tax on interest payments other than securities (annual > ₹40,000 / ₹50,000)"
+194R,PERQUISITE,Benefit or Perquisite in Respect of Business or Profession,ALL,10.0,0,2000000,false,"Section 194R: deduction of tax on benefit or perquisite arising from business or exercise of profession (annual > ₹20,000)"

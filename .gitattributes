@@ -1,0 +1,3 @@
+# Enforce CRLF for SWIFT MT940 bank statement files
+*.sta text eol=crlf
+

@@ -213,7 +213,13 @@ def verify_files(out_dir: Path = OUT_DIR) -> list[str]:
         file = out_dir / name
         if not file.exists():
             problems.append(f"{name} is listed in the manifest but missing")
-        elif hashlib.sha256(file.read_bytes()).hexdigest() != meta["sha256"]:
+        else:
+            raw = file.read_bytes()
+            if hashlib.sha256(raw).hexdigest() == meta["sha256"]:
+                continue
+            # SWIFT MT940 (.sta) requires CRLF; if git checkout converted to LF on Linux, test CRLF bytes
+            if name.endswith(".sta") and hashlib.sha256(raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")).hexdigest() == meta["sha256"]:
+                continue
             problems.append(f"{name} differs from its manifest hash")
     return problems
 
