@@ -33,6 +33,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, Optional
 
 from app.pic.tools import perf_mrp
 
@@ -386,7 +387,6 @@ def measure_cube(tenant_id: uuid.UUID) -> list[dict]:
 # ---------------------------------------------------------------- offline file export
 def export_to_files(export_dir: Path, scale: float, years: int, plants: list[str], seed: int = 7, run_date: Optional[date] = None) -> dict:
     """Streams enterprise-scale volume dataset to offline CSV files and PostgreSQL/ClickHouse COPY scripts."""
-    from pathlib import Path
     export_dir = Path(export_dir)
     export_dir.mkdir(parents=True, exist_ok=True)
     vol = volumes(scale, years)
