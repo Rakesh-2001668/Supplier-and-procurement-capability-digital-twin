@@ -3,12 +3,13 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useState } from 'react';
-import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
+import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { inr, label, qty as fmtQty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { AccountAssignment, NEEDS_ACCOUNT, PolicyProblem, PURCHASE_TYPES, Reference, Requisition, SubmitPanel, useReference } from '../_components';
 import { PunchOut } from './punchout';
+import { CategorySowModal, CategoryTemplateCode } from './category-sow-forms';
 
 type ContractHit = {
   channel: 'CONTRACT'; contract: string; line: number; contractLineId: string; material: string | null; uom: string; description: string;
@@ -29,7 +30,7 @@ type DraftLine = {
   key: string; item_type: ItemType; source: string; material?: string; catalogue_item_id?: string; contract_line_id?: string;
   description: string; material_group: string; category: string; purchase_type: string; qty: string; uom: string;
   price: string; priceFixed: boolean; aat: string; aac: string; need_date: string; quotes: QuoteRef[]; reusable: boolean; mpn: string;
-  template?: string;
+  template?: string; attributes?: Record<string, unknown>;
 };
 
 /** BP M04 request template (GET /request-templates): defaults, required fields, quote policy and approver hints for services, IT, marketing, facilities. */
@@ -67,6 +68,7 @@ function NewRequisition() {
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [created, setCreated] = useState<Requisition | null>(null);
+  const [activeCategoryModal, setActiveCategoryModal] = useState<CategoryTemplateCode | null>(null);
 
   const reference = ref.data;
   const effectivePlant = plant || reference?.plants[0]?.code || '';
@@ -92,6 +94,7 @@ function NewRequisition() {
       reusable: l.item_type === 'FREE_TEXT' ? l.reusable : false,
       template: l.template || undefined,
       mpn: l.item_type === 'FREE_TEXT' && l.reusable && l.mpn.trim() ? l.mpn.trim() : undefined,
+      attributes: l.attributes || undefined,
     })),
   }), { success: (r) => `${r.number} created as draft`, onSuccess: (r) => setCreated(r) });
 
@@ -197,9 +200,37 @@ function NewRequisition() {
       <PunchOut plant={effectivePlant} purposeCode={purposeCode.trim()} purposeText={purposeText.trim()} draftLines={lines.length}
         cookie={params.get('punchout')} error={params.get('punchoutError')} onConverted={(r) => setCreated(r)} />
 
-      <TemplatePicker onPick={(t) => addLine({ item_type: 'FREE_TEXT', source: `Template · ${t.name}`, template: t.code, description: '',
-        purchase_type: t.line.purchase_type ?? 'SERVICE', material_group: t.line.material_group ?? '', category: t.line.category ?? '', uom: t.line.uom ?? 'AU',
-        aat: t.defaultAccountType ?? '', aac: t.defaultAccountCode ?? '' })} />
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-white to-blue-50/40 p-4 shadow-sm">
+        <div>
+          <span className="text-xs font-bold uppercase tracking-wider text-[#1A56DB]">
+            Category SOW Generators (M04 Guided Buying)
+          </span>
+          <p className="mt-0.5 text-xs text-slate-600">
+            Configure structured Statement of Work (SOW) deliverables, milestone payments, agency campaign scopes, and IT licensing.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button type="button" variant="secondary" className="!py-1 !text-xs font-medium" onClick={() => setActiveCategoryModal('SVC-PROFESSIONAL')}>
+            📝 Professional Services SOW
+          </Button>
+          <Button type="button" variant="secondary" className="!py-1 !text-xs font-medium" onClick={() => setActiveCategoryModal('MKT-CAMPAIGN-EVENT')}>
+            📢 Marketing & Agency SOW
+          </Button>
+          <Button type="button" variant="secondary" className="!py-1 !text-xs font-medium" onClick={() => setActiveCategoryModal('IT-HARDWARE-SOFTWARE')}>
+            💻 IT Hardware & SaaS
+          </Button>
+          <Button type="button" variant="secondary" className="!py-1 !text-xs font-medium" onClick={() => setActiveCategoryModal('FAC-MAINTENANCE')}>
+            🔧 Facilities & AMC SOW
+          </Button>
+        </div>
+      </div>
+
+      <TemplatePicker
+        onConfigure={(code) => setActiveCategoryModal(code)}
+        onPick={(t) => addLine({ item_type: 'FREE_TEXT', source: `Template · ${t.name}`, template: t.code, description: '',
+          purchase_type: t.line.purchase_type ?? 'SERVICE', material_group: t.line.material_group ?? '', category: t.line.category ?? '', uom: t.line.uom ?? 'AU',
+          aat: t.defaultAccountType ?? '', aac: t.defaultAccountCode ?? '' })}
+      />
 
       <GuidedSearch plant={effectivePlant} reference={reference}
         onMaterial={(n, source) => addMaterial(n, source)} onContract={addContract} onCatalogue={addCatalogue}
@@ -230,34 +261,103 @@ function NewRequisition() {
         <Link href="/pic/requisitions" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50">Cancel</Link>
         <Button type="submit" variant="primary" busy={create.isPending}>Create requisition</Button>
       </div>
+
+      {activeCategoryModal && (
+        <CategorySowModal
+          code={activeCategoryModal}
+          onClose={() => setActiveCategoryModal(null)}
+          onApply={(lineData) => {
+            addLine({
+              item_type: lineData.item_type,
+              purchase_type: lineData.purchase_type,
+              source: lineData.source,
+              template: lineData.template,
+              description: lineData.description,
+              material_group: lineData.material_group,
+              category: lineData.category,
+              qty: lineData.qty,
+              uom: lineData.uom,
+              price: lineData.price,
+              priceFixed: lineData.priceFixed,
+              aat: lineData.aat,
+              aac: lineData.aac,
+              need_date: lineData.need_date,
+              attributes: lineData.attributes,
+            });
+          }}
+        />
+      )}
     </form>
   );
 }
 
 // ---------------------------------------------------------------- BP M04 request templates (services, IT, marketing, facilities)
-function TemplatePicker({ onPick }: { onPick: (t: RequestTemplate) => void }) {
+function TemplatePicker({
+  onPick,
+  onConfigure,
+}: {
+  onPick: (t: RequestTemplate) => void;
+  onConfigure: (code: CategoryTemplateCode) => void;
+}) {
   const templates = useApi<RequestTemplate[]>('/request-templates');
   if (templates.isLoading) return null;
   if (templates.error) return <ProblemBox error={templates.error} />;
   if (!templates.data?.length) return null;
+
+  const knownCodes: CategoryTemplateCode[] = ['SVC-PROFESSIONAL', 'IT-HARDWARE-SOFTWARE', 'MKT-CAMPAIGN-EVENT', 'FAC-MAINTENANCE'];
+
   return (
-    <Card title="Request templates">
-      <p className="mb-3 text-sm text-slate-600">For services, IT, marketing and facilities: the template pre-fills the line, lists what must be filled in, and applies its quote policy and approver hints.</p>
+    <Card title="Request templates & Guided SOWs">
+      <p className="mb-3 text-sm text-slate-600">
+        For services, IT, marketing and facilities: configure the full Statement of Work (SOW) or apply default line settings with pre-assigned quote policies and cost objects.
+      </p>
       <div className="grid gap-3 md:grid-cols-2">
-        {templates.data.map((t) => (
-          <div key={t.code} className="rounded-lg border border-slate-200 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-sm font-medium">{t.name}</p>
-              <Button type="button" onClick={() => onPick(t)}>Use template</Button>
+        {templates.data.map((t) => {
+          const isCategorySow = knownCodes.includes(t.code as CategoryTemplateCode);
+          return (
+            <div key={t.code} className="rounded-lg border border-slate-200 p-3.5 bg-white hover:border-blue-300 transition shadow-xs flex flex-col justify-between">
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-slate-900">{t.name}</p>
+                  <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-600">
+                    {t.code}
+                  </span>
+                </div>
+                {t.guidance && <p className="mt-1 text-xs text-slate-600">{t.guidance}</p>}
+                <p className="mt-1.5 text-xs text-slate-500">
+                  Required: {t.requiredFields.map((f) => label(f)).join(', ') || '–'}
+                  {t.quotePolicy.minQuotes ? ` · ${t.quotePolicy.minQuotes} quote(s) from ${inr(t.quotePolicy.minQuotesFromMinor ?? 0)}` : ''}
+                </p>
+                {t.approverHints.length > 0 && (
+                  <ul className="mt-1.5 list-disc pl-4 text-[11px] text-slate-500 space-y-0.5">
+                    {t.approverHints.map((h) => <li key={h}>{h}</li>)}
+                  </ul>
+                )}
+              </div>
+
+              <div className="mt-3 flex items-center justify-end gap-2 border-t border-slate-100 pt-2.5">
+                {isCategorySow && (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="!py-1 !text-xs font-semibold"
+                    onClick={() => onConfigure(t.code as CategoryTemplateCode)}
+                  >
+                    Configure SOW Form →
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant={isCategorySow ? 'secondary' : 'primary'}
+                  className="!py-1 !text-xs"
+                  onClick={() => onPick(t)}
+                >
+                  Quick Default
+                </Button>
+              </div>
             </div>
-            {t.guidance && <p className="mt-1 text-xs text-slate-600">{t.guidance}</p>}
-            <p className="mt-1 text-xs text-slate-500">
-              Required: {t.requiredFields.map((f) => label(f)).join(', ') || '–'}
-              {t.quotePolicy.minQuotes ? ` · ${t.quotePolicy.minQuotes} quote(s) from ${inr(t.quotePolicy.minQuotesFromMinor ?? 0)}` : ''}
-            </p>
-            {t.approverHints.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-slate-500">{t.approverHints.map((h) => <li key={h}>{h}</li>)}</ul>}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Card>
   );
@@ -383,7 +483,12 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-xs text-slate-500">{lineNo}</span>
           <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{label(line.item_type)}</span>
-          <span className="text-sm font-medium">{free ? (line.description || 'Free-text item') : `${line.material ? `${line.material} · ` : ''}${line.description}`}</span>
+          {line.attributes?.sowType ? (
+            <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-800">
+              SOW CONFIGURED
+            </span>
+          ) : null}
+          <span className="text-sm font-medium">{free ? (line.description?.split('\n')[0] || 'Free-text item') : `${line.material ? `${line.material} · ` : ''}${line.description}`}</span>
           <span className="text-xs text-slate-500">from {line.source}</span>
         </div>
         <div className="flex items-center gap-3">
@@ -394,7 +499,15 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
       <div className="grid gap-3 md:grid-cols-4">
         {free && (
           <>
-            <div className="md:col-span-2"><Field label="Description *">{(id) => <Input id={id} value={line.description} onChange={(e) => onChange({ description: e.target.value })} />}</Field></div>
+            <div className="md:col-span-2">
+              <Field label="Description *">{(id) => (
+                line.description && line.description.includes('\n') ? (
+                  <Textarea id={id} rows={4} className="font-mono text-xs" value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
+                ) : (
+                  <Input id={id} value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
+                )
+              )}</Field>
+            </div>
             <Field label="Material group *">{(id) => <Input id={id} list="pic-material-groups" value={line.material_group} onChange={(e) => onChange({ material_group: e.target.value })} />}</Field>
             <Field label="Category">{(id) => <Input id={id} list="pic-categories" value={line.category} onChange={(e) => onChange({ category: e.target.value })} placeholder="Defaults to material group" />}</Field>
           </>
