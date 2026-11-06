@@ -92,10 +92,16 @@ def _unmet(tenant_code: str, requires: dict) -> list[str]:
 def _record(tenant_code: str, pack: ModuleType, summary: dict) -> None:
     tenant_id = _tenants()[tenant_code]
     with tenant_tx(tenant_id) as s:
-        s.add(DatasetLoad(tenant_id=tenant_id, key=pack.KEY, version=pack.VERSION, loaded_at=clock.now(), summary=summary or {}))
+        existing = s.execute(select(DatasetLoad).where(DatasetLoad.key == pack.KEY)).scalar_one_or_none()
+        if existing is not None:
+            existing.version = pack.VERSION
+            existing.loaded_at = clock.now()
+            existing.summary = summary or {}
+        else:
+            s.add(DatasetLoad(tenant_id=tenant_id, key=pack.KEY, version=pack.VERSION, loaded_at=clock.now(), summary=summary or {}))
 
 
-def apply_pack(name: str, password: str, tenants: Optional[Iterable[str]] = None) -> list[dict]:
+def apply_pack(name: str, password: str, tenants: Optional[Iterable[str]] = None, force: bool = False) -> list[dict]:
     """Apply one pack to each of its tenants that does not have it yet. Returns one result per tenant."""
     pack = load(name)
     existing = _tenants()
@@ -105,7 +111,7 @@ def apply_pack(name: str, password: str, tenants: Optional[Iterable[str]] = None
         if code not in existing and not getattr(pack, "CREATES_TENANT", False):
             results.append({"pack": name, "tenant": code, "status": "SKIPPED", "reason": "tenant does not exist"})
             continue
-        if loaded(code, pack.KEY):
+        if loaded(code, pack.KEY) and not force:
             results.append({"pack": name, "tenant": code, "status": "ALREADY_LOADED"})
             continue
         unmet = _unmet(code, getattr(pack, "REQUIRES", {}))
@@ -124,10 +130,10 @@ def apply_pack(name: str, password: str, tenants: Optional[Iterable[str]] = None
     return results
 
 
-def apply_all(password: str, only: Optional[Iterable[str]] = None) -> list[dict]:
+def apply_all(password: str, only: Optional[Iterable[str]] = None, force: bool = False) -> list[dict]:
     """Apply every ready pack (or the named ones) in PACKS order."""
     names = list(only) if only else [n for n in PACKS if getattr(load(n), "READY", False)]
     results = []
     for name in names:
-        results.extend(apply_pack(name, password))
+        results.extend(apply_pack(name, password, force=force))
     return results

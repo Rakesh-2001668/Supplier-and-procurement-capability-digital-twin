@@ -101,3 +101,4 @@ def test_d8_volume_scaling_and_offline_export(tmp_path):
     for fname in ("materials.csv", "suppliers.csv", "purchase_orders.csv", "po_lines.csv",
                   "invoices.csv", "invoice_lines.csv", "spend_lines.csv", "load_volume.sql", "DATASET_METADATA.json"):
         assert (out_dir / fname).exists(), f"{fname} must be generated in export directory"
+

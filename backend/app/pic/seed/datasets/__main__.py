@@ -34,6 +34,7 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", action="append", choices=datasets.PACKS)
+    parser.add_argument("--force", action="store_true", help="re-apply pack even if already recorded in dataset_load")
     parser.add_argument("--list", action="store_true")
     args = parser.parse_args()
     if args.list:
@@ -43,7 +44,7 @@ def main() -> None:
             where = ", ".join(f"{c}{'✓' if datasets.loaded(c, pack.KEY) else ''}" for c in codes)
             print(f"{name:24} {'ready' if pack.READY else 'stub ':5}  {pack.KEY:28} {where}  – {pack.TITLE}")
         return
-    for result in datasets.apply_all(_password(), args.only):
+    for result in datasets.apply_all(_password(), args.only, force=args.force):
         line = f"{result['pack']:24} {result['tenant']:5} {result['status']}"
         if result.get("summary", {}).get("counts"):
             line += "  " + json.dumps(result["summary"]["counts"], ensure_ascii=False)
