@@ -1,14 +1,14 @@
 "use client";
 import React, { useState } from "react";
 import Link from 'next/link';
-import { 
-  Building, MapPin, FileText, CheckCircle, Info, CheckSquare, 
-  Settings, Upload, Download, Search, ChevronRight, X, Shield, 
-  Cpu, Zap, Activity, ArrowRight, ArrowLeft, RefreshCw, Award, 
+import {
+  Building, MapPin, FileText, CheckCircle, Info, CheckSquare,
+  Settings, Upload, Download, Search, ChevronRight, X, Shield,
+  Cpu, Zap, Activity, ArrowRight, ArrowLeft, RefreshCw, Award,
   Lock, Sparkles, AlertCircle, Layers, Check, Globe
 } from 'lucide-react';
 
-export default function SupplierOnboarding({ onClose }: { onClose?: () => void }) {
+function SupplierOnboarding({ onClose }: { onClose?: () => void }) {
   const [step, setStep] = useState(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -80,7 +80,7 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
   const handleProcessToggle = (proc: string) => {
     setFormData(prev => ({
       ...prev,
-      processes: prev.processes.includes(proc) 
+      processes: prev.processes.includes(proc)
         ? prev.processes.filter(p => p !== proc)
         : [...prev.processes, proc]
     }));
@@ -260,21 +260,21 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
               <X size={18} />
             </button>
           )}
-          <button 
+          <button
             onClick={() => showToast("Draft specifications cached into local enclave state.")}
             className="px-4 py-2 bg-[#0D1527] border border-slate-700 hover:border-cyan-500/50 text-slate-300 font-bold text-xs rounded-lg transition-all"
           >
             Save Enclave Draft
           </button>
           {step > 1 && (
-            <button 
+            <button
               onClick={() => setStep(step - 1)}
               className="px-4 py-2 bg-[#0D1527] border border-slate-700 hover:border-slate-500 text-slate-300 font-bold text-xs rounded-lg transition-all flex items-center gap-1.5"
             >
               <ArrowLeft size={14} /> Back
             </button>
           )}
-          <button 
+          <button
             disabled={isSubmitting}
             onClick={step === 5 ? handleSubmit : () => setStep(step + 1)}
             className="px-6 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-[#070B14] font-black text-xs rounded-lg shadow-lg shadow-cyan-500/20 transition-all flex items-center gap-2 disabled:opacity-50"
@@ -303,23 +303,21 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
           const isCurrent = step === s.id;
           return (
             <React.Fragment key={s.id}>
-              <div 
+              <div
                 onClick={() => setStep(s.id)}
                 className="flex items-center gap-3 cursor-pointer group"
               >
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-mono font-bold transition-all ${
-                  isDone 
-                    ? 'bg-emerald-500/20 border border-emerald-500 text-emerald-400 shadow-sm shadow-emerald-900/50' 
-                    : isCurrent 
-                      ? 'bg-cyan-500 text-[#070B14] font-black shadow-lg shadow-cyan-500/30' 
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-mono font-bold transition-all ${isDone
+                    ? 'bg-emerald-500/20 border border-emerald-500 text-emerald-400 shadow-sm shadow-emerald-900/50'
+                    : isCurrent
+                      ? 'bg-cyan-500 text-[#070B14] font-black shadow-lg shadow-cyan-500/30'
                       : 'bg-slate-800/60 border border-slate-700 text-slate-400 group-hover:border-slate-500'
-                }`}>
+                  }`}>
                   {isDone ? <Check size={16} /> : s.id}
                 </div>
                 <div className="flex flex-col">
-                  <span className={`text-xs font-bold transition-colors ${
-                    isCurrent ? 'text-cyan-300' : isDone ? 'text-emerald-400' : 'text-slate-400 group-hover:text-slate-300'
-                  }`}>
+                  <span className={`text-xs font-bold transition-colors ${isCurrent ? 'text-cyan-300' : isDone ? 'text-emerald-400' : 'text-slate-400 group-hover:text-slate-300'
+                    }`}>
                     {s.name}
                   </span>
                   <span className="text-[10px] font-mono text-slate-500">{s.sub}</span>
@@ -328,9 +326,8 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
 
               {i < steps.length - 1 && (
                 <div className="flex-1 h-[2px] mx-4 bg-slate-800 relative overflow-hidden">
-                  <div className={`absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500 to-cyan-500 transition-all duration-300 ${
-                    step > i + 1 ? 'w-full' : step === i + 1 ? 'w-1/2' : 'w-0'
-                  }`}></div>
+                  <div className={`absolute inset-y-0 left-0 bg-gradient-to-r from-emerald-500 to-cyan-500 transition-all duration-300 ${step > i + 1 ? 'w-full' : step === i + 1 ? 'w-1/2' : 'w-0'
+                    }`}></div>
                 </div>
               )}
             </React.Fragment>
@@ -340,7 +337,7 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
 
       {/* Main Form Body */}
       <div className="flex-1 overflow-y-auto p-8 max-w-[1400px] w-full mx-auto">
-        
+
         {/* STEP 1: Corporate Entity & Defense Registry */}
         {step === 1 && (
           <div className="space-y-6 animate-fade-in-up">
@@ -512,7 +509,7 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
                     </p>
                   </div>
                 </div>
-                <button 
+                <button
                   onClick={() => showToast("Facility clone configured: Huntsville Plant Bay 02 added.")}
                   className="px-3.5 py-1.5 bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 font-bold text-xs rounded-lg hover:bg-cyan-500/20 transition-all flex items-center gap-1.5"
                 >
@@ -670,11 +667,10 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
                       <div
                         key={proc}
                         onClick={() => handleProcessToggle(proc)}
-                        className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${
-                          isSelected
+                        className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${isSelected
                             ? 'bg-cyan-500/10 border-cyan-500 text-white font-bold shadow-sm shadow-cyan-950'
                             : 'bg-[#0A101D] border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
+                          }`}
                       >
                         <span className="text-xs">{proc}</span>
                         {isSelected && <Check size={14} className="text-cyan-400 shrink-0" />}
@@ -705,11 +701,10 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
                       <div
                         key={mat}
                         onClick={() => handleMaterialToggle(mat)}
-                        className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${
-                          isSelected
+                        className={`p-3 rounded-lg border cursor-pointer transition-all flex items-center justify-between ${isSelected
                             ? 'bg-blue-500/10 border-blue-500 text-white font-bold shadow-sm'
                             : 'bg-[#0A101D] border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
+                          }`}
                       >
                         <span className="text-xs">{mat}</span>
                         {isSelected && <Check size={14} className="text-blue-400 shrink-0" />}
@@ -777,7 +772,7 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
 
               <div className="space-y-3">
                 {formData.certifications.map(cert => (
-                  <div 
+                  <div
                     key={cert.code}
                     className="p-4 bg-[#0A101D] border border-slate-800 rounded-lg flex items-center justify-between hover:border-slate-700 transition-all"
                   >
@@ -802,7 +797,7 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono font-bold">
                         <CheckCircle size={12} /> Cryptographically Verified
                       </span>
-                      <button 
+                      <button
                         onClick={() => showToast(`Proof certificate for ${cert.code} loaded from defense ledger.`)}
                         className="text-xs text-cyan-400 hover:text-cyan-300 font-bold underline"
                       >
@@ -913,4 +908,8 @@ export default function SupplierOnboarding({ onClose }: { onClose?: () => void }
       </div>
     </div>
   );
+}
+
+export default function SupplierOnboardingPage() {
+  return <SupplierOnboarding />;
 }

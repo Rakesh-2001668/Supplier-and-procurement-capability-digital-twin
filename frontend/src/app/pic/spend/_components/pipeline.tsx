@@ -206,7 +206,7 @@ export function PipelineTab() {
     queryParts.set('min_forecast_minor', String(rupeesToMinor(minForecastRupees)));
   }
 
-  const { data, isLoading, error, mutate } = useApi<PipelineData>(`/savings/pipeline?${queryParts.toString()}`);
+  const { data, isLoading, error, refetch } = useApi<PipelineData>(`/savings/pipeline?${queryParts.toString()}`);
 
   const totals = data?.totals ?? {
     initiatives: 0,
@@ -304,13 +304,12 @@ export function PipelineTab() {
                     key={st}
                     type="button"
                     onClick={() => setStageFilter(active ? '' : st)}
-                    className={`flex flex-col justify-between rounded-lg border p-3.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${
-                      active
+                    className={`flex flex-col justify-between rounded-lg border p-3.5 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${active
                         ? 'border-[#1A56DB] bg-blue-50/60 ring-1 ring-[#1A56DB]'
                         : isLost
-                        ? 'border-slate-200 bg-slate-50/50 hover:border-slate-300'
-                        : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'
-                    }`}
+                          ? 'border-slate-200 bg-slate-50/50 hover:border-slate-300'
+                          : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/30'
+                      }`}
                   >
                     <div>
                       <div className="flex items-center justify-between gap-1">
@@ -590,7 +589,7 @@ export function PipelineTab() {
         <WaterfallDialog
           refNumber={openedRef}
           onClose={() => setOpenedRef(null)}
-          onChanged={() => mutate()}
+          onChanged={() => refetch()}
           isFinance={isFinance}
         />
       )}
@@ -602,7 +601,7 @@ export function PipelineTab() {
           onClose={() => setNegotiateRef(null)}
           onSuccess={() => {
             setNegotiateRef(null);
-            mutate();
+            refetch();
           }}
         />
       )}
@@ -614,7 +613,7 @@ export function PipelineTab() {
           onClose={() => setLoseRef(null)}
           onSuccess={() => {
             setLoseRef(null);
-            mutate();
+            refetch();
           }}
         />
       )}
@@ -626,7 +625,7 @@ export function PipelineTab() {
           onClose={() => setShowCreateDialog(false)}
           onSuccess={(newRef) => {
             setShowCreateDialog(false);
-            mutate();
+            refetch();
             setOpenedRef(newRef);
           }}
         />
@@ -636,7 +635,7 @@ export function PipelineTab() {
       {showPnlModal && (
         <SavingsPnlModal
           onClose={() => setShowPnlModal(false)}
-          onValidated={() => mutate()}
+          onValidated={() => refetch()}
         />
       )}
     </div>
@@ -655,7 +654,7 @@ function WaterfallDialog({
   onChanged: () => void;
   isFinance: boolean;
 }) {
-  const { data, isLoading, error, mutate } = useApi<WaterfallData>(`/savings/${encodeURIComponent(refNumber)}/waterfall`);
+  const { data, isLoading, error, refetch } = useApi<WaterfallData>(`/savings/${encodeURIComponent(refNumber)}/waterfall`);
   const validateCmd = useCommand(
     () => api.post(`/savings/${encodeURIComponent(refNumber)}/validate`, {}),
     {
@@ -665,7 +664,7 @@ function WaterfallDialog({
 
   async function handleValidate() {
     await validateCmd.mutateAsync();
-    mutate();
+    refetch();
     onChanged();
   }
 
@@ -1125,18 +1124,18 @@ function SavingsPnlModal({
   onValidated: () => void;
 }) {
   const [fiscalYear, setFiscalYear] = useState('2026-27');
-  const { data, isLoading, error, mutate } = useApi<PnlData>(`/savings/pnl?fiscal_year=${fiscalYear}`);
+  const { data, isLoading, error, refetch } = useApi<PnlData>(`/savings/pnl?fiscal_year=${fiscalYear}`);
 
   const validateCmd = useCommand(
     (ref: string) => api.post(`/savings/${encodeURIComponent(ref)}/validate`, {}),
     {
-      success: (r, ref) => `${ref} validated by finance for budget impact.`,
+      success: 'Initiative validated by finance for budget impact.',
     }
   );
 
   async function handleValidate(ref: string) {
     await validateCmd.mutateAsync(ref);
-    mutate();
+    refetch();
     onValidated();
   }
 

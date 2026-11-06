@@ -23,7 +23,7 @@ type Search = {
 };
 type MaterialRow = { number: string; material_group: string | null; category: string | null };
 
-type ItemType = 'MATERIAL' | 'CATALOGUE' | 'CONTRACT' | 'FREE_TEXT';
+type ItemType = 'MATERIAL' | 'CATALOGUE' | 'CONTRACT' | 'FREE_TEXT' | 'SERVICE';
 /** One supplier quote for the quote policy: supplier, the supplier's quote reference and the quote date. */
 type QuoteRef = { supplier: string; reference: string; date: string };
 type DraftLine = {
@@ -83,14 +83,14 @@ function NewRequisition() {
       material: l.item_type === 'MATERIAL' || l.item_type === 'CONTRACT' ? l.material : undefined,
       catalogue_item_id: l.item_type === 'CATALOGUE' ? l.catalogue_item_id : undefined,
       contract_line_id: l.item_type === 'CONTRACT' ? l.contract_line_id : undefined,
-      description: l.item_type === 'FREE_TEXT' ? l.description.trim() : undefined,
-      material_group: l.item_type === 'FREE_TEXT' ? l.material_group.trim() : undefined,
-      category: l.item_type === 'FREE_TEXT' ? (l.category.trim() || undefined) : undefined,
+      description: (l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') ? l.description.trim() : undefined,
+      material_group: (l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') ? l.material_group.trim() : undefined,
+      category: (l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') ? (l.category.trim() || undefined) : undefined,
       qty: l.qty, uom: l.uom || undefined,
       price_est_minor: l.priceFixed ? undefined : rupeesToMinor(l.price),
       account_assignment_type: l.aat || undefined, account_assignment_code: l.aac || undefined,
       need_date: l.need_date,
-      quotes: l.item_type === 'FREE_TEXT' ? l.quotes.map((q) => ({ supplier: q.supplier.trim(), reference: q.reference.trim(), date: q.date })) : [],
+      quotes: (l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') ? l.quotes.map((q) => ({ supplier: q.supplier.trim(), reference: q.reference.trim(), date: q.date })) : [],
       reusable: l.item_type === 'FREE_TEXT' ? l.reusable : false,
       template: l.template || undefined,
       mpn: l.item_type === 'FREE_TEXT' && l.reusable && l.mpn.trim() ? l.mpn.trim() : undefined,
@@ -136,8 +136,8 @@ function NewRequisition() {
       if (!(Number(l.qty) > 0)) out.push(`${n}: quantity must be greater than zero.`);
       if (!l.need_date) out.push(`${n}: need date is required.`);
       if (!l.priceFixed && !(Number(l.price) > 0)) out.push(`${n}: an estimated unit price is required.`);
-      if (l.item_type === 'FREE_TEXT' && !l.description.trim()) out.push(`${n}: description is required.`);
-      if (l.item_type === 'FREE_TEXT' && !l.material_group.trim()) out.push(`${n}: material group is required (P04).`);
+      if ((l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') && !l.description.trim()) out.push(`${n}: description is required.`);
+      if ((l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') && !l.material_group.trim()) out.push(`${n}: material group is required (P04).`);
       if (l.quotes.some((q) => !q.supplier.trim() || !q.reference.trim() || !q.date)) out.push(`${n}: every quote needs the supplier, its reference and date.`);
       if (l.purchase_type === 'STOCK' && !l.material) out.push(`${n}: stock purchases need a material master.`);
       if (NEEDS_ACCOUNT.includes(l.purchase_type) && (!l.aat || !l.aac)) out.push(`${n}: ${label(l.purchase_type).toLowerCase()} purchases need an account assignment.`);
@@ -472,7 +472,7 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
   lineNo: number; line: DraftLine; reference: Reference;
   onChange: (patch: Partial<DraftLine>) => void; onRemove: () => void;
 }) {
-  const free = line.item_type === 'FREE_TEXT';
+  const free = line.item_type === 'FREE_TEXT' || line.item_type === 'SERVICE';
   const needsAccount = NEEDS_ACCOUNT.includes(line.purchase_type);
   const typeOptions = line.item_type === 'MATERIAL' || line.item_type === 'CONTRACT' ? ['STOCK', ...PURCHASE_TYPES] : PURCHASE_TYPES;
   const value = (Number(line.qty) || 0) * (Number(line.price) || 0);
@@ -541,7 +541,7 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
           </>
         )}
       </div>
-      {line.item_type !== 'FREE_TEXT' && line.qty && <p className="mt-2 text-xs text-slate-500">{fmtQty(line.qty, line.uom)} at {line.price ? inr(rupeesToMinor(line.price)) : '–'}</p>}
+      {!free && line.qty && <p className="mt-2 text-xs text-slate-500">{fmtQty(line.qty, line.uom)} at {line.price ? inr(rupeesToMinor(line.price)) : '–'}</p>}
     </fieldset>
   );
 }

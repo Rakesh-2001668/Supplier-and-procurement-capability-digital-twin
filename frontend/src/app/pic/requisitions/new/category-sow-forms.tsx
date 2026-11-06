@@ -692,12 +692,12 @@ function ItCategoryModal({
             {(id) => (
               <Select
                 id={id}
-                value={termMonths}
+                value={String(termMonths)}
                 onChange={(e) => setTermMonths(Number(e.target.value))}
                 options={[
-                  { value: 12, label: '12 Months (Annual)' },
-                  { value: 24, label: '24 Months (2 Years)' },
-                  { value: 36, label: '36 Months (3 Years)' },
+                  { value: '12', label: '12 Months (Annual)' },
+                  { value: '24', label: '24 Months (2 Years)' },
+                  { value: '36', label: '36 Months (3 Years)' },
                 ]}
               />
             )}
@@ -983,3 +983,4 @@ function FacilitiesSowModal({
     </Dialog>
   );
 }
+
