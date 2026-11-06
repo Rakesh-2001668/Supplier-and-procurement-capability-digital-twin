@@ -479,8 +479,15 @@ def rate_of(rates: dict, code: str) -> Optional[int]:
 
 
 class _Gen:
-    def __init__(self, seed: int):
+    def __init__(self, seed: int, months: int = 24):
         self.rng = random.Random(seed)
+        self.months = months
+        if months == 36:
+            self.history_from = date(2023, 11, 1)
+            self.orders_from = date(2023, 10, 1)
+        else:
+            self.history_from = HISTORY_FROM
+            self.orders_from = ORDERS_FROM
         self.rates = gst_rates()
         self.tables: dict[str, tuple[list[str], list[list]]] = {}
         self.vendors: list[Vendor] = []
@@ -910,7 +917,7 @@ class _Gen:
         return bldat, budat
 
     def transactions_(self):
-        months = _months(ORDERS_FROM, KEY_DATE)
+        months = _months(self.orders_from, KEY_DATE)
         cat_vendors = defaultdict(list)
         for v in self.vendors:
             cat_vendors[v.category].append(v)
@@ -960,7 +967,7 @@ class _Gen:
                             po_lines.append(line)
             # non-PO FI invoices
             for category, cfg in CATS.items():
-                if month < HISTORY_FROM:
+                if month < self.history_from:
                     break
                 if not cfg["fi"]:
                     continue
@@ -1135,8 +1142,8 @@ class _Gen:
 
     def _invoice(self, vendor: Vendor, werks: str, gr: date, lines: list, retro: bool = False):
         bldat, budat = self._invoice_dates(gr)
-        if budat > KEY_DATE or budat < HISTORY_FROM:
-            if budat < HISTORY_FROM:
+        if budat > KEY_DATE or budat < self.history_from:
+            if budat < self.history_from:
                 for line, _, _ in lines:
                     line["pre_window"] = True
             return
@@ -1492,7 +1499,7 @@ class _Gen:
                      "EINA_EINE": (0,), "MARA": (0,), "MAKT": (0,), "BSEG_KR": (2, 1)}
         manifest = {"client": COMPANY, "fictional": True, "tenant": "KAC", "sourceSystem": "SAP_S4", "system": "S4P (mock)",
                     "release": "SAP S/4HANA 2023 (mock extract)", "extractId": EXTRACT_ID, "extractType": "INITIAL", "companyCodes": [BUKRS],
-                    "keyDate": KEY_DATE.isoformat(), "historyFrom": HISTORY_FROM.isoformat(), "historyTo": KEY_DATE.isoformat(),
+                    "keyDate": KEY_DATE.isoformat(), "historyFrom": self.history_from.isoformat(), "historyTo": KEY_DATE.isoformat(),
                     "extractedAt": "2026-11-01T02:00:00+05:30", "generator": f"app.pic.tools.erp_mock seed {SEED}", "encoding": "UTF-8",
                     "delimiter": ",", "dateFormat": "YYYY-MM-DD", "decimal": ".", "currency": "INR", "files": {}}
         amount_cols = {"RSEG": "WRBTR", "RBKP": "RMWWR", "EKPO": "NETWR", "BSIK": "WRBTR", "BSAK": "WRBTR", "BSEG_KR": "WRBTR",
@@ -1521,8 +1528,8 @@ class _Gen:
         return manifest
 
 
-def generate(out_dir: Path = OUT_DIR, seed: int = SEED) -> dict:
-    g = _Gen(seed)
+def generate(out_dir: Path = OUT_DIR, seed: int = SEED, months: int = 24) -> dict:
+    g = _Gen(seed, months=months)
     g.ekbe_gr = []
     g.org()
     g.vendors_()
@@ -1545,8 +1552,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Generate the mock SAP S/4HANA extract of Kaveri Auto Components (tenant KAC)")
     parser.add_argument("--out", default=str(OUT_DIR))
     parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--months", type=int, default=24, choices=[24, 36], help="history depth in months (24 or 36)")
     args = parser.parse_args(argv)
-    manifest = generate(Path(args.out), args.seed)
+    manifest = generate(Path(args.out), args.seed, months=args.months)
     total = sum((Path(args.out) / name).stat().st_size for name in manifest["files"])
     for name, entry in sorted(manifest["files"].items()):
         print(f"{name:28} {entry['rows']:>7} rows")

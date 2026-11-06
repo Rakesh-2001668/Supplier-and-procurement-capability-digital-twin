@@ -1,0 +1,14 @@
+# Statutory Tax Deducted at Source (TDS) and Tax Collected at Source (TCS) schedule under the Indian Income-tax Act, 1961.
+# Source: Income Tax Department of India (incometaxindia.gov.in), Central Board of Direct Taxes (CBDT), Finance Acts in force.
+# As of: 2026-10-28.
+section,category,nature_of_payment,payee_type,rate_pct,single_threshold_minor,annual_threshold_minor,excess_only,notes
+194C,CONTRACTOR,Payment to Contractors and Subcontractors,INDIVIDUAL_HUF,1.0,3000000,10000000,false,"Section 194C: payment for carrying out work; 1% for individual or HUF contractors (single > ₹30,000 or aggregate > ₹1,00,000 in FY)"
+194C,CONTRACTOR,Payment to Contractors and Subcontractors,OTHER_ENTITIES,2.0,3000000,10000000,false,"Section 194C: payment for carrying out work; 2% for company, firm or other business entities (single > ₹30,000 or aggregate > ₹1,00,000)"
+194J,PROFESSIONAL,Fees for Professional Services,ALL,10.0,0,3000000,false,"Section 194J(1)(a): professional services including legal, medical, engineering, accountancy, architectural (annual > ₹30,000)"
+194J,TECHNICAL,Fees for Technical Services and Royalty,ALL,2.0,0,3000000,false,"Section 194J(1)(b): fees for technical services (FTS), call centres, software royalty (annual > ₹30,000)"
+194Q,GOODS,Purchase of Goods by Enterprise with Turnover Exceeding 10 Crore,ALL,0.1,0,50000000,true,"Section 194Q: TDS on value of goods purchased exceeding ₹50,000,000 in FY; deducted at 0.1% on excess over threshold"
+194I,RENT_PM,"Rent for Plant, Machinery and Equipment",ALL,2.0,0,24000000,false,"Section 194I: rent for the use of any machinery or plant or equipment (annual > ₹2,40,000)"
+194I,RENT_LB,"Rent for Land, Building and Furniture",ALL,10.0,0,24000000,false,"Section 194I: rent for the use of any land or building or furniture/fittings (annual > ₹2,40,000)"
+194H,COMMISSION,Commission and Brokerage,ALL,2.0,0,1500000,false,"Section 194H: commission or brokerage for procurement or agency services (annual > ₹15,000)"
+206AB,HIGHER_RATE,Special Provision for Deduction of Tax at Source for Non-Filers,NON_FILER,20.0,0,0,false,"Section 206AB: higher rate of TDS for specified persons who have not filed income tax returns (higher of 2x rate or 5%, up to 20%)"
+206C_1H,TCS_GOODS,Tax Collected at Source on Sale of Goods (Turnover Exceeding 10 Crore),BUYER,0.1,0,50000000,true,"Section 206C(1H): TCS collected by seller on receipt of sale consideration exceeding ₹50,000,000 in FY (0.1% on excess)"

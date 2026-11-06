@@ -45,3 +45,13 @@ def test_small_scale_run(database):
     assert summary["mrp_masters"]["materials"] == vol["materials"] == 10
     cube = {tuple(r["dimensions"]): r for r in summary["spend_cube"]}
     assert cube[("category",)]["lines"] == 10_000 and all(r["pass"] for r in summary["spend_cube"])
+
+
+def test_export_to_files(tmp_path):
+    res = volume_gen.export_to_files(tmp_path / "volume_out", scale=0.0002, years=1, plants=["1100"], seed=42)
+    assert res["status"] == "PASS"
+    assert res["volumes"]["materials"] == 10
+    assert res["files"]["purchase_orders.csv"] == 500
+    assert res["files"]["spend_lines.csv"] == 10000
+    assert (tmp_path / "volume_out" / "load_volume.sql").exists()
+    assert (tmp_path / "volume_out" / "DATASET_METADATA.json").exists()

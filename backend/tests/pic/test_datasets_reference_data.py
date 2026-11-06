@@ -43,11 +43,11 @@ def sc(pack):
 
 
 def test_reference_files_carry_source_and_as_of_date():
-    for name in ("hsn_gst_rates.csv", "holidays_2026_2027.csv", "unspsc_category_map.csv", "fx_reference_rates.csv"):
+    for name in ("hsn_gst_rates.csv", "holidays_2026_2027.csv", "unspsc_category_map.csv", "fx_reference_rates.csv", "tds_schedules.csv"):
         header, rows = pack_module.read_reference(name)
         assert rows, name
         assert any("As of: 2026-10-28" in line for line in header), name
-        assert any(word in " ".join(header) for word in ("CBIC", "G.O.", "UNGM", "FBIL")), name
+        assert any(word in " ".join(header) for word in ("CBIC", "G.O.", "UNGM", "FBIL", "CBDT")), name
     _, hsn = pack_module.read_reference("hsn_gst_rates.csv")
     assert len(hsn) >= 300 and {r["gst_rate"] for r in hsn} <= {"0", "5", "12", "18", "40"}
     assert {r["type"] for r in hsn} == {"HSN", "SAC"}
@@ -176,3 +176,33 @@ def test_idempotent(pack):
     from app.pic.seed import datasets
     again = datasets.apply_pack("reference_data", PASSWORD)
     assert {r["status"] for r in again} == {"ALREADY_LOADED"}
+
+
+def test_tds_schedule_rule_set_loaded(pack, sc):
+    assert pack["counts"].get("tdsSections", 0) >= 10
+    with tenant_tx(sc.tenant_id) as s:
+        rule = s.execute(select(RuleSet).where(RuleSet.key == "TDS-SCHEDULE")).scalar_one()
+        assert rule.version == pack_module.TDS_VERSION and rule.effective_from == date(2025, 4, 1)
+        sections = rule.body["sections"]
+        assert "194C-CONTRACTOR" in sections and sections["194C-CONTRACTOR"]["ratePct"] in (1.0, 2.0)
+        assert "194Q-GOODS" in sections and sections["194Q-GOODS"]["ratePct"] == 0.1
+        assert "194J-PROFESSIONAL" in sections and sections["194J-PROFESSIONAL"]["ratePct"] == 10.0
+
+
+def test_multi_period_fx_reference_rates_coverage(pack, sc):
+    with tenant_tx(sc.tenant_id) as s:
+        historical = s.execute(select(FxRate).where(FxRate.from_ccy == "USD", FxRate.to_ccy == "INR")).scalars().all()
+        assert len(historical) >= 10  # multi-period rates loaded across dates
+        dates = {r.valid_from for r in historical}
+        assert date(2026, 10, 28) in dates
+
+
+def test_feed_simulator_sync(sc):
+    from app.pic.tools import feed_simulator
+    test_date = date(2027, 4, 15)
+    with tenant_tx(sc.tenant_id) as s:
+        res = feed_simulator.run_all_feeds(s, sc.tenant_id, test_date, dry_run=True)
+        assert res["fx"]["feed"] == "FX" and len(res["fx"]["rates"]) > 0
+        assert res["risk"]["feed"] == "RISK"
+        assert res["commodity"]["feed"] == "COMMODITY"
+

@@ -65,7 +65,10 @@ EXTRA_OBLIGATIONS = {
                        {"party": "BUYER", "description": "Quarterly business review", "dueAfterDays": 90}],
     "QUANTITY_CONTRACT": [{"party": "SUPPLIER", "description": "Quarterly capacity confirmation", "dueAfterDays": 90}],
 }
-CURRENCIES = [("INR", "Indian rupee"), ("USD", "US dollar"), ("EUR", "Euro"), ("GBP", "Pound sterling"), ("JPY", "Japanese yen")]
+CURRENCIES = [
+    ("INR", "Indian rupee"), ("USD", "US dollar"), ("EUR", "Euro"), ("GBP", "Pound sterling"), ("JPY", "Japanese yen"),
+    ("SGD", "Singapore dollar"), ("AED", "UAE dirham"), ("CNY", "Chinese yuan renminbi"), ("CHF", "Swiss franc"),
+]
 
 RULE_SETS = {
     **job_defaults.BODIES,  # wave 1 platform: PAYMENT-RUN, MRP-SCHEDULE, PRIVACY-RETENTION, DELEGATION, AI-CONTROL

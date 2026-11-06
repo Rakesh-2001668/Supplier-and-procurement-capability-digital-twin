@@ -46,6 +46,7 @@ READY = True
 DATA_DIR = BACKEND_DIR / "data" / "reference"
 HSN_RULE, HSN_VERSION, HSN_FROM = "HSN-GST", "CBIC-2025.09", date(2025, 9, 22)
 UNSPSC_RULE, UNSPSC_VERSION, UNSPSC_FROM = "TAXONOMY-UNSPSC", "UNGM-2026.10", date(2026, 4, 1)
+TDS_RULE, TDS_VERSION, TDS_FROM = "TDS-SCHEDULE", "CBDT-2025.04", date(2025, 4, 1)
 FX_SOURCE = "FBIL ref rate via RBI, 13:00 IST"
 CALENDAR_SCOPE = "PUBLIC"
 STATE_NAMES = {"IN": "Government of India (DoPT)", "33": "Tamil Nadu", "29": "Karnataka", "27": "Maharashtra", "36": "Telangana",
@@ -90,6 +91,27 @@ def unspsc_body() -> dict:
     return {"source": "UN Global Marketplace UNSPSC browser (www.ungm.org/Public/UNSPSC)", "asOf": "2026-10-28",
             "unspscVersion": "not shown by UNGM (browser as of 2026-10-28)", "licensedCodeSet": False,
             "file": "data/reference/unspsc_category_map.csv", "header": header, "nodes": dict(nodes)}
+
+
+def tds_body() -> dict:
+    header, rows = read_reference("tds_schedules.csv")
+    sections = {}
+    for r in rows:
+        key = f"{r['section']}-{r['category']}" if r.get("category") else r["section"]
+        sections[key] = {
+            "section": r["section"],
+            "category": r.get("category", ""),
+            "natureOfPayment": r.get("nature_of_payment", ""),
+            "payeeType": r.get("payee_type", ""),
+            "ratePct": float(r["rate_pct"]),
+            "singleThresholdMinor": int(r["single_threshold_minor"]),
+            "annualThresholdMinor": int(r["annual_threshold_minor"]),
+            "excessOnly": r.get("excess_only", "").lower() == "true",
+            "notes": r.get("notes", ""),
+        }
+    return {"source": "Income Tax Department of India (CBDT), statutory TDS/TCS schedule (D11)",
+            "asOf": "2026-10-28", "effectiveFrom": TDS_FROM.isoformat(),
+            "sections": sections, "file": "data/reference/tds_schedules.csv", "header": header}
 
 
 def holiday_lists() -> dict[str, dict[int, list[tuple[date, str, str]]]]:
@@ -167,6 +189,16 @@ def _load_unspsc(s, tenant_id, notes: list, counts: dict) -> None:
                  + (f"; no verified UNSPSC mapping for {', '.join(unmapped)}" if unmapped else ""))
 
 
+def _load_tds(s, tenant_id, notes: list, counts: dict) -> None:
+    body = tds_body()
+    created = _rule_version(s, tenant_id, TDS_RULE, TDS_VERSION, TDS_FROM, body,
+                            "Statutory TDS/TCS withholding tax schedule under Indian Income-tax Act, 1961 (D11)",
+                            {"sections": len(body["sections"])})
+    counts["tdsSections"] = len(body["sections"])
+    notes.append(f"TDS-SCHEDULE@{TDS_VERSION}: {len(body['sections'])} statutory TDS/TCS provisions"
+                 + ("" if created else " (already present)"))
+
+
 def _load_fx(s, notes: list, counts: dict) -> None:
     from app.pic.services import admin
     known = set(s.execute(select(Currency.code).where(Currency.active.is_(True))).scalars())
@@ -235,6 +267,7 @@ def apply(tenant_code: str, password: str) -> dict:
     with sc.act(email, datetime.now(timezone.utc)) as s:
         _load_hsn(s, tenant_id, notes, counts)
         _load_unspsc(s, tenant_id, notes, counts)
+        _load_tds(s, tenant_id, notes, counts)
         _load_fx(s, notes, counts)
         _load_holidays(s, notes, counts)
     return {"notes": notes, "counts": counts}

@@ -421,9 +421,15 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
         insert_rows(session, MrpException.__table__, exceptions)
     created, exception_count = len(orders), len(exceptions)
 
-    workflow.step(session, instance, "F1-04", outcome="; ".join(
-        f"{r['material']}: {r['gross']} − ({r['on_hand']} + {r['open_po']} + {r['in_transit']} + {r['firm_receipts']}) + {r['safety_stock']} = {r['net']}"
-        for r in results) or "nothing to plan")
+    if len(results) <= 20:
+        step_outcome = "; ".join(
+            f"{r['material']}: {r['gross']} − ({r['on_hand']} + {r['open_po']} + {r['in_transit']} + {r['firm_receipts']}) + {r['safety_stock']} = {r['net']}"
+            for r in results) or "nothing to plan"
+    else:
+        sample = f"{results[0]['material']}..{results[-1]['material']}" if results else "none"
+        total_net = sum((Decimal(r["net"]) for r in results), Decimal(0))
+        step_outcome = f"{len(results):,} materials planned ({created:,} planned orders, {exception_count:,} exceptions, net: {total_net:,.3f} EA; sample: {sample})"
+    workflow.step(session, instance, "F1-04", outcome=step_outcome)
     mrp_run.results = results
     mrp_run.materials_planned = len(candidates)
     mrp_run.planned_orders_created = created

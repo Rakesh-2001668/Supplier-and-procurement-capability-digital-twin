@@ -25,12 +25,14 @@ import argparse
 import csv
 import io
 import json
+import os
 import random
 import sys
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from app.pic.tools import perf_mrp
 
@@ -57,6 +59,7 @@ def log(message: str) -> None:
 def parse_args(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="python -m app.pic.tools.volume_gen", description=__doc__.split("\n")[0])
     ap.add_argument("--database-url", help="scratch PostgreSQL URL (default DATABASE_URL; never backend/.env; Neon is refused)")
+    ap.add_argument("--export-dir", help="directory to export high-scale volume dataset files (CSV + metadata + SQL COPY script)")
     ap.add_argument("--scale", type=float, default=1.0, help="1.0 = NFR volume (50k materials, 5 M invoices/year, 50 M spend lines)")
     ap.add_argument("--years", type=int, default=1, help="years of invoices at 5 M/year x scale")
     ap.add_argument("--plants", type=int, default=1)
@@ -380,11 +383,187 @@ def measure_cube(tenant_id: uuid.UUID) -> list[dict]:
     return out
 
 
+# ---------------------------------------------------------------- offline file export
+def export_to_files(export_dir: Path, scale: float, years: int, plants: list[str], seed: int = 7, run_date: Optional[date] = None) -> dict:
+    """Streams enterprise-scale volume dataset to offline CSV files and PostgreSQL/ClickHouse COPY scripts."""
+    from pathlib import Path
+    export_dir = Path(export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    vol = volumes(scale, years)
+    run_date = run_date or date.today()
+    rng = random.Random(seed)
+    tenant_id = uuid.uuid5(uuid.NAMESPACE_DNS, "perfmrp.harness.invalid")
+    files_created = {}
+
+    log(f"Exporting scale {scale} to {export_dir}: {vol}")
+
+    # 1. Materials
+    mat_path = export_dir / "materials.csv"
+    with open(mat_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["id", "tenant_id", "number", "description", "type", "material_group", "category",
+                         "base_uom", "mrp_type", "lot_size_policy", "safety_stock", "planned_delivery_days",
+                         "gr_processing_days", "standard_price_minor", "status"])
+        for i in range(1, vol["materials"] + 1):
+            cat, hsn, desc = CATEGORIES[i % len(CATEGORIES)]
+            writer.writerow([
+                str(uuid.uuid5(tenant_id, f"mat-{i}")), str(tenant_id), f"MAT-{i:07d}",
+                f"{desc} #{i}", "STOCK", cat, cat, "EA", "PD", "EXACT",
+                50, 7, 2, rng.randint(500, 50000), "ACTIVE"
+            ])
+    files_created["materials.csv"] = vol["materials"]
+
+    # 2. Suppliers
+    sup_path = export_dir / "suppliers.csv"
+    suppliers = []
+    with open(sup_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["id", "tenant_id", "code", "legal_name", "status", "payment_terms", "currency", "country"])
+        for i in range(1, vol["suppliers"] + 1):
+            s_id = uuid.uuid5(tenant_id, f"sup-{i}")
+            terms = f"N{rng.choice([30, 45, 60])}"
+            code = f"VSUP-{i:06d}"
+            name = f"Enterprise Supplier {i:06d} Pvt Ltd"
+            suppliers.append({"id": s_id, "code": code, "terms": terms})
+            writer.writerow([str(s_id), str(tenant_id), code, name, "QUALIFIED", terms, "INR", "IN"])
+    files_created["suppliers.csv"] = vol["suppliers"]
+
+    # 3. POs & Lines, Invoices & Lines, Spend Lines
+    po_path = export_dir / "purchase_orders.csv"
+    pol_path = export_dir / "po_lines.csv"
+    inv_path = export_dir / "invoices.csv"
+    invl_path = export_dir / "invoice_lines.csv"
+    spd_path = export_dir / "spend_lines.csv"
+
+    n_po = vol["purchase_orders"]
+    total_spend = vol["spend_lines"]
+
+    with open(po_path, "w", newline="", encoding="utf-8") as f_po, \
+         open(pol_path, "w", newline="", encoding="utf-8") as f_pol, \
+         open(inv_path, "w", newline="", encoding="utf-8") as f_inv, \
+         open(invl_path, "w", newline="", encoding="utf-8") as f_invl, \
+         open(spd_path, "w", newline="", encoding="utf-8") as f_spd:
+
+        w_po = csv.writer(f_po)
+        w_pol = csv.writer(f_pol)
+        w_inv = csv.writer(f_inv)
+        w_invl = csv.writer(f_invl)
+        w_spd = csv.writer(f_spd)
+
+        w_po.writerow(["id", "tenant_id", "number", "company_code", "plant", "supplier_id", "status", "currency", "total_minor"])
+        w_pol.writerow(["id", "tenant_id", "po_id", "line_no", "material_id", "description", "qty", "uom", "unit_price_minor", "net_minor"])
+        w_inv.writerow(["id", "tenant_id", "number", "supplier_invoice_no", "supplier_id", "po_id", "invoice_date", "currency", "net_minor", "tax_minor", "gross_minor", "status"])
+        w_invl.writerow(["id", "tenant_id", "invoice_id", "line_no", "po_line_id", "description", "qty", "unit_price_minor", "net_minor", "tax_minor"])
+        w_spd.writerow(["id", "tenant_id", "invoice_ref", "po_ref", "supplier_id", "category", "plant", "company_code", "period", "amount_minor", "currency", "contracted", "source"])
+
+        inv_counter = 0
+        spend_counter = 0
+        po_lines_counter = 0
+
+        for p_idx in range(1, n_po + 1):
+            po_id = uuid.uuid5(tenant_id, f"po-{p_idx}")
+            sup = suppliers[p_idx % len(suppliers)]
+            plant = plants[p_idx % len(plants)]
+            lines_in_po = rng.randint(1, 3)
+            po_total = 0
+
+            po_line_ids = []
+            for l_idx in range(1, lines_in_po + 1):
+                po_lines_counter += 1
+                pol_id = uuid.uuid5(tenant_id, f"pol-{po_lines_counter}")
+                po_line_ids.append(pol_id)
+                mat_idx = (p_idx + l_idx) % vol["materials"] + 1
+                cat, hsn, desc = CATEGORIES[mat_idx % len(CATEGORIES)]
+                qty = rng.randint(10, 500)
+                price = rng.randint(500, 10000)
+                net = qty * price
+                po_total += net
+                w_pol.writerow([str(pol_id), str(tenant_id), str(po_id), l_idx * 10, str(uuid.uuid5(tenant_id, f"mat-{mat_idx}")),
+                                desc, qty, "EA", price, net])
+
+            po_num = f"VPO-{p_idx:09d}"
+            w_po.writerow([str(po_id), str(tenant_id), po_num, COMPANY, plant, str(sup["id"]), "INVOICED", "INR", po_total])
+
+            for half in (1, 2):
+                inv_counter += 1
+                inv_id = uuid.uuid5(tenant_id, f"inv-{inv_counter}")
+                inv_num = f"VINV-{inv_counter:09d}"
+                inv_net = po_total // 2
+                inv_tax = int(Decimal(inv_net) * Decimal("0.18"))
+                inv_gross = inv_net + inv_tax
+                inv_date = run_date - timedelta(days=rng.randint(5, max(6, 365 * years)))
+
+                w_inv.writerow([str(inv_id), str(tenant_id), inv_num, f"SUP-INV-{inv_counter:09d}", str(sup["id"]), str(po_id),
+                                inv_date.isoformat(), "INR", inv_net, inv_tax, inv_gross, "PAID"])
+
+                for l_no, pol_id in enumerate(po_line_ids, 1):
+                    il_id = uuid.uuid5(tenant_id, f"invl-{inv_counter}-{l_no}")
+                    l_net = inv_net // len(po_line_ids)
+                    l_tax = int(Decimal(l_net) * Decimal("0.18"))
+                    w_invl.writerow([str(il_id), str(tenant_id), str(inv_id), l_no * 10, str(pol_id),
+                                     f"Invoice line {l_no}", 1, l_net, l_net, l_tax])
+
+                    spend_counter += 1
+                    cat = CATEGORIES[(p_idx + l_no) % len(CATEGORIES)][0]
+                    w_spd.writerow([str(uuid.uuid5(tenant_id, f"spd-{spend_counter}")), str(tenant_id), inv_num, po_num,
+                                    str(sup["id"]), cat, plant, COMPANY, inv_date.strftime("%Y-%m"), l_net, "INR", "t", "PLATFORM"])
+
+        history_needed = max(0, total_spend - spend_counter)
+        for h_idx in range(1, history_needed + 1):
+            spend_counter += 1
+            sup = suppliers[h_idx % len(suppliers)]
+            cat = CATEGORIES[h_idx % len(CATEGORIES)][0]
+            plant = plants[h_idx % len(plants)]
+            amt = rng.randint(5000, 2500000)
+            h_date = run_date - timedelta(days=rng.randint(30, 365 * 3))
+            w_spd.writerow([str(uuid.uuid5(tenant_id, f"spd-{spend_counter}")), str(tenant_id), f"ERPV-{h_idx:010d}", "",
+                            str(sup["id"]), cat, plant, COMPANY, h_date.strftime("%Y-%m"), amt, "INR", "t", "ERP_HISTORY"])
+
+    files_created["purchase_orders.csv"] = n_po
+    files_created["po_lines.csv"] = po_lines_counter
+    files_created["invoices.csv"] = inv_counter
+    files_created["invoice_lines.csv"] = inv_counter * 2
+    files_created["spend_lines.csv"] = spend_counter
+
+    sql_path = export_dir / "load_volume.sql"
+    sql_path.write_text(f"""-- PostgreSQL COPY script for D8 High-Scale Volume Data (Scale {scale})
+-- Generated at: {datetime.now().isoformat()}
+\\copy pic.material FROM 'materials.csv' WITH (FORMAT csv, HEADER true);
+\\copy pic.supplier FROM 'suppliers.csv' WITH (FORMAT csv, HEADER true);
+\\copy pic.purchase_order FROM 'purchase_orders.csv' WITH (FORMAT csv, HEADER true);
+\\copy pic.po_line FROM 'po_lines.csv' WITH (FORMAT csv, HEADER true);
+\\copy pic.invoice FROM 'invoices.csv' WITH (FORMAT csv, HEADER true);
+\\copy pic.invoice_line FROM 'invoice_lines.csv' WITH (FORMAT csv, HEADER true);
+\\copy pic.spend_line FROM 'spend_lines.csv' WITH (FORMAT csv, HEADER true);
+""", encoding="utf-8")
+
+    meta_path = export_dir / "DATASET_METADATA.json"
+    manifest = {
+        "dataset": "D8_HIGH_SCALE_VOLUME",
+        "status": "PASS",
+        "scale": scale,
+        "years": years,
+        "nfr": NFR,
+        "volumes": vol,
+        "files": files_created,
+        "generatedAt": datetime.now().isoformat(),
+        "runDate": run_date.isoformat(),
+    }
+    meta_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    log(f"Export complete: {len(files_created)} files in {export_dir}")
+    return manifest
+
+
 # ---------------------------------------------------------------- main
 def main(argv=None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     args = parse_args(argv)
+    if args.export_dir and not args.database_url and "DATABASE_URL" not in os.environ:
+        plants = perf_mrp.plant_codes(args.plants)
+        summary = export_to_files(Path(args.export_dir), args.scale, args.years, plants, args.seed, args.run_date)
+        print(json.dumps(summary, default=str), flush=True)
+        return 0
     raw = (args.database_url or "").lower()
     if "neon.tech" in raw:
         perf_mrp.refuse("the URL points at Neon (neon.tech). The volume generator never runs against Neon.")
