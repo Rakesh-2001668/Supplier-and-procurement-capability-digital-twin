@@ -1,0 +1,83 @@
+{
+  "client": "Kaveri Auto Components Pvt Ltd",
+  "companyCodes": [
+    "1000"
+  ],
+  "deltaDate": "2026-11-02",
+  "encoding": "UTF-8",
+  "extractId": "KAC-S4H-20261102-DELTA",
+  "extractType": "DELTA",
+  "extractedAt": "2026-11-02T18:00:00+05:30",
+  "fictional": true,
+  "files": {
+    "COST_OBJECTS/COST_OBJECTS.csv": {
+      "rows": 2,
+      "sha256": "9b0f06660789803bf33387226cfbd85275d33a6fe020edc7d169627bbc9b34e9"
+    },
+    "MATERIALS/MAKT.csv": {
+      "rows": 3,
+      "sha256": "57846cebf2d7abf12f2a3b775d9d0d69e11b4409388e7886e7f5e7b1013e01b0"
+    },
+    "MATERIALS/MARA.csv": {
+      "rows": 3,
+      "sha256": "c62431df211d287e2b894ce4e7d18dd466ad0aa7d586a08a238ad35da5165a3c"
+    },
+    "MATERIALS/MARC.csv": {
+      "rows": 4,
+      "sha256": "9a07da07b4e4627772a60f87feb6aab3b857ca6101db853be48d75ec7d44b579"
+    },
+    "MATERIALS/MBEW.csv": {
+      "rows": 4,
+      "sha256": "71e922590fb1da27057eaf3b266243c6aac0b9ce99b30d7b6f32e9abf389bd33"
+    },
+    "MATERIALS/PIC_MAP_MATKL.csv": {
+      "rows": 3,
+      "sha256": "c3d7441e698de3cb8473298d559152b18154d4aaad59ef49b326239aa749dfb2"
+    },
+    "OPEN_POS/OPEN_POS.json": {
+      "rows": 3,
+      "sha256": "fa4ea2c470eeac8b32e74fecb14326496d0dc96fcd851342f177803b45eb3c9f"
+    },
+    "PAYMENT_STATUS/PAYMENT_STATUS.csv": {
+      "rows": 5,
+      "sha256": "940429736222efc88e70ece16c0663b396f9b55d525607529aab2b9397213e88"
+    },
+    "PLANNED_ORDERS/PLANNED_ORDERS.csv": {
+      "rows": 3,
+      "sha256": "f688e299f6d9bf0628cbf0940654878eb9d852160eeb438f696f04da273470a2"
+    },
+    "PLANTS/PLANTS.csv": {
+      "rows": 2,
+      "sha256": "8e9a0f8249d27b1ff4a5a2ec2a6ed9554e5b38a72b7fb55a1cffe0392b51c81e"
+    },
+    "STOCK/STOCK.csv": {
+      "rows": 8,
+      "sha256": "c68eb4c7dd9871a80eaca31da55e1ca1c517f1788117dbe71dbcc3a08bf27643"
+    },
+    "VENDORS/ADRC.csv": {
+      "rows": 5,
+      "sha256": "b3109ee6eddf7490e36418ce171adae1ab85c862d8e088ab3f2f2c1573985106"
+    },
+    "VENDORS/LFA1.csv": {
+      "rows": 5,
+      "sha256": "4e9f50d02b3cfbc11d396457982ba2e75aaf5a32dc24b019c2a1398b64c4bd91"
+    },
+    "VENDORS/LFB1.csv": {
+      "rows": 5,
+      "sha256": "42f93f40346df4ab663f8eba7188cb1f6a98f5380fe6a1796d64388d89df6d01"
+    },
+    "VENDORS/LFBK.csv": {
+      "rows": 5,
+      "sha256": "372403fa0fffbcfa39c93b88a808dbde7f7ba8021b1310b13116c79f37f8fac5"
+    },
+    "VENDORS/T052.csv": {
+      "rows": 4,
+      "sha256": "903c43384da568e22e69385f024692c6c81ebfedd7ec833dc5bfe1f07e51dcca"
+    }
+  },
+  "generator": "app.pic.tools.erp_delta_mock",
+  "release": "SAP S/4HANA 2023 (delta extract)",
+  "sourceSystem": "SAP_S4",
+  "system": "S4P (mock delta)",
+  "tenant": "KAC"
+}

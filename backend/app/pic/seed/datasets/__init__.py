@@ -50,6 +50,7 @@ PACKS = (
     "finance_ops",           # D15 tenants AXN and KAC: MOCK finance datasets: payment history, exceptions, notes, tax data, FX, periods, bank statements, treasury rules
     "spend_ops",             # D16 tenants AXN and KAC: MOCK spend datasets: two fiscal years, multi-ERP lines, steward and maverick workloads, duplicates, plans, forecast history, data-quality findings
     "sourcing_ops",          # D17 tenants AXN and KAC: MOCK strategic-sourcing datasets: events in every type and state, bids and TCO, awards, should-cost models, indices
+    "erp_delta_kac",         # D18 tenant KAC: live inbound SAP S/4HANA production delta sync (masters, stock, open POs, payment status, planned orders)
     "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
 )

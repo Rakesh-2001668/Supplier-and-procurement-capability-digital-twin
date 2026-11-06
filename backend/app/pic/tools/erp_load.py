@@ -1048,6 +1048,7 @@ class Loader:
                     if changes:
                         audit.record(s, "MATERIAL", mat.id, "ERP_DELTA", object_ref=number, before={k: b for k, (b, _) in changes.items()},
                                      after={k: a for k, (_, a) in changes.items()}, actor=ACTOR)
+                        rep.counts["materials"]["updated"] = rep.counts["materials"].get("updated", 0) + 1
                     continue
                 s.add(Material(tenant_id=tid, number=number, description=m["description"], type=m["type"], material_group=m["group"][:30],
                                category=m["category"], base_uom=m["uom"], valuation_class=m["valuation_class"], hsn_code=m["hsn"], gst_rate=m["gst"],
