@@ -1,0 +1,17 @@
+[
+  { "op": "constant", "to": "SourceSystem", "value": "PIC" },
+  { "op": "copy", "from": "paymentRef", "to": "ChequeOrTxnRef" },
+  { "op": "format", "field": "paymentDate", "kind": "date", "pattern": "%Y%m%d" },
+  { "op": "format", "field": "amountMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "format", "field": "supplier.code", "kind": "pad_left", "width": 10, "char": "0" },
+  { "op": "lookup", "field": "paymentMethod", "table": {
+      "NEFT": "E",
+      "RTGS": "R",
+      "ACH": "A",
+      "CHECK": "C",
+      "WIRE": "W"
+    },
+    "default": "E",
+    "to": "PaymentMethodCode"
+  }
+]

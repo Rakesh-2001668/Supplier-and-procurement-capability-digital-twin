@@ -1,0 +1,18 @@
+[
+  { "op": "constant", "to": "SourceSystem", "value": "PIC" },
+  { "op": "copy", "from": "orderNumber", "to": "ExternalPoReference" },
+  { "op": "format", "field": "orderDate", "kind": "date", "pattern": "%Y-%m-%d" },
+  { "op": "format", "field": "netTotalMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "lookup", "field": "paymentTerms", "table": {
+      "NET30": "Net 30",
+      "NET45": "Net 45",
+      "NET60": "Net 60",
+      "ADVANCE": "Immediate"
+    },
+    "default": "Net 30",
+    "to": "PaymentTermsName"
+  },
+  { "op": "format", "field": "lines[].qty", "kind": "number", "decimals": 2 },
+  { "op": "format", "field": "lines[].priceMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "drop", "field": "internalNotes" }
+]

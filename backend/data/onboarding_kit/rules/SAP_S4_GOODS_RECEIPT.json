@@ -1,0 +1,10 @@
+[
+  { "op": "constant", "to": "SourceSystem", "value": "PIC" },
+  { "op": "copy", "from": "deliveryNote", "to": "LFSNR" },
+  { "op": "format", "field": "postingDate", "kind": "date", "pattern": "%Y%m%d" },
+  { "op": "format", "field": "documentDate", "kind": "date", "pattern": "%Y%m%d" },
+  { "op": "format", "field": "lines[].material", "kind": "upper" },
+  { "op": "format", "field": "lines[].qty", "kind": "number", "decimals": 3 },
+  { "op": "format", "field": "lines[].plant", "kind": "upper" },
+  { "op": "drop", "field": "internalRemarks" }
+]

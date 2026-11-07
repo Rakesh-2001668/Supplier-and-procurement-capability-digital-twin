@@ -1,0 +1,17 @@
+ERP_OBJECT_TYPE,ERP_CODE,ERP_NAME,PIC_ENTITY_TYPE,PIC_CODE,PIC_NAME,PARENT_CODE,STATUS
+COMPANY_CODE,1000,Axion Mobility Systems Pvt Ltd,COMPANY_CODE,1000,Axion Mobility Systems Pvt Ltd,,ACTIVE
+COMPANY_CODE,2000,Kaveri Auto Components Pvt Ltd,COMPANY_CODE,2000,Kaveri Auto Components Pvt Ltd,,ACTIVE
+PLANT,1010,Chennai Auto Parts Plant,PLANT,P100,Plant Chennai (Ambattur),1000,ACTIVE
+PLANT,1020,Pune Transmission Facility,PLANT,P200,Plant Pune (Chakan),1000,ACTIVE
+PLANT,2010,Hosur Precision Engineering,PLANT,P210,Hosur Machining Plant,2000,ACTIVE
+PLANT,2020,Coimbatore Casting Foundry,PLANT,P220,Coimbatore Foundry Unit,2000,ACTIVE
+STORAGE_LOC,0001,Raw Material Unrestricted Store,STORAGE_LOCATION,0001,Main Raw Material Store,P100,ACTIVE
+STORAGE_LOC,0002,Finished Components Warehouse,STORAGE_LOCATION,0002,Finished Goods Store,P100,ACTIVE
+STORAGE_LOC,0003,Quality Inspection Hold Store,STORAGE_LOCATION,0003,QA Inspection Store,P100,ACTIVE
+COST_CENTER,CC-ENG-01,Automotive R&D Engineering,COST_OBJECT,CC-ENG-01,Automotive R&D Engineering,1000,ACTIVE
+COST_CENTER,CC-PRD-01,CNC Machine Shop Floor 1,COST_OBJECT,CC-PRD-01,CNC Machine Shop Floor 1,1000,ACTIVE
+WBS_ELEMENT,W-2026-EXP,EV Transaxle Expansion Project,COST_OBJECT,W-2026-EXP,EV Transaxle Expansion Project,2000,ACTIVE
+PURCH_ORG,PO10,Central Automotive Purchasing,PURCHASING_ORG,PO10,Central Automotive Purchasing,1000,ACTIVE
+PURCH_ORG,PO20,KAC Direct Sourcing Org,PURCHASING_ORG,PO20,KAC Direct Sourcing Org,2000,ACTIVE
+PURCH_GROUP,G01,Direct Steel & Forgings,PURCHASING_GROUP,G01,Direct Steel & Forgings,PO10,ACTIVE
+PURCH_GROUP,G02,Indirect Tools & MRO,PURCHASING_GROUP,G02,Indirect Tools & MRO,PO10,ACTIVE

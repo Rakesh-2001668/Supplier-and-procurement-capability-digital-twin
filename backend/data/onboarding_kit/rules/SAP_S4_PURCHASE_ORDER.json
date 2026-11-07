@@ -1,0 +1,22 @@
+[
+  { "op": "constant", "to": "SourceSystem", "value": "PIC" },
+  { "op": "copy", "from": "orderNumber", "to": "ExternalReference" },
+  { "op": "format", "field": "supplier.code", "kind": "pad_left", "width": 10, "char": "0" },
+  { "op": "format", "field": "orderDate", "kind": "date", "pattern": "%Y%m%d" },
+  { "op": "format", "field": "netTotalMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "format", "field": "grossTotalMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "lookup", "field": "paymentTerms", "table": {
+      "NET30": "Z030",
+      "NET45": "Z045",
+      "NET60": "Z060",
+      "ADVANCE": "ZADV",
+      "IMMEDIATE": "0001"
+    },
+    "default": "Z030",
+    "to": "PaymentTermsCode"
+  },
+  { "op": "format", "field": "lines[].qty", "kind": "number", "decimals": 3 },
+  { "op": "format", "field": "lines[].priceMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "format", "field": "lines[].material", "kind": "upper" },
+  { "op": "drop", "field": "internalNotes" }
+]

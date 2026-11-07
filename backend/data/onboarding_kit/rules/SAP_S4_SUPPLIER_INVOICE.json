@@ -1,0 +1,33 @@
+[
+  { "op": "constant", "to": "SourceSystem", "value": "PIC" },
+  { "op": "copy", "from": "invoiceNo", "to": "XBLNR" },
+  { "op": "format", "field": "supplier.code", "kind": "pad_left", "width": 10, "char": "0" },
+  { "op": "format", "field": "invoiceDate", "kind": "date", "pattern": "%Y%m%d" },
+  { "op": "format", "field": "postingDate", "kind": "date", "pattern": "%Y%m%d" },
+  { "op": "format", "field": "grossMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "format", "field": "netMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "format", "field": "taxMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "lookup", "field": "gstRate", "table": {
+      "0": "I0",
+      "5": "I1",
+      "12": "I2",
+      "18": "I3",
+      "28": "I4"
+    },
+    "default": "I3",
+    "to": "TaxCode"
+  },
+  { "op": "lookup", "field": "paymentTerms", "table": {
+      "NET30": "Z030",
+      "NET45": "Z045",
+      "NET60": "Z060",
+      "ADVANCE": "ZADV",
+      "IMMEDIATE": "0001"
+    },
+    "default": "Z030",
+    "to": "PaymentTermsCode"
+  },
+  { "op": "format", "field": "lines[].qty", "kind": "number", "decimals": 3 },
+  { "op": "format", "field": "lines[].netMinor", "kind": "minor_to_major", "decimals": 2 },
+  { "op": "drop", "field": "internalNote" }
+]

@@ -1,0 +1,14 @@
+ERP_CODE_TYPE,ERP_CODE,ERP_DESCRIPTION,PIC_EQUIVALENT,TAX_OR_DAYS,NOTES
+PAYMENT_TERMS,Z030,Payment due within 30 days net,NET30,30,Standard credit terms for domestic suppliers
+PAYMENT_TERMS,Z045,Payment due within 45 days net,NET45,45,MSME compliant standard terms
+PAYMENT_TERMS,Z060,Payment due within 60 days net,NET60,60,Strategic direct materials terms
+PAYMENT_TERMS,ZADV,100% Advance against PI,ADVANCE,0,Capital machinery or critical advance supplies
+PAYMENT_TERMS,0001,Immediate payment upon invoice receipt,IMMEDIATE,0,Spot services and utilities
+TAX_CODE,I0,Input GST 0% Exempt supplies,GST_0,0.00,Agricultural / Exempt commodities
+TAX_CODE,I1,Input GST 5% Essential goods,GST_5,5.00,CBIC schedule I
+TAX_CODE,I2,Input GST 12% Standard lower,GST_12,12.00,CBIC schedule II
+TAX_CODE,I3,Input GST 18% Standard manufacturing,GST_18,18.00,CBIC schedule III - automotive components
+TAX_CODE,I4,Input GST 28% Luxury / High rate,GST_28,28.00,CBIC schedule IV
+TDS_SECTION,194C,TDS on Contractors and Subcontractors,TDS_194C,1.00,Individual 1% / Company 2%
+TDS_SECTION,194J,TDS on Fees for Technical / Professional Services,TDS_194J,2.00,Technical 2% / Professional 10%
+TDS_SECTION,194Q,TDS on Purchase of Goods exceeding 50 Lakhs,TDS_194Q,0.10,Applicable above 50L aggregate turnover
