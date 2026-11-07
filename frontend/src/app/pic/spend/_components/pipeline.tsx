@@ -1,14 +1,13 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { ReactNode, useEffect, useId, useState } from 'react';
+import { useState } from 'react';
 import {
   Button,
   Card,
   DataTable,
   Dialog,
   Empty,
-  Facts,
   Field,
   Input,
   Kpi,
@@ -19,10 +18,10 @@ import {
   Textarea,
 } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
-import { crore, date, dateTime, inr, label, rupeesToMinor } from '@/lib/pic/format';
+import { crore, date, inr, label, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { useMe } from '../../mrp/_components';
-import { ShareBar, SpendProblem } from './shared';
+import { SpendProblem } from './shared';
 
 const STAGES = ['IDENTIFIED', 'NEGOTIATED', 'CONTRACTED', 'REALISING', 'VALIDATED', 'LOST'] as const;
 type Stage = (typeof STAGES)[number];
@@ -184,18 +183,18 @@ export function PipelineTab() {
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   // Dialog triggers
-  const [openedRef, setOpenedRef] = useState<string | null>(null);
+  // The `ref` query parameter opens that initiative: on the first render, and again whenever the parameter changes (state adjusted
+  // during render, as React recommends, instead of a setState inside an effect).
+  const [openedRef, setOpenedRef] = useState<string | null>(urlRef);
+  const [seenUrlRef, setSeenUrlRef] = useState<string | null>(urlRef);
+  if (urlRef !== seenUrlRef) {
+    setSeenUrlRef(urlRef);
+    if (urlRef) setOpenedRef(urlRef);
+  }
   const [negotiateRef, setNegotiateRef] = useState<InitiativeRow | null>(null);
   const [loseRef, setLoseRef] = useState<InitiativeRow | null>(null);
   const [showCreateDialog, setShowCreateDialog] = useState<boolean>(false);
   const [showPnlModal, setShowPnlModal] = useState<boolean>(false);
-
-  // Auto-open if query param `ref` is present
-  useEffect(() => {
-    if (urlRef) {
-      setOpenedRef(urlRef);
-    }
-  }, [urlRef]);
 
   // Construct query params for pipeline API
   const queryParts = new URLSearchParams();
