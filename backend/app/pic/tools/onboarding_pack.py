@@ -28,6 +28,7 @@ from app.pic.config import BACKEND_DIR
 from app.pic.db import engine, system_tx, tenant_tx
 from app.pic.models import AppUser, IntegrationFieldMapping, Tenant
 from app.pic.platform import audit, clock, field_mapping
+from app.pic.seed.datasets.org_masters import load_org_masters_for_tenant
 
 log = logging.getLogger("pic.onboarding_pack")
 
@@ -189,6 +190,8 @@ def main() -> int:
     parser.add_argument("--tenant", help="Target tenant code (e.g. KAC, AXN)")
     parser.add_argument("--all-tenants", action="store_true", help="Apply to all active tenants in DB")
     parser.add_argument("--apply-mappings", action="store_true", help="Store and activate mappings in DB")
+    parser.add_argument("--apply-org-masters", action="store_true", help="Seed/align Legal Entity and Purch Org masters (TD-4a)")
+    parser.add_argument("--apply-all", action="store_true", help="Apply both production mappings and org masters to DB")
     parser.add_argument("--dry-run", action="store_true", help="Validate without writing to DB")
     parser.add_argument("--validate-only", action="store_true", help="Validate pack files syntax only")
     args = parser.parse_args()
@@ -223,30 +226,49 @@ def main() -> int:
 
     # 2. Determine target tenants
     with system_tx() as s:
-        tenants = s.execute(select(Tenant.code, Tenant.name).order_by(Tenant.code)).fetchall()
+        tenants = s.execute(select(Tenant.code, Tenant.name, Tenant.id).order_by(Tenant.code)).fetchall()
 
     if args.all_tenants:
-        target_codes = [t.code for t in tenants]
+        target_tenants = [(t.code, t.id) for t in tenants]
     elif args.tenant:
-        target_codes = [args.tenant.upper()]
+        target_tenants = [(t.code, t.id) for t in tenants if t.code == args.tenant.upper()]
+        if not target_tenants:
+            print(f"\nTenant '{args.tenant}' not found in database.")
+            return 1
     else:
         print("\nSpecify either --tenant <CODE> or --all-tenants (or --validate-only).")
         print(f"Available tenants in database: {', '.join(t.code for t in tenants)}")
         return 0
 
     # 3. Apply or Dry-Run
-    dry_run = args.dry_run or not args.apply_mappings
+    do_mappings = args.apply_mappings or args.apply_all
+    do_org_masters = args.apply_org_masters or args.apply_all
+    dry_run = args.dry_run or (not do_mappings and not do_org_masters)
     mode_str = "DRY RUN (no database writes)" if dry_run else "LIVE APPLICATION TO NEON DATABASE"
     print(f"\n2. EXECUTING IN MODE: {mode_str}")
+    if do_mappings:
+        print("   -> Including: ERP Outbound Field Mappings")
+    if do_org_masters:
+        print("   -> Including: Legal Entity, Purchasing Org & Group Masters (TD-4a)")
 
-    for code in target_codes:
+    for code, tid in target_tenants:
         print(f"\n--- Processing Tenant: [{code}] ---")
-        try:
-            res = apply_mappings_for_tenant(code, dry_run=dry_run)
-            for m in res["mappings"]:
-                print(f"   * {m['target_system']:<15} {m['message_type']:<22} v{m['version']} -> {m['status']} ({m['rules_count']} rules)")
-        except Exception as e:
-            print(f"   [ERROR] Failed for tenant {code}: {e}")
+        if do_mappings or dry_run:
+            try:
+                res = apply_mappings_for_tenant(code, dry_run=dry_run)
+                for m in res["mappings"]:
+                    print(f"   * [MAPPING] {m['target_system']:<15} {m['message_type']:<22} v{m['version']} -> {m['status']} ({m['rules_count']} rules)")
+            except Exception as e:
+                print(f"   [ERROR] Mapping failed for tenant {code}: {e}")
+
+        if do_org_masters and not dry_run:
+            try:
+                with tenant_tx(tid) as ts:
+                    org_res = load_org_masters_for_tenant(ts, tid, code)
+                    for n in org_res.get("notes", []):
+                        print(f"   * [ORG_MASTER] {n}")
+            except Exception as e:
+                print(f"   [ERROR] Org master failed for tenant {code}: {e}")
 
     print("\n" + "=" * 80)
     print("COMPLETED.")

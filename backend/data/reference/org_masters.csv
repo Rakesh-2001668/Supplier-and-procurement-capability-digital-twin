@@ -1,0 +1,74 @@
+# Canonical Legal Entity, Purchasing Org and Purchasing Group Masters (Technical Document §4, TD-4a)
+# As-of: 2026-11-07 | Multi-Tenant Master Data Specification
+tenant_code,entity_type,code,name,parent_code,plant,gstin,currency,fiscal_year_start,active
+AXN,COMPANY_CODE,1000,Axion Mobility Systems Pvt Ltd,,,33AABCA1234F1Z5,INR,4,true
+AXN,COMPANY_CODE,1100,Axion EV Powertrain Technologies Pvt Ltd,,,27AABCA5678G1Z2,INR,4,true
+AXN,PURCHASING_ORG,1000,Axion Corporate Sourcing Directorate,1000,,,INR,,true
+AXN,PURCHASING_ORG,PO10,Axion Central Automotive Purchasing,1000,,,INR,,true
+AXN,PURCHASING_ORG,PO20,Axion Aftermarket & Spares Purchasing,1000,,,INR,,true
+AXN,PURCHASING_ORG,PO30,Axion EV & High-Voltage Powertrain Sourcing,1100,,,INR,,true
+AXN,PURCHASING_GROUP,G01,Direct Steel & Heavy Forgings,PO10,P100,,,true
+AXN,PURCHASING_GROUP,G02,Machined Components & Castings,PO10,P200,,,true
+AXN,PURCHASING_GROUP,G03,Indirect Tools & MRO Supplies,PO20,P100,,,true
+AXN,PURCHASING_GROUP,G04,EV Battery & High-Voltage Systems,PO30,P100,,,true
+AXN,PURCHASING_GROUP,G05,General Plant Consumables & Services,1000,P200,,,true
+KAC,COMPANY_CODE,1000,Kaveri Auto Components Ltd,,,33AAACK4412B1Z8,INR,4,true
+KAC,COMPANY_CODE,2000,Kaveri Precision Castings & Forgings Pvt Ltd,,,29AAACK8821C1Z4,INR,4,true
+KAC,PURCHASING_ORG,1000,Kaveri Corporate Purchasing Directorate,1000,,,INR,,true
+KAC,PURCHASING_ORG,PO10,KAC Plant 1100/1200 Sourcing Org,1000,,,INR,,true
+KAC,PURCHASING_ORG,PO20,KAC Machining & Stamping Purch Org,1000,,,INR,,true
+KAC,PURCHASING_ORG,PO21,Kaveri Foundries & Raw Materials Sourcing,2000,,,INR,,true
+KAC,PURCHASING_GROUP,G01,Ferrous & Non-Ferrous Castings,PO21,1100,,,true
+KAC,PURCHASING_GROUP,G02,Precision CNC Tooling & Cutters,PO20,1200,,,true
+KAC,PURCHASING_GROUP,G03,Chassis Stamping & Sub-Assemblies,PO10,1300,,,true
+KAC,PURCHASING_GROUP,G04,Electrical Systems & Wiring Harness,PO10,1400,,,true
+KAC,PURCHASING_GROUP,G05,Plant Maintenance & Capital Spares,1000,1100,,,true
+CON,COMPANY_CODE,1000,Deccan Skyline Constructions Pvt Ltd,,,36AABCD9012K1Z9,INR,4,true
+CON,COMPANY_CODE,1100,Deccan Infrastructure Projects Ltd,,,29AABCD1234E1Z7,INR,4,true
+CON,PURCHASING_ORG,1000,Central Projects Procurement Org,1000,,,INR,,true
+CON,PURCHASING_ORG,PO-CON,Site Direct Materials Purchasing,1000,,,INR,,true
+CON,PURCHASING_GROUP,C01,Cement RMC & Structural Steel,PO-CON,S201,,,true
+CON,PURCHASING_GROUP,C02,Heavy Machinery & Earthmoving Assets,PO-CON,S202,,,true
+CON,PURCHASING_GROUP,C03,Finishes Electrical & MEP Works,1000,S201,,,true
+ITS,COMPANY_CODE,1000,Indrayani Digital Services Pvt Ltd,,,27AABCI4321H1Z6,INR,4,true
+ITS,COMPANY_CODE,1100,Indrayani Cloud Infrastructure Labs Ltd,,,29AABCI9876J1Z1,INR,4,true
+ITS,PURCHASING_ORG,1000,Global IT Infrastructure & Software Org,1000,,,INR,,true
+ITS,PURCHASING_ORG,PO-ITS,Cloud SaaS & Consulting Sourcing,1000,,,INR,,true
+ITS,PURCHASING_GROUP,I01,Cloud Hosting & Enterprise Licenses,PO-ITS,P10,,,true
+ITS,PURCHASING_GROUP,I02,Workstations & Peripherals,1000,P20,,,true
+ITS,PURCHASING_GROUP,I03,Professional Services & Staff Augmentation,PO-ITS,P10,,,true
+LOG,COMPANY_CODE,1000,Coromandel Logistics Pvt Ltd,,,33AABCC7890L1Z1,INR,4,true
+LOG,COMPANY_CODE,1100,Coromandel Cold Chain Solutions Ltd,,,27AABCC4321M1Z4,INR,4,true
+LOG,PURCHASING_ORG,1000,Fleet & Hub Procurement Org,1000,,,INR,,true
+LOG,PURCHASING_ORG,PO-LOG,Warehouse Operations & Handling Org,1000,,,INR,,true
+LOG,PURCHASING_GROUP,L01,Fleet Fuel Tyres & Vehicle Maintenance,1000,CHE1,,,true
+LOG,PURCHASING_GROUP,L02,Packaging & Material Handling Equipment,PO-LOG,PNQ1,,,true
+LOG,PURCHASING_GROUP,L03,Freight Forwarding & 3PL Contracts,PO-LOG,CHE1,,,true
+HLT,COMPANY_CODE,1000,Tamravati Health Systems Pvt Ltd,,,29AABCT3456M1Z3,INR,4,true
+HLT,COMPANY_CODE,1100,Tamravati Diagnostics & Research Ltd,,,33AABCT7890N1Z6,INR,4,true
+HLT,PURCHASING_ORG,1000,Hospital Central Pharmacy & Sourcing,1000,,,INR,,true
+HLT,PURCHASING_ORG,PO-HLT,Biomedical Equipment & Consumables,1000,,,INR,,true
+HLT,PURCHASING_GROUP,H01,Pharmaceuticals & Vaccines Sourcing,1000,H100,,,true
+HLT,PURCHASING_GROUP,H02,Surgical Consumables & Lab Supplies,PO-HLT,H200,,,true
+HLT,PURCHASING_GROUP,H03,Biomedical Capital Equipment & AMC,PO-HLT,H100,,,true
+GEN,COMPANY_CODE,1000,Brindavan Business Services Pvt Ltd,,,29AABCB6543N1Z8,INR,4,true
+GEN,COMPANY_CODE,1100,Brindavan Facilities & Workplace Ltd,,,36AABCB1234P1Z2,INR,4,true
+GEN,PURCHASING_ORG,1000,Corporate Services Procurement Org,1000,,,INR,,true
+GEN,PURCHASING_ORG,PO-GEN,Shared Facilities & Operations Org,1000,,,INR,,true
+GEN,PURCHASING_GROUP,B01,Office Supplies Pantry & Safety,1000,BLR1,,,true
+GEN,PURCHASING_GROUP,B02,IT Hardware & Branch Facilities,PO-GEN,HYD1,,,true
+GEN,PURCHASING_GROUP,B03,Legal Audit & Consulting Services,1000,BLR1,,,true
+GMC,COMPANY_CODE,1000,Global Manufacturing Corp India Pvt Ltd,,,27AABCG1234P1Z0,INR,4,true
+GMC,COMPANY_CODE,1100,GMC Precision Components Export Ltd,,,33AABCG5678Q1Z3,INR,4,true
+GMC,PURCHASING_ORG,1000,GMC Central Sourcing Org,1000,,,INR,,true
+GMC,PURCHASING_ORG,PO-GMC,GMC Plant Operations Sourcing,1000,,,INR,,true
+GMC,PURCHASING_GROUP,M01,Raw Materials & Precision Sheet Metal,PO-GMC,P100,,,true
+GMC,PURCHASING_GROUP,M02,Standard Fasteners Bearings & Hardware,PO-GMC,P100,,,true
+GMC,PURCHASING_GROUP,M03,Plant MRO Consumables & PPE,1000,P100,,,true
+DBY,COMPANY_CODE,1000,Dummy Buyer Enterprises Ltd,,,07AABCD5678R1Z5,INR,4,true
+DBY,COMPANY_CODE,1100,Dummy Buyer Special Projects Ltd,,,29AABCD9999S1Z9,INR,4,true
+DBY,PURCHASING_ORG,1000,Standard Purchasing Directorate,1000,,,INR,,true
+DBY,PURCHASING_ORG,PO-DBY,General Procurement Org,1000,,,INR,,true
+DBY,PURCHASING_GROUP,D01,Standard Direct Materials Buying Group,PO-DBY,P100,,,true
+DBY,PURCHASING_GROUP,D02,Indirect Materials & General Services,1000,P100,,,true
+

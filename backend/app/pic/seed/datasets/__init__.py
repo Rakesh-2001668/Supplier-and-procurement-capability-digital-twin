@@ -53,6 +53,7 @@ PACKS = (
     "erp_delta_kac",         # D18 tenant KAC: live inbound SAP S/4HANA production delta sync (masters, stock, open POs, payment status, planned orders)
     "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
+    "org_masters",            # D19 Legal Entity, Purchasing Org and Purchasing Group Masters (TD-4a, every tenant)
 )
 
 
