@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Button, Card, DataTable, Empty, Loading, PageHeader, StatusChip, Tabs } from '@/components/pic/ui';
+import { Button, Card, DataTable, Dialog, Empty, Field, Input, Loading, PageHeader, ProblemBox, StatusChip, Tabs } from '@/components/pic/ui';
 import { api, SessionUser } from '@/lib/pic/api';
 import { date, dateTime, inr, label } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
@@ -57,8 +57,69 @@ function CompanyDetails() {
   return (
     <div className="space-y-4">
       <MasterDataCard supplier={profile.data} manager portal />
+      <BankChangeCard blocked={profile.data.status === 'BLOCKED'} />
       <ProfilePanel supplierCode={profile.data.code} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- MDM-04 own bank change after onboarding (flow fixes B8)
+type BankChange = { number: string; status: string; account: string; ifsc: string; country: string; createdAt: string; payableFrom: string | null };
+
+function BankChangeCard({ blocked }: { blocked: boolean }) {
+  const list = useApi<BankChange[]>('/portal/bank-changes');
+  const [open, setOpen] = useState(false);
+  const pending = (list.data ?? []).some((c) => ['PENDING_CALLBACK', 'PENDING_APPROVAL'].includes(c.status));
+  return (
+    <Card title="Bank account changes" actions={!blocked ? (
+      <Button disabled={pending} title={pending ? 'A bank change is still being verified' : undefined} onClick={() => setOpen(true)}>Request a bank change</Button>
+    ) : undefined}>
+      <p className="text-xs text-slate-500">A new account is verified by a call-back from the buyer to your contact on record, approved by two finance controllers
+        and paid only after the cooling-off period. Only one change can be in progress at a time.</p>
+      <div className="mt-3">
+        {list.error ? <ProblemBox error={list.error} /> : (
+          <DataTable<BankChange> rows={list.data ?? []} loading={list.isLoading} empty="No bank changes requested" columns={[
+            { key: 'number', header: 'Request', render: (c) => <span className="font-mono text-xs">{c.number}</span> },
+            { key: 'status', header: 'Status', render: (c) => <StatusChip status={c.status} /> },
+            { key: 'account', header: 'Account', render: (c) => <span className="font-mono text-xs">{c.account}{c.ifsc ? ` · ${c.ifsc}` : ''}</span> },
+            { key: 'createdAt', header: 'Requested', render: (c) => dateTime(c.createdAt) },
+            { key: 'payableFrom', header: 'Paid from', render: (c) => (c.payableFrom ? dateTime(c.payableFrom) : '–') },
+          ]} />
+        )}
+      </div>
+      {open && <BankChangeDialog onClose={() => setOpen(false)} />}
+    </Card>
+  );
+}
+
+function BankChangeDialog({ onClose }: { onClose: () => void }) {
+  const [account, setAccount] = useState('');
+  const [ifsc, setIfsc] = useState('');
+  const [holder, setHolder] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const submit = useCommand(() => api.post<{ number: string }>('/portal/bank-changes', {
+    bank_account: account.trim(), ifsc: ifsc.trim().toUpperCase(), holder_name: holder.trim(), country: 'IN',
+  }), { success: (c) => `${c.number} requested: the buyer will call you back to verify it`, onSuccess: onClose });
+  const go = () => {
+    if (!/^[0-9]{9,18}$/.test(account.trim())) { setProblem('An Indian bank account number is 9 to 18 digits.'); return; }
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifsc.trim().toUpperCase())) { setProblem('IFSC is 11 characters, e.g. HDFC0001234.'); return; }
+    if (holder.trim().length < 3) { setProblem('Give the account holder name as the bank holds it.'); return; }
+    setProblem(null);
+    submit.mutate();
+  };
+  return (
+    <Dialog open title="Request a bank change" onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Account number *">{(id) => <Input id={id} inputMode="numeric" value={account} autoComplete="off" onChange={(e) => setAccount(e.target.value.replace(/\s/g, ''))} />}</Field>
+        <Field label="IFSC *">{(id) => <Input id={id} value={ifsc} maxLength={11} className="font-mono" onChange={(e) => setIfsc(e.target.value.toUpperCase())} />}</Field>
+        <div className="md:col-span-2"><Field label="Account holder *">{(id) => <Input id={id} value={holder} onChange={(e) => setHolder(e.target.value)} />}</Field></div>
+      </div>
+      {problem && <p role="alert" className="mt-3 text-sm text-red-800">{problem}</p>}
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={submit.isPending} onClick={go}>Send for verification</Button>
+      </div>
+    </Dialog>
   );
 }
 

@@ -4,13 +4,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.pic.db import SCHEMA, Base, TenantScoped
 
 QTY = Numeric(18, 3)
+# Net-change MRP (A3): "touched since the last run" = coalesce(updated_at, created_at) > last run; one expression index per supply table.
+TOUCHED = text("coalesce(updated_at, created_at)")
 
 
 class DemandElement(TenantScoped, Base):
@@ -52,6 +54,7 @@ class PlannedOrder(TenantScoped, Base):
         Index("ix_planned_order_plant_status_material", "tenant_id", "plant", "status", "material_id"),
         Index("ix_planned_order_run", "tenant_id", "mrp_run_id"),
         Index("ix_planned_order_requisition", "tenant_id", "requisition_id"),
+        Index("ix_planned_order_plant_touched", "tenant_id", "plant", TOUCHED),  # net change: firmed orders changed since the last run
     )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     mrp_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.mrp_run.id"), nullable=False)
@@ -61,7 +64,7 @@ class PlannedOrder(TenantScoped, Base):
     qty: Mapped[Decimal] = mapped_column(QTY, nullable=False)
     need_date: Mapped[date] = mapped_column(Date, nullable=False)
     release_date: Mapped[date] = mapped_column(Date, nullable=False)
-    status: Mapped[str] = mapped_column(String(15), nullable=False, default="CREATED")  # CREATED | FIRMED | CONVERTED | DELETED
+    status: Mapped[str] = mapped_column(String(15), nullable=False, default="CREATED")  # CREATED | FIRMED | CONVERTED | DELETED | CANCELLED
     source: Mapped[dict] = mapped_column(JSONB, default=dict)
     exception_codes: Mapped[list] = mapped_column(JSONB, default=list)
     requisition_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
@@ -71,7 +74,8 @@ class PlannedOrder(TenantScoped, Base):
 
 class MrpException(TenantScoped, Base):
     __tablename__ = "mrp_exception"
-    __table_args__ = (Index("ix_mrp_exception_run", "tenant_id", "mrp_run_id"),)
+    __table_args__ = (Index("ix_mrp_exception_run", "tenant_id", "mrp_run_id"),
+                      Index("ix_mrp_exception_material_status", "tenant_id", "material_id", "status"))
     mrp_run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.mrp_run.id"), nullable=False)
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     planned_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
@@ -79,7 +83,13 @@ class MrpException(TenantScoped, Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     value_at_risk_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     recommended_action: Mapped[str] = mapped_column(Text, nullable=False)
+    # OPEN | CLOSED (resolved by the controller, with a reason) | SUPERSEDED (a newer run of the same material and plant replaced it)
     status: Mapped[str] = mapped_column(String(15), default="OPEN")
+    plant: Mapped[Optional[str]] = mapped_column(String(10))
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    close_reason: Mapped[Optional[str]] = mapped_column(Text)
+    superseded_by_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
 
 
 class Requisition(TenantScoped, Base):
@@ -87,6 +97,7 @@ class Requisition(TenantScoped, Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "number"),
         CheckConstraint("origin IN ('MRP','MANUAL','PROJECT','CATALOGUE')", name="origin"),
+        Index("ix_requisition_touched", "tenant_id", TOUCHED),  # net change: requisition status changes since the last run
     )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     origin: Mapped[str] = mapped_column(String(10), nullable=False)  # P02: stored, never overwritten (DB trigger)
@@ -118,6 +129,8 @@ class PrLine(TenantScoped, Base):
             "purchase_type IN ('STOCK','NON_STOCK','SERVICE','EXPENSE','ASSET','CONSIGNMENT','SUBCONTRACTING')",
             name="purchase_type",
         ),
+        Index("ix_pr_line_material_plant", "tenant_id", "material_id", "plant"),  # open requisition supply (MRP)
+        Index("ix_pr_line_plant_touched", "tenant_id", "plant", TOUCHED),        # net change
     )
     requisition_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.requisition.id"), nullable=False)
     line_no: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -147,3 +160,5 @@ class PrLine(TenantScoped, Base):
     sourcing_status: Mapped[str] = mapped_column(String(20), default="OPEN")  # OPEN | IN_SOURCING | SOURCED | ORDERED
     source_determination: Mapped[dict] = mapped_column(JSONB, default=dict)
     planned_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    # Category SOW form (BP M04 request templates): {"template", "title", "text", "attributes"}; the description keeps the short text.
+    sow: Mapped[Optional[dict]] = mapped_column(JSONB)

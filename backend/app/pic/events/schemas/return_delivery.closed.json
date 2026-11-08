@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:return_delivery.closed",
+  "title": "return_delivery.closed",
+  "description": "Payload (outbox_event.payload) of return_delivery.closed on RETURN_DELIVERY. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "poLine": {},
+    "qty": {},
+    "reason": {},
+    "supplierId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "po",
+    "poLine",
+    "qty",
+    "reason",
+    "supplierId"
+  ],
+  "additionalProperties": true
+}

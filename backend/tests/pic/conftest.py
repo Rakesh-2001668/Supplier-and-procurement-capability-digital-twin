@@ -69,16 +69,22 @@ def client(database):
 
 @pytest.fixture(scope="session")
 def login(client):
-    tokens = {}
+    import time
+
+    tokens: dict = {}
+    # Access tokens live 8 hours (wall clock). A full run that is paused (machine asleep) or slow can outlast them, and every
+    # later call would answer 401 "Signature has expired": log in again once a cached token is 7 hours old.
+    max_age_s = 7 * 3600
 
     def _login(local: str, tenant: str = "AXN") -> dict:
         key = (tenant, local)
-        if key not in tokens:
+        cached = tokens.get(key)
+        if cached is None or time.time() - cached[0] > max_age_s:
             email = local if "@" in local else f"{local}@axion.example"
             r = client.post("/v1/auth/token", json={"tenant": tenant, "email": email, "password": PASSWORD})
             assert r.status_code == 200, r.text
-            tokens[key] = {"Authorization": f"Bearer {r.json()['access_token']}"}
-        return tokens[key]
+            tokens[key] = (time.time(), {"Authorization": f"Bearer {r.json()['access_token']}"})
+        return tokens[key][1]
 
     return _login
 

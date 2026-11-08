@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, Response
+from fastapi import APIRouter, Depends, Header, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -19,20 +19,49 @@ from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
 from app.pic.services import debit_notes, early_payment, finance_scope, order, payables, po_controls, receiving
 from app.pic.services.common import by_ref
+from app.pic.models import AuditEvent, PoLine  # F6 return deliveries (flow fixes)
+from app.pic.platform import abac  # F6 return deliveries: plant read scope
 
 router = APIRouter(prefix="/v1")
 
 
 # ---------------------------------------------------------------- F5 purchase orders
 class PoSource(BaseModel):
-    type: str = Field(pattern="^REQUISITION$")
-    id: str
-    lines: list[int]
+    # REQUISITION (id = requisition, lines = its line numbers), CONTRACT (id = contract, lines = contract line numbers, quantities in
+    # contractLines or release.qty), PLANNED_ORDER (id = planned order; converted to its MRP requisition first), MANUAL (no id: manualLines)
+    type: str = Field(pattern="^(REQUISITION|CONTRACT|PLANNED_ORDER|MANUAL)$")
+    id: Optional[str] = None
+    lines: list[int] = Field(default_factory=list)
 
 
 class PoRelease(BaseModel):
     qty: Optional[Decimal] = None
     needDate: Optional[date] = None
+
+
+class PoContractLineIn(BaseModel):
+    line: int
+    qty: Decimal = Field(gt=0)
+    needDate: Optional[date] = None
+    storageLocation: Optional[str] = Field(default=None, max_length=10)
+    accountAssignmentType: Optional[str] = Field(default=None, pattern="^(COST_CENTER|WBS|ORDER|ASSET)$")
+    accountAssignmentCode: Optional[str] = Field(default=None, max_length=30)
+    purchaseType: Optional[str] = Field(default=None, max_length=15)
+
+
+class PoManualLineIn(BaseModel):
+    material: Optional[str] = Field(default=None, max_length=40)
+    description: Optional[str] = Field(default=None, max_length=200)
+    materialGroup: Optional[str] = Field(default=None, max_length=30)
+    category: Optional[str] = Field(default=None, max_length=40)
+    qty: Decimal = Field(gt=0)
+    uom: Optional[str] = Field(default=None, max_length=5)
+    unitPriceMinor: int = Field(gt=0)
+    needDate: Optional[date] = None
+    purchaseType: Optional[str] = Field(default=None, max_length=15)
+    storageLocation: Optional[str] = Field(default=None, max_length=10)
+    accountAssignmentType: Optional[str] = Field(default=None, pattern="^(COST_CENTER|WBS|ORDER|ASSET)$")
+    accountAssignmentCode: Optional[str] = Field(default=None, max_length=30)
 
 
 class PoIn(BaseModel):
@@ -45,26 +74,69 @@ class PoIn(BaseModel):
     retentionPct: Optional[Decimal] = Field(default=None, ge=0, le=20)
     # BP M06: reason for ordering from a supplier that is not Qualified/Preferred for the category (rule ONE-TIME-VENDOR)
     oneTimeVendorReason: Optional[str] = Field(default=None, max_length=500)
+    # flow fixes B2: order currency (ISO 4217; default contract / company-code currency) and purchasing organisation (default from the org masters)
+    currency: Optional[str] = Field(default=None, pattern="^[A-Za-z]{3}$")
+    purchasingOrg: Optional[str] = Field(default=None, max_length=10)
+    purposeCode: Optional[str] = Field(default=None, max_length=30)   # CONTRACT (default CONTRACT_RELEASE), MANUAL (mandatory), PLANNED_ORDER
+    reason: Optional[str] = Field(default=None, max_length=1000)       # MANUAL: why the order is raised without a requisition (mandatory)
+    plant: Optional[str] = Field(default=None, max_length=10)          # MANUAL
+    contractLines: list[PoContractLineIn] = Field(default_factory=list, max_length=200)
+    manualLines: list[PoManualLineIn] = Field(default_factory=list, max_length=200)
+
+
+def _po_result(s, po) -> dict:
+    return {"id": po.number, "version": po.version, "status": po.status, "origin": po.origin, "currency": po.currency,
+            "purchasingOrg": po.purch_org,
+            "inherited": {"price": po.inherited.get("price", 0) / 100 if po.inherited.get("price") else None,
+                          "paymentTerms": po.payment_terms, "incoterms": po.incoterms,
+                          "tolerance": f"+{po.tolerance.get('over_pct', 0)}/-{po.tolerance.get('under_pct', 0)}"},
+            "validation": {"riskScore": po.risk_score, "touchless": po.touchless, "factors": po.risk_factors},
+            "lineage": order.lineage_refs(s, po)}
 
 
 @router.post("/purchase-orders", status_code=201, tags=["F5 Purchase Order"])
-def create_po(body: PoIn, p: Principal = Depends(require("po:create")), key: Optional[str] = Depends(idempotency_key)):
-    """Create PO(s) from an approved requisition. Price and terms are inherited (P07); the response mirrors §10.2."""
+def create_po(body: PoIn, response: Response, p: Principal = Depends(require("po:create")), key: Optional[str] = Depends(idempotency_key)):
+    """Create PO(s) from an approved requisition, a release order against a contract, from a planned order (through its MRP
+    requisition: 202 with the requisition when it still needs approval) or a manual order with reason and purpose code. Price and
+    terms are inherited (P07); the response mirrors §10.2."""
     with uow(p) as s:
         idem = idempotent(s, "POST /v1/purchase-orders", key, body)
         if idem.replay:
             return idem.replay
-        pos = order.create_from_requisition(
-            s, requisition=body.source.id, lines=body.source.lines, supplier_code=body.supplierId, contract_ref=body.contractRef,
-            release_qty=body.release.qty if body.release else None, need_date=body.release.needDate if body.release else None,
-            unit_price_minor=body.unitPriceMinor, deviation_reason=body.deviationReason, retention_pct=body.retentionPct,
-            one_time_vendor_reason=body.oneTimeVendorReason)
-        result = [{"id": po.number, "version": po.version, "status": po.status,
-                   "inherited": {"price": po.inherited.get("price", 0) / 100 if po.inherited.get("price") else None,
-                                 "paymentTerms": po.payment_terms, "incoterms": po.incoterms,
-                                 "tolerance": f"+{po.tolerance.get('over_pct', 0)}/-{po.tolerance.get('under_pct', 0)}"},
-                   "validation": {"riskScore": po.risk_score, "touchless": po.touchless, "factors": po.risk_factors},
-                   "lineage": order.lineage_refs(s, po)} for po in pos]
+        kind = body.source.type
+        common = {"currency": body.currency, "purchasing_org": body.purchasingOrg}
+        if kind in ("REQUISITION", "CONTRACT", "PLANNED_ORDER") and not body.source.id:
+            raise Problem(422, "VALIDATION_FAILED", f"source.id is required for a {kind.lower().replace('_', ' ')} order")
+        if kind == "REQUISITION":
+            pos = order.create_from_requisition(
+                s, requisition=body.source.id, lines=body.source.lines, supplier_code=body.supplierId, contract_ref=body.contractRef,
+                release_qty=body.release.qty if body.release else None, need_date=body.release.needDate if body.release else None,
+                unit_price_minor=body.unitPriceMinor, deviation_reason=body.deviationReason, retention_pct=body.retentionPct,
+                one_time_vendor_reason=body.oneTimeVendorReason, **common)
+        elif kind == "CONTRACT":
+            lines = [l.model_dump(mode="json", exclude_none=True) for l in body.contractLines] or [
+                {"line": n, "qty": str(body.release.qty) if body.release and body.release.qty else None,
+                 "needDate": body.release.needDate.isoformat() if body.release and body.release.needDate else None} for n in body.source.lines]
+            pos = [order.create_from_contract(s, contract_ref=body.source.id, lines=lines, purpose_code=body.purposeCode,
+                                              deviation_reason=body.deviationReason, unit_price_minor=body.unitPriceMinor,
+                                              retention_pct=body.retentionPct, **common)]
+        elif kind == "MANUAL":
+            if not body.supplierId or not body.plant:
+                raise Problem(422, "VALIDATION_FAILED", "A manual order needs supplierId and plant")
+            pos = [order.create_manual(s, supplier_code=body.supplierId, plant=body.plant, purpose_code=body.purposeCode or "",
+                                       reason=body.reason or "", lines=[l.model_dump(mode="json", exclude_none=True) for l in body.manualLines],
+                                       deviation_reason=body.deviationReason, one_time_vendor_reason=body.oneTimeVendorReason,
+                                       retention_pct=body.retentionPct, **common)]
+        else:
+            out = order.create_from_planned_order(s, planned_order=body.source.id, purpose_code=body.purposeCode or "MRP_REPLENISHMENT",
+                                                  supplier_code=body.supplierId, deviation_reason=body.deviationReason,
+                                                  one_time_vendor_reason=body.oneTimeVendorReason, **common)
+            pos = out["purchaseOrders"]
+            if not pos:
+                response.status_code = 202
+                return idem.store({"requisition": out["requisition"], "requisitionStatus": out["requisitionStatus"], "purchaseOrders": [],
+                                   "next": f"the requisition {out['requisition']} is in approval (DMN-01); order it with source REQUISITION once approved"}, 202)
+        result = [_po_result(s, po) for po in pos]
         return idem.store(result[0] if len(result) == 1 else {"purchaseOrders": result}, 201)
 
 
@@ -269,6 +341,51 @@ def request_replacement(ref: str, body: ReplacementIn, p: Principal = Depends(re
         return row(receiving.request_replacement(s, by_ref(s, ReturnDelivery, ref, lock=True), body.reason))
 
 
+def _return_of(s, p: Principal, ref: str, lock: bool = False) -> ReturnDelivery:
+    rd = by_ref(s, ReturnDelivery, ref, lock=lock)
+    po = s.execute(select(PurchaseOrder).join(PoLine, PoLine.po_id == PurchaseOrder.id).where(PoLine.id == rd.po_line_id)).scalar_one()
+    if "SUPPLIER_USER" in p.roles and po.supplier_id != p.supplier_id:
+        raise not_found("Return delivery", ref)
+    return rd
+
+
+@router.get("/return-deliveries", tags=["F6 Receiving"])
+def return_deliveries(status: Optional[str] = None, open: bool = False, supplier: Optional[str] = None, po: Optional[str] = None,
+                      gr: Optional[str] = None, plant: Optional[str] = None, limit: int = Query(200, ge=1, le=500),
+                      p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    """Return deliveries (rejected goods sent back) with how they were settled: CREATED (awaiting a credit note), REPLACEMENT_DUE, CREDITED,
+    REPLACED, CLOSED. Supplier users see their own; internal users the plants they are assigned to."""
+    with uow(p) as s:
+        supplier_id = p.supplier_id if "SUPPLIER_USER" in p.roles else None
+        plants = None if supplier_id else abac.read_scope(s, p)["plant"]
+        return receiving.list_returns(s, status=status, open_only=open, supplier=supplier, po=po, gr=gr, plant=plant, supplier_id=supplier_id,
+                                      plants=plants, limit=limit)
+
+
+@router.get("/return-deliveries/{ref}", tags=["F6 Receiving"])
+def get_return_delivery(ref: str, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    with uow(p) as s:
+        rd = _return_of(s, p, ref)
+        return {**receiving.return_view(s, rd), "audit": [
+            {"action": a.action, "actor": a.actor, "at": a.ts.isoformat(), "reason": a.reason, "after": a.after}
+            for a in s.execute(select(AuditEvent).where(AuditEvent.object_type == "RETURN_DELIVERY", AuditEvent.object_id == rd.id)
+                               .order_by(AuditEvent.seq)).scalars()]}
+
+
+class ReturnCloseIn(BaseModel):
+    reason: str = Field(min_length=10, max_length=500)
+
+
+@router.post("/return-deliveries/{ref}/close", tags=["F6 Receiving"])
+def close_return_delivery(ref: str, body: ReturnCloseIn, p: Principal = Depends(require_any("quality:decide", "invoice:resolve")),
+                          if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    """Close an open return when nothing more is due (no credit note or replacement will come): reason required, audited."""
+    with uow(p) as s:
+        rd = _return_of(s, p, ref, lock=True)
+        check_if_match(rd, if_match)
+        return receiving.return_view(s, receiving.close_return(s, rd, body.reason))
+
+
 class SesLineIn(BaseModel):
     line: int
     description: Optional[str] = None
@@ -282,6 +399,7 @@ class SesIn(BaseModel):
     period_from: date
     period_to: date
     lines: list[SesLineIn] = Field(min_length=1)
+    submit: bool = True  # false keeps the sheet as DRAFT; POST /v1/service-entries/{ref}/submit submits it
 
 
 @router.post("/service-entries", status_code=201, tags=["F6 Receiving"])
@@ -293,8 +411,40 @@ def create_ses(body: SesIn, p: Principal = Depends(require("ses:create")), key: 
         po = by_ref(s, PurchaseOrder, body.po, lock=True)
         ses = receiving.create_ses(s, po, method=body.method, period_from=body.period_from, period_to=body.period_to,
                                    lines=[l.model_dump(mode="json", exclude_none=True) for l in body.lines])
-        receiving.submit_ses(s, ses)
+        if body.submit:
+            receiving.submit_ses(s, ses)
         return idem.store(views.service_entry(s, ses), 201)
+
+
+def _ses_of(s, p: Principal, ref: str, lock: bool = False) -> ServiceEntry:
+    ses = by_ref(s, ServiceEntry, ref, lock=lock)
+    if "SUPPLIER_USER" in p.roles and s.get(PurchaseOrder, ses.po_id).supplier_id != p.supplier_id:
+        raise not_found("Service entry", ref)
+    return ses
+
+
+@router.get("/service-entries/{ref}", tags=["F6 Receiving"])
+def get_ses(ref: str, response: Response, p: Principal = Depends(require_any(READ, "supplier:portal"))):
+    with uow(p) as s:
+        ses = _ses_of(s, p, ref)
+        response.headers["ETag"] = etag(ses)
+        tasks = [t for t in workflow.open_tasks_for(s, p) if t.object_id == ses.id] if "SUPPLIER_USER" not in p.roles else []
+        return {**views.service_entry(s, ses), "canDecide": bool(tasks)}
+
+
+@router.post("/service-entries/{ref}/submit", tags=["F6 Receiving"])
+def submit_ses(ref: str, p: Principal = Depends(require("ses:create")), key: Optional[str] = Depends(idempotency_key),
+               if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    """Submit a DRAFT sheet, or re-submit a REJECTED one after correcting it outside (SUBMITTED, new SES_APPROVAL task)."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/service-entries/{ref}/submit", key, {})
+        if idem.replay:
+            return idem.replay
+        ses = _ses_of(s, p, ref, lock=True)
+        check_if_match(ses, if_match)
+        by_ref(s, PurchaseOrder, str(ses.po_id), lock=True)
+        receiving.resubmit_ses(s, ses)
+        return idem.store(views.service_entry(s, ses))
 
 
 @router.post("/service-entries/{ref}/approve", tags=["F6 Receiving"])
@@ -306,6 +456,32 @@ def approve_ses(ref: str, p: Principal = Depends(require("ses:approve"))):
             raise Problem(403, "NOT_YOUR_TASK", "No open approval for you on this service entry (approver must differ from the supplier and PO creator)")
         workflow.complete(s, tasks[0].id, "APPROVE")
         return views.service_entry(s, ses)
+
+
+class SesDecisionIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/service-entries/{ref}/reject", tags=["F6 Receiving"])
+def reject_ses(ref: str, body: SesDecisionIn, p: Principal = Depends(require("ses:approve"))):
+    """The service owner rejects a SUBMITTED sheet (same as rejecting its task in the inbox); the supplier can correct and re-submit it."""
+    with uow(p) as s:
+        ses = by_ref(s, ServiceEntry, ref)
+        tasks = [t for t in workflow.open_tasks_for(s, p) if t.object_id == ses.id]
+        if not tasks:
+            raise Problem(403, "NOT_YOUR_TASK", "No open approval for you on this service entry (approver must differ from the supplier and PO creator)")
+        workflow.complete(s, tasks[0].id, "REJECT", body.reason)
+        return views.service_entry(s, ses)
+
+
+@router.post("/service-entries/{ref}/revoke", tags=["F6 Receiving"])
+def revoke_ses(ref: str, body: SesDecisionIn, p: Principal = Depends(require("ses:approve")),
+               if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    """APPROVED -> REVOKED: withdraw an approval given in error (refused while an invoice uses the approved value)."""
+    with uow(p) as s:
+        ses = by_ref(s, ServiceEntry, ref, lock=True)
+        check_if_match(ses, if_match)
+        return views.service_entry(s, receiving.revoke_ses(s, ses, body.reason))
 
 
 # ---------------------------------------------------------------- F7 invoices and payments
@@ -357,7 +533,12 @@ def get_invoice(ref: str, response: Response, p: Principal = Depends(require_any
         if "SUPPLIER_USER" in p.roles and invoice.supplier_id != p.supplier_id:
             raise not_found("Invoice", ref)
         response.headers["ETag"] = etag(invoice)
-        return views.invoice(s, invoice)
+        out = views.invoice(s, invoice)
+        if "SUPPLIER_USER" not in p.roles:  # internal: the value-band approval chain and whether the caller can decide it now
+            approval = payables.approval_state(s, invoice)
+            mine = [t for t in workflow.open_tasks_for(s, p) if t.object_id == invoice.id and t.kind == payables.APPROVAL_TASK]
+            out["approval"] = {**approval, "myTaskId": str(mine[0].id) if mine else None}
+        return out
 
 
 IfMatch = Header(default=None, alias="If-Match")
@@ -391,6 +572,8 @@ class CreditNoteIn(BaseModel):
     note_date: date
     reason: str = Field(min_length=3)
     lines: list[CreditNoteLineIn] = Field(min_length=1)
+    # The return delivery this credit note settles (optional: without it the note settles the oldest open returns of its PO lines).
+    return_delivery: Optional[str] = Field(default=None, max_length=30)
 
 
 @router.post("/invoices/{ref}/credit-notes", status_code=201, tags=["F7 Invoice"])
@@ -451,7 +634,28 @@ def approve_invoice(ref: str, response: Response, p: Principal = Depends(require
         invoice = payables.approve(s, _locked_invoice(s, ref, if_match))
         s.flush()
         response.headers["ETag"] = etag(invoice)
-        return row(invoice)
+        return row(invoice, extra={"approval": payables.approval_state(s, invoice)})
+
+
+class ApprovalDecisionIn(BaseModel):
+    decision: str = Field(pattern="^(APPROVE|REJECT|RETURN)$")
+    comment: Optional[str] = Field(default=None, max_length=1000)
+
+
+@router.post("/invoices/{ref}/approval/decision", tags=["F7 Invoice"])
+def decide_invoice_approval(ref: str, body: ApprovalDecisionIn, response: Response, p: Principal = Depends(require("tasks:work"))):
+    """Decide the caller's open step of the invoice's value-band approval chain (same as completing the INVOICE_APPROVAL task in the inbox:
+    delegation, SoD, ABAC value limit). REJECT / RETURN need a comment and send the invoice back to accounts payable as an APPROVAL exception."""
+    with uow(p) as s:
+        invoice = finance_scope.guard_invoice_read(s, by_ref(s, Invoice, ref, lock=True), ref)
+        mine = [t for t in workflow.open_tasks_for(s, p) if t.object_id == invoice.id and t.kind == payables.APPROVAL_TASK]
+        if not mine:
+            raise Problem(403, "NOT_YOUR_TASK", f"No open approval step of {invoice.number} for you (role, value limit, four-eyes or delegation)",
+                          rule_ref=payables.APPROVAL_RULE)
+        workflow.complete(s, mine[0].id, body.decision, body.comment)
+        s.flush()
+        response.headers["ETag"] = etag(invoice)
+        return row(invoice, extra={"approval": payables.approval_state(s, invoice)})
 
 
 @router.post("/invoices/{ref}/post", tags=["F7 Invoice"])

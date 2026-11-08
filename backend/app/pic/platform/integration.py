@@ -46,9 +46,10 @@ DOC_TYPES = {
     "PAYMENT": ("ZP", 1500002210),
     # Vendor credit memo for a credit note received after its invoice was posted (reduces the posted liability).
     "SUPPLIER_CREDIT_MEMO": ("KG", 5105000001),
-    # Vendor debit memo for a supplier debit note (upward price correction / additional charge) received after its invoice was posted.
+    # Vendor debit memo for a supplier debit note (upward price correction / additional charge) received after its invoice was posted
+    # (live SAP S/4HANA: sap_mapping.supplier_debit_memo, OData only).
     "SUPPLIER_DEBIT_MEMO": ("KD", 5106000001),
-    # Reversal of the clearing document of a payment the bank returned (simulator only, like the debit memo; live connectors report it unmapped).
+    # Reversal of the clearing document of a payment the bank returned (simulator only; live connectors report it unmapped: sap_mapping.UNMAPPED_LIVE).
     "PAYMENT_REVERSAL": ("ZR", 1500009000),
     # Supply-chain-finance election on a posted invoice (payment assigned to the financing programme; no external provider).
     "SCF_FINANCING": ("ZF", 5200000001),
@@ -56,6 +57,12 @@ DOC_TYPES = {
     # connector (platform/sap_mapping.py, API_MATERIAL_DOCUMENT_SRV / MBGMCR03) map it; any other connector leaves the document posted in PIC and
     # records ERP_NOT_MAPPED (services/stock_ledger.py).
     "STOCK_POSTING": ("MB", 4900000001),
+    # Outline agreement (contract / scheduling agreement) of an activated or amended PIC contract (services/contract.py, flow fixes B5).
+    # Simulator only: the live SAP connector does not map it yet, so the contract stays in PIC and the audit trail records ERP_NOT_MAPPED.
+    "OUTLINE_AGREEMENT": ("K", 4600000001),
+    # Purchase requisition of an approved PIC requisition (services/requisition.py, flow fixes A10; rule ERP-TARGET
+    # sendPurchaseRequisitions turns it off). The live SAP connector maps it too (sap_mapping.purchase_requisition, API_PURCHASEREQ_PROCESS_SRV).
+    "PURCHASE_REQUISITION": ("BANF", 10000001),
 }
 
 

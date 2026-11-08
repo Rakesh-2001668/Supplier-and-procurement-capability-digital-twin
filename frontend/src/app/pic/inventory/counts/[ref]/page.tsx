@@ -21,7 +21,7 @@ export default function CountPage() {
   const canEnter = !!c && !!me?.canCount && COUNTING.includes(c.status);
   return (
     <ObjectPage
-      type="PHYSICAL_INVENTORY" docRef={c?.number ?? ''} eyebrow="INV-04 · Physical inventory" loading={isLoading} error={error}
+      type="PHYSICAL_INVENTORY" docRef={c?.number ?? ''} eyebrow="STK-04 · Physical inventory" loading={isLoading} error={error}
       title={<>{c?.number} <span className="text-base font-normal text-slate-500">{c?.plant} / {c?.storageLocation}</span></>}
       status={c?.status}
       actions={c && <CountActions count={c} />}

@@ -79,8 +79,11 @@ def industry_kpis(period: Optional[str] = Query(default=None, pattern=r"^\d{4}-(
 @router.get("/mrp/runs/{ref}/planned-orders", tags=["F1 MRP"])
 def mrp_planned_orders(ref: str, page: Page = Depends(), status: Optional[str] = None, p: Principal = Depends(require(READ))):
     """Planned orders of a run, newest first, as cursor pages (a 50,000-material run has ~120,000)."""
+    from app.pic.services import planning
+
     with uow(p) as s:
         run = by_ref(s, MrpRun, ref)
+        planning.ensure_readable(s, run.plant, "MRP run", ref)  # SEC-AZ: plant scope on planning reads
         query = select(PlannedOrder).where(PlannedOrder.mrp_run_id == run.id)
         if status:
             query = query.where(PlannedOrder.status == status.upper())
@@ -96,8 +99,11 @@ def mrp_planned_orders(ref: str, page: Page = Depends(), status: Optional[str] =
 @router.get("/mrp/runs/{ref}/results", tags=["F1 MRP"])
 def mrp_results(ref: str, offset: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=500), p: Principal = Depends(require(READ))):
     """The per-material netting trace of a run, in pages."""
+    from app.pic.services import planning
+
     with uow(p) as s:
         run = by_ref(s, MrpRun, ref)
+        planning.ensure_readable(s, run.plant, "MRP run", ref)
         results = run.results or []
         return {"run": run.number, "total": len(results), "items": results[offset:offset + limit],
                 "nextOffset": offset + limit if offset + limit < len(results) else None}
@@ -131,13 +137,20 @@ def list_parameters(plant: Optional[str] = None, p: Principal = Depends(require(
 
 class MrpTypeIn(BaseModel):
     mrpType: str = Field(pattern="^(PD|PW|PM|VB|KB|ND)$")
+    reason: Optional[str] = Field(default=None, max_length=1000)
 
 
-@router.put("/materials/{number}/mrp-type", tags=["F1 MRP"])
+@router.put("/materials/{number}/mrp-type", status_code=202, tags=["F1 MRP"])
 def put_mrp_type(number: str, body: MrpTypeIn, p: Principal = Depends(require("mrp:plan")), key: Optional[str] = Depends(idempotency_key)):
-    """Planning mode: PD daily MRP, PW weekly buckets, PM monthly buckets, VB reorder point, KB Kanban, ND none."""
-    return _post(p, f"PUT /v1/materials/{number}/mrp-type", key, body,
-                 lambda s: {"material": number, "mrpType": ind_manufacturing.set_mrp_type(s, number, body.mrpType).mrp_type}, 200)
+    """Ask for a planning mode: PD daily MRP, PW weekly buckets, PM monthly buckets, VB reorder point, KB Kanban, ND none. The MRP type is
+    master data (M03 governance): the call raises a material change request that the PLANT data steward approves; on approval the
+    material gets a new version and the ERP material master is updated. 202 with the change request; ``mrpType`` is the type in force."""
+    def run(s):
+        request = ind_manufacturing.request_mrp_type(s, number, body.mrpType, body.reason)
+        material = s.get(Material, request.material_id)
+        return {"material": number, "mrpType": material.mrp_type, "requestedMrpType": body.mrpType, "changeRequest": request.number,
+                "status": request.status}
+    return _post(p, f"PUT /v1/materials/{number}/mrp-type", key, body, run, 202)
 
 
 # ---------------------------------------------------------------- 36 Kanban
@@ -185,6 +198,13 @@ def _card_action(ref: str, p: Principal, key: Optional[str], if_match: Optional[
 def signal_card(ref: str, p: Principal = Depends(require("mrp:plan")), key: Optional[str] = Depends(idempotency_key), if_match: Optional[str] = IfMatch):
     """Empty bin: the card signals replenishment and a requisition is raised."""
     return _card_action(ref, p, key, if_match, "signal", {}, lambda s, c: ind_manufacturing.signal_empty(s, c))
+
+
+@router.post("/kanban/cards/{ref}/replenish", tags=["Kanban"])
+def replenish_card(ref: str, p: Principal = Depends(require("mrp:plan")), key: Optional[str] = Depends(idempotency_key),
+                   if_match: Optional[str] = IfMatch):
+    """Raise the replenishment requisition of an EMPTY card (rule KANBAN autoRequisition false, or a signal nobody replenished)."""
+    return _card_action(ref, p, key, if_match, "replenish", {}, lambda s, c: ind_manufacturing.replenish(s, c))
 
 
 @router.post("/kanban/cards/{ref}/refill", tags=["Kanban"])

@@ -155,6 +155,15 @@ def _mail(session: Session, user: AppUser, purpose: str, token: str, row: UserTo
 
 def invite(session: Session, email: str, name: str, roles: list[str], attributes: Optional[dict]) -> dict:
     _admin(session)
+    # A segregation-of-duties role pair is the same 409 SOD_CONFLICT as on role assignment (PUT /v1/admin/users/{id}/roles), not a
+    # validation error; the bulk import (validate_new) keeps listing it among the row's errors.
+    wanted = sorted({r.strip() for r in roles or [] if r and r.strip()})
+    if wanted and "SUPPLIER_USER" not in wanted:
+        try:
+            role_admin.check_assignment(session, wanted)
+        except Problem as exc:
+            if exc.code == "SOD_CONFLICT":
+                raise
     values, errors = validate_new(session, email, name, roles, attributes, set())
     if errors:
         raise Problem(422, "VALIDATION_FAILED", "; ".join(errors), rule_ref="ADM-04", errors=errors)

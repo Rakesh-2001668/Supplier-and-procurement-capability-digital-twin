@@ -17,6 +17,12 @@ type Me = { scopes: string[] };
 
 const REQUEST_STATUSES = ['', 'DRAFT', 'DUPLICATE_CHECK', 'DUPLICATE_BLOCKED', 'IN_STEWARDSHIP', 'APPROVED', 'SYNCED_TO_ERP', 'MERGED', 'REJECTED'];
 const MATERIAL_TYPES = ['NON_STOCK', 'STOCK', 'SERVICE'];
+/** Planning mode of a new stock material; empty = the tenant default (rule MATERIAL-DEFAULTS: stock materials PD). */
+const MRP_TYPES = [
+  { value: '', label: 'Tenant default (PD for stock)' }, { value: 'PD', label: 'PD · MRP, daily buckets' }, { value: 'PW', label: 'PW · MRP, weekly buckets' },
+  { value: 'PM', label: 'PM · MRP, monthly buckets' }, { value: 'VB', label: 'VB · reorder point' }, { value: 'KB', label: 'KB · Kanban' },
+  { value: 'ND', label: 'ND · not planned' },
+];
 
 export default function Materials() {
   const [open, setOpen] = useState(false);
@@ -93,7 +99,7 @@ function RequestList() {
 
 function NewRequestDialog({ onClose }: { onClose: () => void }) {
   const router = useRouter();
-  const [form, setForm] = useState({ description: '', type: 'NON_STOCK', material_group: '', category: '', base_uom: 'EA', valuation_class: '', hsn_code: '', mpn: '' });
+  const [form, setForm] = useState({ description: '', type: 'NON_STOCK', material_group: '', category: '', base_uom: 'EA', valuation_class: '', hsn_code: '', mpn: '', mrp_type: '' });
   const [attributes, setAttributes] = useState('');
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -110,6 +116,7 @@ function NewRequestDialog({ onClose }: { onClose: () => void }) {
     description: form.description.trim(), type: form.type, material_group: form.material_group.trim(), category: form.category.trim(),
     base_uom: form.base_uom.trim().toUpperCase(), valuation_class: form.valuation_class.trim() || undefined, hsn_code: form.hsn_code.trim() || undefined,
     mpn: form.mpn.trim() || undefined, attributes: Object.keys(parsed).length ? parsed : undefined,
+    mrp_type: form.type === 'STOCK' && form.mrp_type ? form.mrp_type : undefined,
   }), { success: (r) => `${r.number}: ${label(r.status)}`, onSuccess: (r) => router.push(`/pic/materials/${r.number}`) });
 
   return (
@@ -118,6 +125,7 @@ function NewRequestDialog({ onClose }: { onClose: () => void }) {
         <div className="md:col-span-2"><Field label="Description *">{(id) => <Input id={id} value={form.description} onChange={set('description')} />}</Field></div>
         <Field label="Material type">{(id) => <Select id={id} value={form.type} onChange={set('type')} options={MATERIAL_TYPES.map((t) => ({ value: t, label: label(t) }))} />}</Field>
         <Field label="Base unit of measure *">{(id) => <Input id={id} value={form.base_uom} onChange={set('base_uom')} />}</Field>
+        {form.type === 'STOCK' && <Field label="MRP type">{(id) => <Select id={id} value={form.mrp_type} onChange={set('mrp_type')} options={MRP_TYPES} />}</Field>}
         <Field label="Material group *">{(id) => <Input id={id} value={form.material_group} onChange={set('material_group')} />}</Field>
         <Field label="Category *">{(id) => <Input id={id} value={form.category} onChange={set('category')} />}</Field>
         <Field label="Valuation class">{(id) => <Input id={id} value={form.valuation_class} onChange={set('valuation_class')} />}</Field>

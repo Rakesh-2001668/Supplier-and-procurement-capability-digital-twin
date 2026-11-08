@@ -297,6 +297,19 @@ def new_round(ref: str, body: RoundIn, p: Principal = Depends(require("sourcing:
                     lambda s: views.sourcing_event(s, sourcing.new_round(s, _event(s, ref, if_match), body.close_at, body.note)))
 
 
+class ExtendIn(BaseModel):
+    close_at: datetime
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/sourcing/events/{ref}/extend", tags=["F3 Sourcing"])
+def extend_deadline(ref: str, body: ExtendIn, p: Principal = Depends(require("sourcing:manage")), key: Optional[str] = Depends(idempotency_key),
+                    if_match: Optional[str] = Header(default=None, alias="If-Match")):
+    """Move the bid deadline of a published / open event later; every invited supplier is notified (flow fixes F3)."""
+    return _command(p, f"POST /v1/sourcing/events/{ref}/extend", key, body,
+                    lambda s: views.sourcing_event(s, sourcing.extend_deadline(s, _event(s, ref, if_match), body.close_at, body.reason)))
+
+
 @router.post("/sourcing/events/{ref}/scenarios", tags=["F3 Sourcing"])
 def scenarios(ref: str, p: Principal = Depends(require("sourcing:manage")), key: Optional[str] = Depends(idempotency_key)):
     return _command(p, f"POST /v1/sourcing/events/{ref}/scenarios", key, {}, lambda s: sourcing.build_scenarios(s, _event(s, ref)))

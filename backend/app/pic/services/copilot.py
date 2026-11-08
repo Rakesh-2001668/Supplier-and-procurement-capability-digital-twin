@@ -26,6 +26,49 @@ DOC_PATTERNS = [
     (re.compile(r"\bSA-\d+\b", re.I), Contract, "CONTRACT", "/pic/contracts/{}"),
     (re.compile(r"\b(?:INV|HTS|KD)[-/][\w/-]+\b", re.I), Invoice, "INVOICE", "/pic/invoices/{}"),
 ]
+# Document numbers are tenant data (a client's own series such as SSPL-A-0001, MTW-0001 or KAC/26-27/0311, or a number series the tenant
+# configured): every word of the question that looks like a document number (letters, digits and - / . _ with at least one digit) is looked
+# up against the tenant's own numbers in this order (C6). The fixed patterns above only decide what "not found" means for a typed prefix.
+DOC_KINDS = [
+    (Invoice, "INVOICE", "/pic/invoices/{}", ("number", "supplier_invoice_no")),
+    (PurchaseOrder, "PURCHASE_ORDER", "/pic/purchase-orders/{}", ("number",)),
+    (Contract, "CONTRACT", "/pic/contracts/{}", ("number",)),
+    (SourcingEvent, "SOURCING_EVENT", "/pic/sourcing/{}", ("number",)),
+    (Requisition, "REQUISITION", "/pic/requisitions/{}", ("number",)),
+]
+_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9/._-]*[A-Za-z0-9]")
+_AMOUNT = re.compile(r"[\d,.]+")
+_DATE = re.compile(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
+MAX_CANDIDATES = 12
+
+
+def candidate_numbers(question: str) -> list[str]:
+    """Words that could be a document number: 3-40 characters of letters, digits and - / . _ with at least one digit, longest first;
+    plain amounts and dates are left out."""
+    out: list[str] = []
+    for token in _TOKEN.findall(question or ""):
+        if not 3 <= len(token) <= 40 or not any(c.isdigit() for c in token):
+            continue
+        if _AMOUNT.fullmatch(token) or _DATE.fullmatch(token):
+            continue
+        if token not in out:
+            out.append(token)
+    return sorted(out, key=len, reverse=True)[:MAX_CANDIDATES]
+
+
+def lookup_number(session: Session, tokens: list[str]):
+    """(model, object type, link, the document number, the object) of the first document of the tenant whose number (or, for an invoice,
+    the supplier's invoice number) is one of ``tokens`` as typed, in capitals or in small letters (equality on the indexed number columns,
+    no scan). RLS keeps it inside the tenant."""
+    if not tokens:
+        return None
+    variants = sorted(set(tokens) | {t.upper() for t in tokens} | {t.lower() for t in tokens})
+    for model, object_type, link, fields in DOC_KINDS:
+        for name in fields:
+            obj = session.execute(select(model).where(getattr(model, name).in_(variants)).order_by(model.created_at).limit(1)).scalars().first()
+            if obj is not None:
+                return model, object_type, link, obj.number, obj
+    return None
 
 
 def _contract(answer: str, evidence: list, score: float, method: str, action: Optional[dict], principal, scopes: list[str]) -> dict:
@@ -95,9 +138,13 @@ def ask(session: Session, principal, question: str) -> dict:
 def _ask(session: Session, principal, question: str) -> dict:
     q = question.strip()
     supplier_user = "SUPPLIER_USER" in principal.roles
+    found = lookup_number(session, candidate_numbers(q))
+    if found is not None:
+        model, object_type, link, number, _ = found
+        return _document(session, principal, model, object_type, link, number, supplier_user)
     for pattern, model, object_type, link in DOC_PATTERNS:
         match = pattern.search(q)
-        if match:
+        if match:  # a typed prefix that matches no document of the tenant: "not found or not visible"
             return _document(session, principal, model, object_type, link, match.group(0).upper(), supplier_user)
     if supplier_user:
         return _contract("I can answer questions about your own documents. Mention a PO, invoice or RFQ number.", [], 0.4,

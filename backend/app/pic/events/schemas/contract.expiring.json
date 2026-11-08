@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:contract.expiring",
+  "title": "contract.expiring",
+  "description": "Payload (outbox_event.payload) of contract.expiring on CONTRACT. Produced by services/contract.py. The renewal notice date of an active contract was reached (EXPIRING); the owner and contract managers get CONTRACT_EXPIRING.",
+  "type": "object",
+  "properties": {
+    "validTo": {
+      "type": "string"
+    },
+    "daysToExpiry": {
+      "type": "integer"
+    },
+    "ownerId": {
+      "type": "string"
+    },
+    "supplierId": {
+      "type": "string"
+    },
+    "targetValueMinor": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "validTo",
+    "daysToExpiry",
+    "ownerId",
+    "supplierId",
+    "targetValueMinor"
+  ],
+  "additionalProperties": true
+}

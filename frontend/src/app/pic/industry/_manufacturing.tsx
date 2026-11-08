@@ -61,7 +61,7 @@ export function ParameterPanel({ canPlan }: { canPlan: boolean }) {
   const [mode, setMode] = useState({ material: '', mrpType: 'PW' });
   const save = useCommand(() => api.put('/planning/parameters', { material: form.material.trim(), plant: form.plant.trim(), reorderPoint: Number(form.reorderPoint),
     maxStock: form.maxStock ? Number(form.maxStock) : null }), { success: 'Planning parameters saved' });
-  const setType = useCommand(() => api.put(`/materials/${encodeURIComponent(mode.material.trim())}/mrp-type`, { mrpType: mode.mrpType }), { success: 'MRP type set' });
+  const setType = useCommand(() => api.put(`/materials/${encodeURIComponent(mode.material.trim())}/mrp-type`, { mrpType: mode.mrpType }), { success: 'MRP type change requested: the PLANT data steward approves it (material change request)' });
   return (
     <Card title="Reorder-point parameters and MRP type">
       {canPlan && (

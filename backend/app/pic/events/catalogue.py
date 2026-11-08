@@ -53,7 +53,15 @@ STREAM_ONLY = {
     "stock_reservation.issued": "The goods issue (201) is in the ledger and the ERP material document is queued; subscribers (consumption analytics) read the stream.",
     "stock_reservation.cancelled": "The reservation demand is released for MRP through its demand element; subscribers use the event for dashboards.",
     "sourcing.bids.unsealed": "The sealed bids of a round were opened (TD 6.1 bids.unsealed): the audit trail holds who opened them; subscribers (BI, the Bid Analysis Agent) read the stream.",
-    "sourcing.bid.withdrawn": "A supplier withdrew its sealed bid before the close; the content is destroyed unread and the audit trail holds the reason; nothing else reacts.",
+    "return_delivery.credited": "A return delivery was settled by the supplier's credit note(s) and closed; the audit trail holds the notes; subscribers (supplier scorecard, BI) read the stream.",
+    "return_delivery.replaced": "A return delivery was settled by the replacement receipt(s) and closed; the receipt's own events drive stock and the GR/IR.",
+    "return_delivery.closed": "An open return delivery was closed by hand with a reason (nothing more due); the audit trail holds who and why.",
+    "service_entry.revoked": "The approval of a service entry sheet was revoked; its value left the PO line again and the audit trail holds the reason.",
+    "planned_order.cancelled": "The MRP controller cancelled a planned order (e.g. on a CANCEL message); its exceptions are closed and the next net-change run replans the material.",
+    "planned_order.unfirmed": "The MRP controller took the firming off a planned order; the next run may change or replace it.",
+    "material_request.withdrawn": "The requester withdrew a material request (also a blocked duplicate); its steward tasks are cancelled and the audit trail holds the reason.",
+    "sourcing.bid.withdrawn":"A supplier withdrew its sealed bid before the close; the content is destroyed unread and the audit trail holds the reason; nothing else reacts.",
+    "contract.renewed": "A successor contract took over (TD 6 Renewed): the predecessor no longer prices orders; the successor's own contract.activated drives the ERP posting and source determination, subscribers (BI, renewals calendar) read the stream.",
 }
 
 

@@ -28,6 +28,51 @@ def _visible_po(s, p: Principal, ref: str, lock: bool = False) -> PurchaseOrder:
     return po
 
 
+# ---------------------------------------------------------------- MDM-04 the supplier's own bank change from the portal (flow fixes B8)
+@router.post("/portal/bank-changes", status_code=201, tags=["F8 Supplier"])
+def portal_bank_change(body: dict = Body(...), p: Principal = Depends(require("supplier:portal")), key: Optional[str] = Depends(idempotency_key)):
+    """A supplier's portal user asks to change its own company's bank account after onboarding. Same process as a change by the supplier
+    manager: one change at a time, never on a blocked or exited supplier, call-back verification by the supplier manager (never the
+    requester), dual finance approval and the cooling-off period before the account is paid (MDM-04, rule SUPPLIER-QUAL)."""
+    from app.pic.api.plan_request import BankChangeIn
+    from app.pic.models import Supplier
+    from app.pic.platform.serialize import row
+    from app.pic.services import supplier as supplier_svc
+    if not p.supplier_id:
+        raise Problem(403, "FORBIDDEN", "Only supplier users request a bank change from the portal", rule_ref="SUPPLIER_SCOPE")
+    data = BankChangeIn.model_validate(body)
+    with uow(p) as s:
+        idem = idempotent(s, "POST /v1/portal/bank-changes", key, body)
+        if idem.replay:
+            return idem.replay
+        supplier = s.get(Supplier, p.supplier_id)
+        if supplier is None:
+            raise not_found("Supplier", str(p.supplier_id))
+        change = supplier_svc.request_bank_change(s, supplier, **data.model_dump())
+        out = row(change)
+        out.pop("bank_account_id", None)
+        return idem.store({**out, "supplier": supplier.code, "next": "the supplier manager verifies the change by a call-back to your registered contact"}, 201)
+
+
+@router.get("/portal/bank-changes", tags=["F8 Supplier"])
+def portal_bank_changes(p: Principal = Depends(require("supplier:portal"))):
+    """The supplier's own bank change requests (status only: masked account, never the number)."""
+    from sqlalchemy import select
+
+    from app.pic.models import BankChangeRequest, SupplierBankAccount
+    if not p.supplier_id:
+        raise Problem(403, "FORBIDDEN", "Only supplier users have portal bank changes", rule_ref="SUPPLIER_SCOPE")
+    with uow(p) as s:
+        out = []
+        for change, account in s.execute(select(BankChangeRequest, SupplierBankAccount).join(
+                SupplierBankAccount, SupplierBankAccount.id == BankChangeRequest.bank_account_id).where(
+                BankChangeRequest.supplier_id == p.supplier_id).order_by(BankChangeRequest.created_at.desc())).all():
+            out.append({"number": change.number, "status": change.status, "account": account.account_masked, "ifsc": account.ifsc,
+                        "country": account.country, "createdAt": change.created_at.isoformat(),
+                        "payableFrom": account.payable_from.isoformat() if account.payable_from and change.status == "APPROVED" else None})
+        return out
+
+
 # ---------------------------------------------------------------- PO delivery schedule (TD §5 delivery_schedule[])
 class ScheduleLineIn(BaseModel):
     qty: Decimal = Field(gt=0)

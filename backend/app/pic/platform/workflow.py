@@ -332,7 +332,10 @@ def open_tasks_for(session: Session, principal) -> list[Task]:
         select(Task).where(Task.status == "OPEN", or_(Task.candidate_role.in_(roles), Task.candidate_scope.has_key(ESCALATION_KEY)))
         .order_by(Task.due_at)
     ).scalars().all()
-    return [t for t in tasks if can_work(principal, t) is None]
+    from app.pic.platform import abac  # local import: abac reads rules and models
+    # B7: a task the approver's ABAC scope (company code, plant, category, value limit, supplier scope) would refuse at completion is not
+    # listed either, so it is never offered to someone who cannot act on it (workflow.complete still runs the guard).
+    return [t for t in tasks if can_work(principal, t) is None and abac.task_allowed(session, principal, t)]
 
 
 def complete(session: Session, task_id: uuid.UUID, decision: str, comment: Optional[str] = None,

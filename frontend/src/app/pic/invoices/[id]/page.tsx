@@ -11,6 +11,7 @@ import type { ApiError } from '@/lib/pic/api';
 import { BlockChip, hasRole, MatchChip, useSessionUser } from '../_components';
 import { EInvoiceBadge, EInvoicePanel } from '../_ops';
 import { DebitNotesPanel, EarlyPaymentPanel, ScfBadge } from '../_p2p';
+import { ApprovalPanel, approvedText, InvoiceApproval } from '../_approval';
 
 type MatchDetail = { invoicedQty?: string; creditedQty?: string; netQty?: string; poQty?: string; receivedQty?: string; acceptedQty?: string;
   alreadyInvoicedQty?: string; sesApprovedMinor?: number; poPriceMinor?: number; invoicePriceMinor?: number };
@@ -34,7 +35,8 @@ type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal
   gross_group_minor?: number | null; posting_date?: string | null;
   place_of_supply?: string | null; cgst_minor?: number; sgst_minor?: number; igst_minor?: number; reverse_charge?: boolean; rcm_tax_minor?: number;
   tcs_section?: string | null; tcs_rate?: string | number | null; tcs_minor?: number;
-  supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[]; debitNotes?: { id: string }[] };
+  supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[]; debitNotes?: { id: string }[];
+  approval?: InvoiceApproval };
 type PostResult = { status: string; erpDocument?: string | null; replayed?: boolean; integrationStatus?: string; attempts?: number; error?: string | null };
 
 const RESOLUTIONS = [
@@ -43,12 +45,16 @@ const RESOLUTIONS = [
   { value: 'GR_POSTED', label: 'Goods receipt now posted' },
   { value: 'NOT_DUPLICATE', label: 'Not a duplicate' },
   { value: 'DISPUTE', label: 'Dispute with supplier' },
+  { value: 'CLARIFIED', label: 'Clarified with the approver (approve again)' },
 ];
-const DEFAULT_RESOLUTION: Record<string, string> = { QUANTITY: 'CREDIT_NOTE_RECEIVED', PRICE: 'PRICE_ACCEPTED', MISSING_GR: 'GR_POSTED', DUPLICATE: 'NOT_DUPLICATE' };
+const DEFAULT_RESOLUTION: Record<string, string> = { QUANTITY: 'CREDIT_NOTE_RECEIVED', PRICE: 'PRICE_ACCEPTED', MISSING_GR: 'GR_POSTED', DUPLICATE: 'NOT_DUPLICATE',
+  APPROVAL: 'CLARIFIED' };
 // Which resolution closes which exception type (DMN-03, mirrors payables.RESOLUTIONS).
 const ALLOWED: Record<string, string[]> = {
   DUPLICATE: ['NOT_DUPLICATE', 'DISPUTE'],
   PRICE: ['CREDIT_NOTE_RECEIVED', 'PRICE_ACCEPTED', 'DISPUTE'],
+  // An approver of the value-band chain refused the invoice (rule INVOICE-APPROVAL).
+  APPROVAL: ['CLARIFIED', 'CREDIT_NOTE_RECEIVED', 'DISPUTE'],
 };
 const DEFAULT_ALLOWED = ['CREDIT_NOTE_RECEIVED', 'GR_POSTED', 'DISPUTE'];
 const PENDING_RESOLUTIONS = ['DISPUTE', 'PRICE_APPROVAL_PENDING', 'PRICE_REJECTED'];
@@ -93,7 +99,7 @@ export default function InvoicePage() {
   const rematch = useCommand(() => api.post<{ status: string; exceptions: unknown[] }>(`/invoices/${inv!.id}/match`), {
     success: (r) => `Matched again · ${r.status.toLowerCase()}${r.exceptions.length ? ` · ${r.exceptions.length} exception(s)` : ''}`,
   });
-  const approve = useCommand(() => api.post(`/invoices/${inv!.id}/approve`), { success: 'Invoice approved for posting' });
+  const approve = useCommand(() => api.post<{ status: string; approval?: InvoiceApproval }>(`/invoices/${inv!.id}/approve`), { success: approvedText });
   const post = useCommand(() => api.post<PostResult>(`/invoices/${inv!.id}/post`, {}, { idempotencyKey: postingKey }), {
     success: (r) => r.erpDocument ? `ERP document ${r.erpDocument}${r.replayed ? ' (replayed)' : ''}` : `Posting ${r.status.toLowerCase()}`,
     onSuccess: (r) => setPosted({ ...r, key: postingKey }),
@@ -102,6 +108,7 @@ export default function InvoicePage() {
   const lineNo = (lineId: string | null) => inv?.lines.find((l) => l.id === lineId)?.line_no;
   const openExceptions = inv?.exceptions.filter((e) => e.status === 'OPEN') ?? [];
   const duplicateHold = openExceptions.some((e) => e.type === 'DUPLICATE');
+  const inApproval = inv?.status === 'MATCHED' && inv.approval?.status === 'PENDING';
   const certPayment = inv?.payments.find((p) => p.tds_certificate && p.status !== 'CANCELLED') ?? inv?.payments.find((p) => p.tds_certificate);
 
   if (error && (error as ApiError).status === 404) {
@@ -127,7 +134,7 @@ export default function InvoicePage() {
             {ap && ['CAPTURED', 'EXCEPTION'].includes(inv.status) && (
               <Button variant="danger" onClick={() => setRejecting(true)}>Reject invoice</Button>
             )}
-            {approver && inv.status === 'MATCHED' && <Button variant="primary" busy={approve.isPending} onClick={() => approve.mutate()}>Approve</Button>}
+            {approver && inv.status === 'MATCHED' && !inApproval && <Button variant="primary" busy={approve.isPending} onClick={() => approve.mutate()}>Approve</Button>}
             {ap && inv.status === 'APPROVED' && <Button variant="primary" busy={post.isPending} disabled={!postingKey} onClick={() => post.mutate()}>Post to ERP</Button>}
             {finance && releasable(inv, openExceptions.length) && <Button onClick={() => setReleasing(true)}>Release payment block</Button>}
             {ap && ['POSTED', 'PAID'].includes(inv.status) && (
@@ -178,6 +185,10 @@ export default function InvoicePage() {
               ...(inv.currency && inv.currency !== 'INR' ? [['Currency', `${inv.currency}${inv.fx_rate ? ` · rate ${inv.fx_rate} · ${inr(inv.gross_group_minor ?? 0)} in company currency` : ' · rate fixed at posting'}`] as [string, string]] : []),
               ...(inv.posting_date ? [['Posting date', date(inv.posting_date)] as [string, string]] : []),
             ]} />
+            {inv.approval && <ApprovalPanel invoiceId={inv.id} approval={inv.approval} />}
+            {inApproval && (
+              <p className="text-sm text-amber-800">In approval: {inv.approval?.requiredChain.map((r) => label(r)).join(' → ')}. It can be posted once the last approver has approved.</p>
+            )}
             {inv.irn && <p className="break-all font-mono text-[11px] text-slate-500">IRN {inv.irn}</p>}
             {inv.irn_valid === false && (
               <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">

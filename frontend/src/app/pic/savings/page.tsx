@@ -9,6 +9,7 @@ import { crore, date, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { PipelineTab } from './_pipeline';
 import { PnlTab } from './_pnl';
+import { Volume, VolumeCompliance } from './_volume';
 
 type Initiative = {
   id?: string; ownerId?: string; number: string; title: string; stage: string; category: string | null; baselineMethod: string | null;
@@ -17,10 +18,10 @@ type Initiative = {
   negotiatedCr: string; avoidanceCr: string; realisedCr: string; validated: boolean; canValidate?: boolean;
 };
 type Entry = { type: string; amountMinor: number; countsTowardBudget: boolean; formula: string; source: string | null; date: string };
-type Leak = { po: string; kind: string; amountMinor: number };
+type Leak = { po: string | null; kind: string; amountMinor: number; contract?: string | null; contractLine?: number | null; shortfallQty?: string; asOf?: string };
 type Waterfall = {
   initiative: string; stage: string; negotiatedMinor: number; contractedMinor: number; realisedMinor: number; avoidanceMinor: number;
-  leakage: Leak[]; budgetImpactMinor: number; entries: Entry[];
+  leakage: Leak[]; budgetImpactMinor: number; entries: Entry[]; volume?: Volume;
 };
 
 // Bars carry their meaning in the axis label; colour only reinforces it.
@@ -49,7 +50,7 @@ function WaterfallView({ number, canValidate }: { number: string; canValidate: b
     { key: 'negotiated', name: 'Negotiated', minor: data.negotiatedMinor, note: 'Agreed at award, on annual volume. Never counts toward budget.' },
     { key: 'contracted', name: 'Contracted', minor: data.contractedMinor, note: 'Carried into the executed contract price.' },
     { key: 'realised', name: 'Realised', minor: data.realisedMinor, note: 'From posted invoices only. Counts toward budget after finance validation.' },
-    { key: 'leakage', name: 'Leakage', minor: leakTotal, note: 'Lost to off-contract buying or invoices above the agreed price.' },
+    { key: 'leakage', name: 'Leakage', minor: leakTotal, note: 'Lost to off-contract buying, invoices above the agreed price or buying less than the contracted volume.' },
     { key: 'avoidance', name: 'Avoidance', minor: data.avoidanceMinor, note: 'Cost increases avoided (e.g. index bands). Never counts toward budget.' },
   ].map((b) => ({ ...b, value: b.minor / 100 }));
 
@@ -99,14 +100,30 @@ function WaterfallView({ number, canValidate }: { number: string; canValidate: b
         {data.leakage.length > 0 ? (
           <div className="mt-4">
             <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Leakage</p>
+            <div className="mb-3 space-y-1" aria-label="Leakage by kind">
+              {Object.entries(data.leakage.reduce<Record<string, number>>((acc, l) => ({ ...acc, [l.kind]: (acc[l.kind] ?? 0) + Number(l.amountMinor) }), {}))
+                .map(([kind, minor]) => (
+                  <div key={kind} className="flex items-center gap-2 text-xs">
+                    <span className="w-36 text-slate-600">{label(kind)}</span>
+                    <div className="h-2 flex-1 rounded bg-slate-100">
+                      <div className="h-2 rounded bg-[#c2410c]" style={{ width: `${leakTotal ? Math.max(2, Math.round((minor / leakTotal) * 100)) : 0}%` }} />
+                    </div>
+                    <span className="w-28 text-right tabular-nums text-slate-700">{inr(minor)}</span>
+                  </div>
+                ))}
+            </div>
             <DataTable<Leak> rows={data.leakage} columns={[
-              { key: 'po', header: 'PO' },
+              { key: 'po', header: 'PO / contract', render: (r) => r.po ?? (r.contract ? `${r.contract}${r.contractLine ? ` / ${r.contractLine}` : ''}` : 'initiative volume') },
               { key: 'kind', header: 'Kind', render: (r) => label(r.kind) },
+              { key: 'detail', header: 'Detail', render: (r) => r.kind === 'VOLUME_SHORTFALL'
+                ? <span className="text-xs">{qty(r.shortfallQty)} short of the contracted volume by {date(r.asOf ?? null)}</span> : '–' },
               { key: 'amountMinor', header: 'Amount', align: 'right', render: (r) => inr(r.amountMinor) },
             ]} />
           </div>
-        ) : <p className="mt-3 text-xs text-slate-500">No leakage: every invoiced line for this material was bought on contract at or below the agreed price.</p>}
+        ) : <p className="mt-3 text-xs text-slate-500">No leakage: every invoiced line for this material was bought on contract at or below the agreed price, and the contracted volume is being bought.</p>}
       </Card>
+
+      <VolumeCompliance volume={data.volume} />
 
       <Card title="Savings ledger">
         <DataTable<Entry> rows={data.entries} empty="No ledger entries yet" columns={[

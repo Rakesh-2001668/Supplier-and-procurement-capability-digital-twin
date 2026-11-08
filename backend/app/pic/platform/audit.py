@@ -55,11 +55,17 @@ def _chain_head(session: Session, tenant_id) -> Optional[str]:
     return prev
 
 
+OBJECT_REF_LENGTH = 60
+
+
 def record(session: Session, object_type: str, object_id: uuid.UUID, action: str, *,
            object_ref: Optional[str] = None, before: Any = None, after: Any = None,
            reason: Optional[str] = None, rule_set_version: Optional[str] = None,
            ai_ref: Optional[str] = None, actor: Optional[str] = None, on_behalf_of: Optional[str] = None) -> AuditEvent:
     tenant_id = current_tenant(session)
+    if object_ref is not None and len(object_ref) > OBJECT_REF_LENGTH:
+        # audit_event.object_ref is VARCHAR(60): a long reference (e.g. "delegator@... -> delegate@...") is cut, never a 500 (the object id is the key)
+        object_ref = object_ref[:OBJECT_REF_LENGTH - 1] + "…"
     # Serialise chain appends per tenant so prev_hash is always the true predecessor.
     session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"audit:{tenant_id}"})
     prev = _chain_head(session, tenant_id)

@@ -14,7 +14,7 @@ import { AuctionPanel, ClarificationsPanel } from './_ops';
 import { AwardPanel, CloneDialog, HandoffPanel, HistoryPanel } from './_award';
 import { BidsOpeningPanel, ComparisonPanel, EvaluationPanel } from './_bids';
 import {
-  AwardDialog, CANCELLABLE, CancelEventDialog, CustomSplitDialog, Criterion, EventLine, Invitee, LineMatrixPanel, normaliseScenario, RoundDialog, ScenariosPanel,
+  AwardDialog, CANCELLABLE, CancelEventDialog, CustomSplitDialog, Criterion, EventLine, ExtendDialog, Invitee, LineMatrixPanel, normaliseScenario, RoundDialog, ScenariosPanel,
   ScoreDialog, SourcingEvent,
 } from './_parts';
 
@@ -34,7 +34,7 @@ export default function SourcingEventPage() {
 
   const unsealed = !!ev && !PRE_CLOSE.includes(ev.status) && !!ev.unsealed_at;
   const comparison = useApi<Comparison>(ev && canManage && unsealed ? `${path}/comparison` : null);
-  const [dialog, setDialog] = useState<'score' | 'round' | 'award' | 'cancel' | 'clone' | 'custom' | null>(null);
+  const [dialog, setDialog] = useState<'score' | 'round' | 'award' | 'cancel' | 'clone' | 'custom' | 'extend' | null>(null);
   const [awardScenario, setAwardScenario] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -80,6 +80,7 @@ export default function SourcingEventPage() {
                 {closeReached ? (auction ? 'Close auction & evaluate' : 'Close & unseal bids') : `Closes ${dateTime(closesAt)}`}
               </Button>
             )}
+            {canManage && !auction && ['PUBLISHED', 'OPEN'].includes(ev.status) && <Button onClick={() => setDialog('extend')}>Extend deadline</Button>}
             {canManage && evaluating && <Button onClick={() => setDialog('round')}>New round</Button>}
             {canManage && evaluating && <Button busy={build.isPending} onClick={() => build.mutate()}>{scenarios.length ? 'Rebuild scenarios' : 'Build scenarios'}</Button>}
             {canManage && evaluating && scenarios.some((s) => s.feasible && !s.superseded) && (
@@ -227,6 +228,7 @@ export default function SourcingEventPage() {
       )}
       {ev && dialog === 'score' && <ScoreDialog event={ev} matrix={rows} onClose={() => setDialog(null)} />}
       {ev && dialog === 'round' && <RoundDialog event={ev} onClose={() => setDialog(null)} />}
+      {ev && dialog === 'extend' && <ExtendDialog event={ev} onClose={() => setDialog(null)} />}
       {ev && dialog === 'award' && <AwardDialog event={ev} scenarios={scenarios} comparison={comparison.data} initial={awardScenario} onClose={() => setDialog(null)} />}
       {ev && dialog === 'custom' && <CustomSplitDialog event={ev} rows={rows} onClose={() => setDialog(null)} />}
       {ev && dialog === 'cancel' && <CancelEventDialog event={ev} onClose={() => setDialog(null)} />}

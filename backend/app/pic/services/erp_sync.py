@@ -15,8 +15,9 @@ orders through the AD-05 import. Bank and tax-ID differences on existing vendors
 (``route_sensitive``). The run keeps its counts, the reject and exception report and the new cursor; a failed pull is retried with
 back-off, and the next scheduled run starts from the unchanged cursor.
 
-The job scheduler (``services/jobs``) registers the plain callables ``sync_masters``, ``sync_stock``, ``sync_open_pos`` and
-``sync_payment_status`` (plus ``sync_planned_orders`` and ``retry_failed``); each takes a tenant code or id.
+The scheduled jobs ``erp-sync-masters``, ``erp-sync-stock``, ``erp-sync-open-pos``, ``erp-sync-payment-status``, ``erp-sync-planned-orders``
+and ``erp-sync-retry`` (services/job_handlers.py, rule ERP-SYNC: off until the tenant enables it) call the plain callables ``sync_masters``,
+``sync_stock``, ``sync_open_pos``, ``sync_payment_status``, ``sync_planned_orders`` and ``retry_failed``; each takes a tenant code or id.
 """
 import csv
 import hashlib

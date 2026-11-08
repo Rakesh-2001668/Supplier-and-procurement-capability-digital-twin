@@ -1,4 +1,4 @@
-"""M03 MDM-04 supplier tax-ID, address and contact changes with dual approval.
+"""M03 MDM-04 supplier tax-ID, address, contact, legal-name and commercial-terms changes with dual approval.
 
 A change is requested by the supplier manager or by the supplier's own portal user. The new values are field-encrypted
 (per-tenant key) in ``after_enc``; only masked values are stored in clear, shown on screen and written to the audit trail
@@ -8,6 +8,13 @@ approval the change is applied to the supplier master, TAX changes are re-screen
 master is updated through the exactly-once integration queue and ``supplier.master.changed`` is emitted.
 
 Contact phone numbers are kept in ``supplier.address['phone']`` (the supplier master has no separate phone column).
+
+Flow fixes (B8): LEGAL_NAME (a change of the registered name, e.g. after a conversion to a limited company; re-screened for
+duplicates and sanctions like a tax-ID change) and COMMERCIAL (payment terms and incoterms of the supplier master: they default every
+new order and contract; existing orders and contracts keep the terms they were agreed on) go through the same governed path. A
+supplier's portal user may request a LEGAL_NAME change of its own company; commercial terms are the buyer's decision, so only internal
+users request them. The ABAC check (action SUPPLIER_MASTER_CHANGE) limits requesters and approvers to the supplier's categories and
+company codes.
 """
 import json
 import re
@@ -30,6 +37,14 @@ TASK_KIND = "SUPPLIER_MASTER_CHANGE"
 SOD_ACTION = "SUPPLIER_MASTER_CHANGE"
 PURPOSE = "supplier-master-change"
 FIELD_GROUPS = ("TAX", "ADDRESS", "CONTACT")
+# Built-in field groups added after tenants were bootstrapped (a tenant's rule SUPPLIER-MASTER-CHANGE.fieldGroups lists the older ones).
+ADDED_FIELD_GROUPS = ("LEGAL_NAME", "COMMERCIAL")
+INTERNAL_ONLY_GROUPS = ("COMMERCIAL",)
+RESCREEN_GROUPS = ("TAX", "LEGAL_NAME")
+
+
+def field_groups(rule_body: dict) -> list[str]:
+    return list(dict.fromkeys([*rule_body.get("fieldGroups", FIELD_GROUPS), *ADDED_FIELD_GROUPS]))
 
 # ---------------------------------------------------------------- Indian tax-ID and address validation
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
@@ -125,6 +140,8 @@ def _mask_values(field_group: str, values: dict) -> dict:
         return out
     if field_group == "ADDRESS":
         return mask_address(values)
+    if field_group in ("LEGAL_NAME", "COMMERCIAL"):
+        return dict(values)  # registered name and terms are public business data, not personal or bank data
     return {"email": mask_email(values.get("email")), "phone": crypto.mask(values["phone"]) if values.get("phone") else None}
 
 
@@ -143,6 +160,10 @@ def _current_masked(session: Session, supplier: Supplier, field_group: str) -> d
         return {"gstin": supplier.gstin_masked, "pan": crypto.mask(gstin[2:12]) if gstin else None, "stateCode": supplier.state_code}
     if field_group == "ADDRESS":
         return mask_address(supplier.address)
+    if field_group == "LEGAL_NAME":
+        return {"legalName": supplier.legal_name}
+    if field_group == "COMMERCIAL":
+        return {"paymentTerms": supplier.payment_terms, "incoterms": supplier.incoterms}
     phone = (supplier.address or {}).get("phone")
     return {"email": mask_email(supplier.contact_email), "phone": crypto.mask(phone) if phone else None}
 
@@ -171,6 +192,35 @@ def _validate(session: Session, supplier: Supplier, field_group: str, raw: dict)
         current = supplier.address or {}
         if not errors and all((current.get(k) or None) == (values.get(k) or None) for k in values):
             errors.append("The address is unchanged")
+    elif field_group == "LEGAL_NAME":
+        name = " ".join(str(raw.get("legalName") or raw.get("legal_name") or "").split())
+        if not 3 <= len(name) <= 200:
+            errors.append("The legal name must be 3 to 200 characters")
+        elif name == supplier.legal_name:
+            errors.append("The legal name is unchanged")
+        values = {"legalName": name}
+    elif field_group == "COMMERCIAL":
+        from app.pic.services.supplier import payment_terms_errors
+        from app.pic.services.sourcing_tco import INCOTERMS
+        terms = str(raw.get("paymentTerms") or raw.get("payment_terms") or "").strip().upper() or None
+        incoterms = " ".join(str(raw.get("incoterms") or "").split()) or None
+        if not terms and not incoterms:
+            errors.append("Give new payment terms and/or incoterms")
+        if terms:
+            errors += payment_terms_errors(terms)
+            if len(terms) > 10:
+                errors.append("Payment terms keys are at most 10 characters")
+        if incoterms:
+            rule_code = incoterms.split(" ", 1)[0].upper()
+            if rule_code not in INCOTERMS:
+                errors.append(f"Incoterms must start with an Incoterms 2020 rule ({', '.join(INCOTERMS)}), e.g. 'FCA Hosur'")
+            elif len(incoterms) > 40:
+                errors.append("Incoterms with the named place are at most 40 characters")
+            else:
+                incoterms = rule_code + incoterms[len(rule_code):]
+        if not errors and (terms is None or terms == supplier.payment_terms) and (incoterms is None or incoterms == supplier.incoterms):
+            errors.append("The commercial terms are unchanged")
+        values = {k: v for k, v in (("paymentTerms", terms), ("incoterms", incoterms)) if v}
     else:
         email = str(raw.get("email") or "").strip().lower() or None
         phone = str(raw.get("phone") or "").strip() or None
@@ -197,14 +247,17 @@ def _duplicates(session: Session, supplier: Supplier, gstin: str) -> list[dict]:
 
 # ---------------------------------------------------------------- request
 def request_change(session: Session, supplier: Supplier, *, field_group: str, values: dict, reason: str) -> SupplierMasterChange:
-    abac.guard(session, "MASTER_CHANGE", supplier)
     require_supplier_user(session, supplier.id)
     p = principal(session)
+    abac.authorize_supplier(session, p, "SUPPLIER_MASTER_CHANGE", supplier)
     rule = rules.resolve(session, RULE)
     field_group = (field_group or "").upper()
-    if field_group not in rule.body.get("fieldGroups", FIELD_GROUPS):
-        raise Problem(422, "INVALID_FIELD_GROUP", f"fieldGroup must be one of {', '.join(rule.body.get('fieldGroups', FIELD_GROUPS))}",
-                      rule_ref=rule.ref)
+    groups = field_groups(rule.body)
+    if field_group not in groups:
+        raise Problem(422, "INVALID_FIELD_GROUP", f"fieldGroup must be one of {', '.join(groups)}", rule_ref=rule.ref)
+    if field_group in INTERNAL_ONLY_GROUPS and "SUPPLIER_USER" in p.roles:
+        raise Problem(403, "FORBIDDEN", "Payment terms and incoterms are agreed with the buyer: ask your buyer to request the change",
+                      rule_ref="MDM-04")
     if not (reason or "").strip():
         raise Problem(422, "REASON_REQUIRED", "Give the reason for the change (e.g. the GST registration amendment)", rule_ref="MDM-04")
     if supplier.status == "BLOCKED":
@@ -305,6 +358,17 @@ def _decided(session: Session, task: Task, outcome: str) -> None:
     elif change.field_group == "ADDRESS":
         phone = (supplier.address or {}).get("phone")
         supplier.address = {**values, **({"phone": phone} if phone else {})}
+    elif change.field_group == "LEGAL_NAME":
+        supplier.legal_name = values["legalName"]
+        session.flush()
+        if instance:
+            workflow.step(session, instance, "F8-03", outcome="re-screening after legal-name change (duplicate name, sanctions)")
+        screening = supplier_svc.screen(session, supplier, record_step=False)
+    elif change.field_group == "COMMERCIAL":
+        if values.get("paymentTerms"):
+            supplier.payment_terms = values["paymentTerms"]
+        if values.get("incoterms"):
+            supplier.incoterms = values["incoterms"]
     else:
         if values.get("email"):
             supplier.contact_email = values["email"]

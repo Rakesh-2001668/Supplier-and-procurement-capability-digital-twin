@@ -33,7 +33,10 @@ SOD_REQUEST, SOD_APPROVE = "MATERIAL_REQUEST", "MATERIAL_STEWARD_APPROVE"  # SOD
 OPEN_PO_STATUSES = ("DRAFT", "IN_APPROVAL", "RELEASED", "TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED", "RECEIVED")
 LIVE_CONTRACT_STATUSES = ("DRAFT", "IN_NEGOTIATION", "IN_APPROVAL", "OUT_FOR_SIGNATURE", "ACTIVE", "EXPIRING")
 GST_SLABS = {Decimal(x) for x in ("0", "0.1", "0.25", "1.5", "3", "5", "6", "7.5", "12", "18", "28")}
-MRP_TYPES = ("PD", "ND", "VB", "VM")
+# The MRP types the planning engine knows (services/planning.py, ind_manufacturing.py): PD daily, PW weekly, PM monthly, VB reorder point,
+# KB Kanban, ND no planning. VM (automatic reorder point from a forecast) is not offered: neither the Blueprint nor the Technical Document
+# specifies it and the engine does not plan it, so a material set to VM would silently drop out of MRP (flow fixes A7).
+MRP_TYPES = ("PD", "PW", "PM", "VB", "KB", "ND")
 LOT_POLICIES = ("EXACT", "FIXED", "EOQ", "PERIOD", "MINMAX")
 
 # field → (label, kind, default owning domain). The kinds drive validation and normalisation.
@@ -349,6 +352,27 @@ def request_change(session: Session, material: Material, changes: dict, reason: 
         task.name = f"Approve {domain.lower()} data change · {request.number}"
     outbox.emit(session, "material.change.requested", "MATERIAL_CHANGE_REQUEST", request.id, request.number,
                 {"material": material.number, "domains": plan["domains"], "fields": [c["field"] for c in plan["changes"]]})
+    return request
+
+
+def apply_loaded(session: Session, material: Material, changes: dict, reason: str) -> MaterialChangeRequest:
+    """A master change from a data load (dataset packs, onboarding loads): the same validation, versioning, audit and ERP update as a
+    change request, recorded as a change request that is APPLIED at once with the load as its approval (no steward task: the load was
+    approved when its pack was). Users never reach this path; they raise a change request."""
+    p = principal(session)
+    plan = classify(session, material, changes, list(ownership_rule(session, material.category)[1]["domains"]))
+    record_version(session, material, reason="baseline before the first change request")
+    request = MaterialChangeRequest(
+        tenant_id=current_tenant(session), number=next_number(session, "MATERIAL_CHANGE"), material_id=material.id, status="IN_APPROVAL",
+        material_type=material.type, changes=plan["changes"], domains=plan["domains"], impact={}, reason=reason, requested_by=p.user_id,
+        from_version=material.version, rule_set_version=plan["ruleSet"], created_by=p.user_id,
+        approvals=[{"domain": d, "by": str(p.user_id), "decision": "DATA_LOAD", "at": clock.now().isoformat(), "comment": reason}
+                   for d in plan["domains"]])
+    session.add(request)
+    session.flush()
+    audit.record(session, "MATERIAL_CHANGE_REQUEST", request.id, "CREATED", object_ref=request.number,
+                 after={"material": material.number, "domains": plan["domains"], "dataLoad": True}, reason=reason, rule_set_version=plan["ruleSet"])
+    _apply(session, request, material)
     return request
 
 

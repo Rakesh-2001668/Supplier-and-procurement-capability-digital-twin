@@ -281,8 +281,9 @@ def test_award_rejection_returns_to_evaluation_and_cancellation_closes_the_event
             # Only this event's tasks and timers were closed.
             assert set(s.execute(select(Task.id).where(Task.status == "OPEN", Task.object_id != event_id)).scalars()) >= set(others_open)
             assert set(s.execute(select(Timer.id).where(Timer.fired_at.is_(None))).scalars()) >= set(others_timers)
+            # both decisions carry the same pinned business time: the time-ordered id (uuid7) gives the creation order
             decisions = s.execute(select(AwardDecision.status).where(AwardDecision.event_id == event_id)
-                                  .order_by(AwardDecision.created_at)).scalars().all()
+                                  .order_by(AwardDecision.created_at, AwardDecision.id)).scalars().all()
             assert decisions == ["REJECTED", "CANCELLED"]
             instance = s.execute(select(ProcessInstance).where(ProcessInstance.business_id == event_id)).scalar_one()
             assert instance.status == "CANCELLED"

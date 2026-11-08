@@ -3,7 +3,7 @@ compute function per KPI over the live tables, month-end snapshots for the trend
 
 * ``REGISTRY``       every KPI of the 13 modules plus the industry-template KPIs, keyed by code (``M10.FIRST_PASS_MATCH``).
 * ``evaluate``       the current value of one KPI (optionally for one month and one plant).
-* ``snapshot_kpis``  persists the month's values (``kpi_snapshot``); the scheduler calls it at month end (engineer A's job).
+* ``snapshot_kpis``  persists the month's values (``kpi_snapshot``); the job kpi-snapshot-monthly (services/job_handlers.py) calls it on the 1st for the closed month.
 * ``register``       lets another module add or replace a KPI (the industry modules register the ones that need their data).
 
 Thresholds are the defaults below unless the tenant's ``KPI-THRESHOLDS`` rule set overrides ``target`` / ``warn`` per code.
@@ -225,7 +225,12 @@ def m02_mape(c: Ctx) -> Result:
 
 
 def m02_exception_backlog(c: Ctx) -> Result:
-    return count_of(c.scalar("SELECT count(*) FROM pic.mrp_exception WHERE status = 'OPEN'" + c.at("created_at")))
+    # Open at the end of the month (raised before it, not yet closed or superseded then); the current backlog without a period. A run
+    # supersedes the earlier exceptions of the materials it plans and the controller closes the rest (flow fixes A1, migration 0023).
+    if c.period:
+        return count_of(c.scalar("SELECT count(*) FROM pic.mrp_exception WHERE (status = 'OPEN' OR closed_at >= :kend)" + c.at("created_at")
+                                 + c.at_plant("plant")))
+    return count_of(c.scalar("SELECT count(*) FROM pic.mrp_exception WHERE status = 'OPEN'" + c.at_plant("plant")))
 
 
 def m02_conversion_lead(c: Ctx) -> Result:
@@ -796,7 +801,7 @@ def read(session: Session, module: Optional[str] = None, period: Optional[str] =
 
 
 def snapshot_kpis(tenant_id: uuid.UUID, period: Optional[str] = None, *, session: Optional[Session] = None) -> dict:
-    """Persist this month's value of every KPI (idempotent: a rerun in the same month refreshes the values). The scheduler runs it
+    """Persist this month's value of every KPI (idempotent: a rerun in the same month refreshes the values). The job kpi-snapshot-monthly runs it
     at month end; ``period`` defaults to the month of today. Opens its own tenant transaction unless a session is passed."""
     def run(s: Session) -> dict:
         month = period or clock.today().strftime("%Y-%m")

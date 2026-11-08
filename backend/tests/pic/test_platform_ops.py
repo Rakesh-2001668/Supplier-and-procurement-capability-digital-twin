@@ -219,15 +219,17 @@ def test_import_permissions_and_plant_scope(client, login):
 
 def test_imported_orders_use_the_existing_mrp_flow(client, login, imported):
     numbers = [r["plannedOrder"] for r in imported["results"] if r["status"] == "ACCEPTED"]
-    run = client.get(f"/v1/mrp/runs/{imported['mrpRuns'][0]}", headers=login("mrp.controller")).json()
+    # The imported orders are for plant P200, where mrp.controller is deliberately not assigned (test_import_permissions_and_plant_scope):
+    # the plant-scope control (SEC-AZ) stays on for planning reads and commands (flow fixes A5), so the run is read and the order converted
+    # by a controller who is assigned to P200; mrp.controller does not see the run at all.
+    assert client.get(f"/v1/mrp/runs/{imported['mrpRuns'][0]}", headers=login("mrp.controller")).status_code == 404
+    _ensure_user(_tenant_id(), f"mrp.p200@{DOMAIN}", ["MRP_CONTROLLER"], {"plants": ["P100", "P200"]})
+    headers = login("mrp.p200")
+    run = client.get(f"/v1/mrp/runs/{imported['mrpRuns'][0]}", headers=headers).json()
     assert run["mode"] == "ERP_IMPORT" and run["status"] == "COMPLETED" and run["planned_orders_created"] == 2
     order = next(o for o in run["plannedOrders"] if o["number"] == numbers[0])
     assert order["source_system"] == "SAP_S4" and order["external_ref"] == "PLO-EXT-1" and order["status"] == "CREATED"
     assert run["process"]["currentStep"] == "F1-07"
-    # The imported orders are for plant P200, where mrp.controller is deliberately not assigned (test_import_permissions_and_plant_scope):
-    # the plant-scope control (SEC-AZ) stays on, so the conversion is done by a controller who is assigned to P200.
-    _ensure_user(_tenant_id(), f"mrp.p200@{DOMAIN}", ["MRP_CONTROLLER"], {"plants": ["P100", "P200"]})
-    headers = login("mrp.p200")
     firmed = client.post(f"/v1/planned-orders/{numbers[0]}/firm", headers=headers)
     assert firmed.status_code == 200 and firmed.json()["status"] == "FIRMED"
     pr = client.post(f"/v1/planned-orders/{numbers[0]}/convert", headers=headers)

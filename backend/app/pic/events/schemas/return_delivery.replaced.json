@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:return_delivery.replaced",
+  "title": "return_delivery.replaced",
+  "description": "Payload (outbox_event.payload) of return_delivery.replaced on RETURN_DELIVERY. Produced by services/receiving.py (_settle).",
+  "type": "object",
+  "properties": {
+    "po": {"type": "string"},
+    "poLine": {"type": "integer"},
+    "qty": {"type": "string"},
+    "settlements": {"type": "array"},
+    "supplierId": {"type": "string"}
+  },
+  "required": ["po", "poLine", "qty", "settlements", "supplierId"],
+  "additionalProperties": true
+}

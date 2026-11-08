@@ -52,8 +52,12 @@ def requisitions(status: Optional[str] = None, origin: Optional[str] = None, min
 
 @router.get("/mrp/runs")
 def mrp_runs(page: Page = Depends(), p: Principal = Depends(require(READ))):
+    from app.pic.services import planning
+
     with uow(p) as s:
-        return paginate(s, select(MrpRun), MrpRun, page, lambda r: row(r, only=[
+        plants = planning.readable_plants(s)  # SEC-AZ: a plant-scoped user lists the runs of their plants only
+        q = select(MrpRun) if plants is None else select(MrpRun).where(MrpRun.plant.in_(plants))
+        return paginate(s, q, MrpRun, page, lambda r: row(r, only=[
             "id", "number", "mode", "plant", "run_date", "status", "materials_planned", "planned_orders_created", "exceptions_raised",
             "created_at", "completed_at"]))
 
@@ -62,7 +66,12 @@ def mrp_runs(page: Page = Depends(), p: Principal = Depends(require(READ))):
 def planned_orders(status: Optional[str] = None, page: Page = Depends(), p: Principal = Depends(require(READ))):
     with uow(p) as s:
         materials = {m.id: m.number for m in s.execute(select(Material)).scalars()}
+        from app.pic.services import planning
+
         q = select(PlannedOrder)
+        plants = planning.readable_plants(s)  # SEC-AZ: plant scope on planning reads
+        if plants is not None:
+            q = q.where(PlannedOrder.plant.in_(plants))
         if status:
             q = q.where(PlannedOrder.status == status.upper())
         return paginate(s, q, PlannedOrder, page, lambda o: row(o, extra={"material": materials.get(o.material_id)}))

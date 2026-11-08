@@ -217,6 +217,12 @@ def test_new_tables_are_tenant_isolated():
     from app.pic.models import MaverickHit, RiskSignal, SpendLine, Tenant
     with system_tx() as s:
         tenants = dict(s.execute(select(Tenant.code, Tenant.id)).all())
+        if not any(code != "AXN" for code in tenants):
+            # Run on its own, only the AXN seed exists: add an empty second tenant so isolation is still checked.
+            bare = Tenant(code="TISO", name="Tenant isolation probe")
+            s.add(bare)
+            s.flush()
+            tenants["TISO"] = bare.id
     other = next(code for code in tenants if code != "AXN")
     with tenant_tx(tenants["AXN"]) as s:
         axn_lines = s.execute(select(func.count()).select_from(SpendLine)).scalar()

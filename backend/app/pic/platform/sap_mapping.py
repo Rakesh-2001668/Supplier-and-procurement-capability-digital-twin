@@ -22,6 +22,13 @@ Assumptions (confirm against the customer's system at onboarding; they are the *
                         tax number IN3 (GSTIN), bank, address, e-mail; reference in SearchTerm1 (20 chars); number = BusinessPartner.
                         Changes PATCH the partner (tax number, address, e-mail).
   MATERIAL_MASTER       API_PRODUCT_SRV               A_Product with to_Description; the key is the material number (Product).
+  SUPPLIER_DEBIT_MEMO   API_SUPPLIERINVOICE_PROCESS_SRV A_SupplierInvoice (not a credit memo): price corrections as PO items with
+                        IsSubsequentDebitCredit "X" (subsequent debit), charges as G/L items (PIC_ERP_SAP_S4_GL_ACCOUNT). OData only (no IDoc
+                        mapping); VALIDATE in a sandbox (unplanned delivery costs instead of G/L items for freight is a customer choice).
+  GOODS_RECEIPT 102     the reversal of a receipt PIC reverses is a material document with movement type 102 against the same PO items,
+                        quantities and batches (GoodsMovementCode 01), its own reference; VALIDATE in a sandbox (cancellation instead).
+  PAYMENT_REVERSAL,     NOT MAPPED for a live system (UNMAPPED_LIVE): a returned bank credit is reversed in SAP with FB08 plus resetting the
+  SCF_FINANCING         cleared items, and an SCF settlement is booked by the financier's interface; both need the customer's design and a sandbox.
   PAYMENT               no released OData API posts an outgoing payment: the IDoc FIDCCP02 (FI document, message type FIDCCH) is
                         used when an IDoc transport is configured; otherwise a customer service named in
                         PIC_ERP_SAP_S4_PAYMENT_SERVICE with entity set A_VendorPayment (fields as built below).
@@ -42,13 +49,18 @@ SERVICES = {
     "PURCHASE_ORDER": "API_PURCHASEORDER_PROCESS_SRV",
     "SUPPLIER_INVOICE": "API_SUPPLIERINVOICE_PROCESS_SRV",
     "SUPPLIER_CREDIT_MEMO": "API_SUPPLIERINVOICE_PROCESS_SRV",
+    "SUPPLIER_DEBIT_MEMO": "API_SUPPLIERINVOICE_PROCESS_SRV",
     "GOODS_RECEIPT": "API_MATERIAL_DOCUMENT_SRV",
     "STOCK_POSTING": "API_MATERIAL_DOCUMENT_SRV",
     "SUPPLIER_MASTER": "API_BUSINESS_PARTNER",
     "MATERIAL_MASTER": "API_PRODUCT_SRV",
 }
 MESSAGE_TYPES = ("PURCHASE_REQUISITION", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO",
-                 "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT", "STOCK_POSTING")
+                 "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT", "STOCK_POSTING", "SUPPLIER_DEBIT_MEMO")
+# Not mapped for a live SAP system (simulator only; they stay manual steps until confirmed in the customer's sandbox, see the docstring):
+# PAYMENT_REVERSAL (returned bank credit: FB08 reversal + reset of the cleared items, no released API) and SCF_FINANCING (the financier's
+# settlement is booked by the SCF platform's own ERP interface).
+UNMAPPED_LIVE = ("PAYMENT_REVERSAL", "SCF_FINANCING")
 # message type -> (IDoc basic type, message type)
 IDOC_TYPES = {"PURCHASE_ORDER": ("PORDCR105", "PORDCR1"), "GOODS_RECEIPT": ("MBGMCR03", "MBGMCR"), "STOCK_POSTING": ("MBGMCR03", "MBGMCR"), "SUPPLIER_INVOICE": ("INVOIC02", "INVOIC"),
               "SUPPLIER_CREDIT_MEMO": ("INVOIC02", "INVOIC"), "SUPPLIER_MASTER": ("CREMAS05", "CREMAS"),
@@ -151,11 +163,60 @@ def supplier_invoice(p: dict, ctx: dict, items: list[dict], credit: bool = False
                 select="SupplierInvoice,FiscalYear")
 
 
-def goods_receipt(p: dict, ctx: dict, items: list[dict]) -> Spec:
+GR_MOVEMENTS = ("101", "102")  # goods receipt for a PO item / its reversal (both GoodsMovementCode 01 against the PO item)
+
+
+def gr_movement(p: dict) -> str:
+    """Movement type of a GOODS_RECEIPT message: 101, or 102 for the reversal PIC sends after reversing a receipt (payload movement)."""
+    movement = str(p.get("movement") or "101")
+    if movement not in GR_MOVEMENTS:
+        raise ValueError(f"goods receipt movement {movement} is not mapped (101 receipt, 102 reversal)")
+    return movement
+
+
+def supplier_debit_memo(p: dict, ctx: dict, items: list[dict]) -> Spec:
+    """Supplier debit note (upward price correction / additional charge) as a logistics invoice of type subsequent debit
+    (API_SUPPLIERINVOICE_PROCESS_SRV, SupplierInvoiceIsCreditMemo false): PRICE lines become PO-referenced items flagged
+    IsSubsequentDebitCredit = "X" (the quantity stays, only the value is debited); CHARGE lines (freight, packing) become G/L items on
+    PIC_ERP_SAP_S4_GL_ACCOUNT. Reference in DocumentHeaderText (25 chars); number = SupplierInvoice. VALIDATE in a SAP sandbox: the
+    customer may book charges as unplanned delivery costs (header UnplannedDeliveryCost) instead of G/L items.
+    items: [{"po", "poItem", "netMinor", "qty", "uom", "taxCode"}] or [{"glAccount", "netMinor", "taxCode", "text"}]."""
     v = ctx["version"]
+    po_items, gl_items = [], []
+    for n, it in enumerate(items, start=1):
+        if it.get("po"):
+            po_items.append({"SupplierInvoiceItem": str(n), "PurchaseOrder": it["po"], "PurchaseOrderItem": item_number(it["poItem"]),
+                             "DocumentCurrency": "INR", "SupplierInvoiceItemAmount": amount(it["netMinor"]),
+                             "QuantityInPurchaseOrderUnit": quantity(it.get("qty") or 1), "PurchaseOrderQuantityUnit": it.get("uom") or "EA",
+                             "IsSubsequentDebitCredit": "X", "TaxCode": it.get("taxCode") or ctx.get("tax_code")})
+        else:
+            gl_items.append({"SupplierInvoiceItem": str(n), "CompanyCode": ctx["company"], "GLAccount": it["glAccount"], "DocumentCurrency": "INR",
+                             "SupplierInvoiceItemAmount": amount(it["netMinor"]), "DebitCreditCode": "S",
+                             "SupplierInvoiceItemText": trim(it.get("text"), 50) or None, "TaxCode": it.get("taxCode") or ctx.get("tax_code")})
+    body = {"CompanyCode": ctx["company"], "DocumentDate": odata_date(ctx.get("document_date") or ctx["today"], v), "PostingDate": odata_date(ctx["today"], v),
+            "SupplierInvoiceIDByInvcgParty": trim(p.get("supplierDebitNote") or p.get("debitNote"), 16), "InvoicingParty": ctx["vendor"],
+            "DocumentCurrency": "INR", "InvoiceGrossAmount": amount(p.get("grossMinor")), "DocumentHeaderText": trim(ctx["reference"], 25),
+            "SupplierInvoiceIsCreditMemo": False, "AssignmentReference": trim(p.get("invoiceErp"), 18) or None, "TaxIsCalculatedAutomatically": True}
+    if po_items:
+        clean = [{k: x for k, x in i.items() if x not in (None, "")} for i in po_items]
+        body["to_SuplrInvcItemPurOrdRef"] = {"results": clean} if v == 2 else clean
+    if gl_items:
+        clean = [{k: x for k, x in i.items() if x not in (None, "")} for i in gl_items]
+        body["to_SuplrInvcItemAcctAssgmt"] = {"results": clean} if v == 2 else clean
+    body = {k: x for k, x in body.items() if x not in (None, "")}
+    return Spec(SERVICES["SUPPLIER_DEBIT_MEMO"], "A_SupplierInvoice", body, "DocumentHeaderText", trim(ctx["reference"], 25), "SupplierInvoice",
+                select="SupplierInvoice,FiscalYear")
+
+
+def goods_receipt(p: dict, ctx: dict, items: list[dict]) -> Spec:
+    """API_MATERIAL_DOCUMENT_SRV material document for a PO receipt (101) or its reversal (102: same PO items and quantities, GoodsMovementCode
+    01, MaterialDocumentHeaderText = the reversal's own reference so query-before-retry finds it). VALIDATE the 102 against a SAP sandbox: some
+    customers require the reversal as a cancellation of the original material document instead (MIGO 'Cancellation' / BAPI_GOODSMVT_CANCEL)."""
+    v = ctx["version"]
+    movement = gr_movement(p)
     rows = []
     for it in items:
-        row = {"Material": it["material"], "Plant": it["plant"], "StorageLocation": it.get("storageLocation"), "GoodsMovementType": "101",
+        row = {"Material": it["material"], "Plant": it["plant"], "StorageLocation": it.get("storageLocation"), "GoodsMovementType": movement,
                "PurchaseOrder": it["po"], "PurchaseOrderItem": item_number(it["poItem"]), "QuantityInEntryUnit": quantity(it["qty"]),
                "EntryUnit": it.get("uom") or "EA", "GoodsMovementRefDocType": "B", "Batch": it.get("batch") or None}
         rows.append({k: x for k, x in row.items() if x not in (None, "")})
@@ -361,8 +422,9 @@ def idoc_xml(message_type: str, p: dict, ctx: dict, data: dict) -> str:
         body += _seg("E1BP2017_GM_CODE", {"GM_CODE": "01"})
         for line in data.get("lines", []):
             body += _seg("E1BP2017_GM_ITEM_CREATE", {"MATERIAL": line["material"], "PLANT": line["plant"], "STGE_LOC": line.get("storageLocation"),
-                                                     "MOVE_TYPE": "101", "ENTRY_QNT": quantity(line["qty"]), "ENTRY_UOM": line.get("uom") or "EA",
-                                                     "PO_NUMBER": line["po"], "PO_ITEM": item_number(line["poItem"]), "MVT_IND": "B"})
+                                                     "MOVE_TYPE": gr_movement(p), "ENTRY_QNT": quantity(line["qty"]), "ENTRY_UOM": line.get("uom") or "EA",
+                                                     "PO_NUMBER": line["po"], "PO_ITEM": item_number(line["poItem"]), "MVT_IND": "B",
+                                                     "BATCH": line.get("batch")})
     elif message_type == "STOCK_POSTING":
         # data: {"code": goods movement code, "items": stock_items(...), "objectType": PIC object type}; ctx["reference"] is this document's reference
         codes = ctx.get("stock_type_codes") or STOCK_TYPE_IDOC

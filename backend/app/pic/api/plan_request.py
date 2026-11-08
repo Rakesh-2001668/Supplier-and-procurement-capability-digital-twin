@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 
 from app.pic import views
@@ -19,7 +19,7 @@ from app.pic.platform import workflow
 from app.pic.platform.auth import READ, Principal, require, require_any
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
-from app.pic.services import guided_buying, mandatory, mdm, planning, request_templates, requisition, supplier
+from app.pic.services import catalogue, guided_buying, mandatory, mdm, planning, request_templates, requisition, supplier
 from app.pic.services.common import by_ref, material_by_number, supplier_ref
 
 router = APIRouter(prefix="/v1")
@@ -43,31 +43,85 @@ def start_mrp_run(body: MrpRunIn, p: Principal = Depends(require("mrp:run")), ke
         return idem.store(views.mrp_run(s, run), 201)
 
 
+def _run(s, ref: str) -> MrpRun:
+    run = by_ref(s, MrpRun, ref)
+    planning.ensure_readable(s, run.plant, "MRP run", ref)  # SEC-AZ: plant scope on planning reads
+    return run
+
+
+def _planned_order(s, ref: str, lock: bool = False) -> PlannedOrder:
+    order = by_ref(s, PlannedOrder, ref, lock=lock)
+    planning.ensure_readable(s, order.plant, "Planned order", ref)
+    return order
+
+
 @router.get("/mrp/runs/{ref}", tags=["F1 MRP"])
 def get_mrp_run(ref: str, detail: str = Query(default="auto", pattern="^(auto|full|summary)$"), p: Principal = Depends(require(READ))):
     """``detail=summary`` (the default for large runs) returns the header, counts and the URLs of the paged detail reads."""
     with uow(p) as s:
-        return views.mrp_run(s, by_ref(s, MrpRun, ref), detail)
+        return views.mrp_run(s, _run(s, ref), detail)
 
 
 @router.get("/mrp/runs/{ref}/exceptions", tags=["F1 MRP"])
 def mrp_exceptions(ref: str, limit: Optional[int] = Query(default=None, ge=1, le=500), offset: int = Query(default=0, ge=0),
-                   p: Principal = Depends(require(READ))):
-    """Exceptions by value at risk. Without ``limit`` the whole list; with it a page ``{items, total, nextOffset}``."""
+                   status: Optional[str] = Query(default=None, pattern="^(OPEN|CLOSED|SUPERSEDED)$"), p: Principal = Depends(require(READ))):
+    """Exceptions by value at risk. Without ``limit`` the whole list; with it a page ``{items, total, nextOffset}``. ``status`` filters
+    OPEN, CLOSED (resolved by the controller) or SUPERSEDED (a later run of the material replaced it)."""
     with uow(p) as s:
-        run = by_ref(s, MrpRun, ref)
-        query = select(MrpException).where(MrpException.mrp_run_id == run.id).order_by(MrpException.value_at_risk_minor.desc(), MrpException.id)
+        run = _run(s, ref)
+        where = [MrpException.mrp_run_id == run.id] + ([MrpException.status == status] if status else [])
+        query = select(MrpException).where(*where).order_by(MrpException.value_at_risk_minor.desc(), MrpException.id)
         if limit is None:
             return rows(s.execute(query).scalars())
-        total = s.execute(select(func.count()).select_from(MrpException).where(MrpException.mrp_run_id == run.id)).scalar_one()
+        total = s.execute(select(func.count()).select_from(MrpException).where(*where)).scalar_one()
         items = rows(s.execute(query.limit(limit).offset(offset)).scalars())
         return {"items": items, "total": total, "nextOffset": offset + limit if offset + limit < total else None}
+
+
+class ReasonIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/mrp/exceptions/{exception_id}/close", tags=["F1 MRP"])
+def close_mrp_exception(exception_id: uuid.UUID, body: ReasonIn, p: Principal = Depends(require("mrp:plan")),
+                        key: Optional[str] = Depends(idempotency_key)):
+    """Resolve an exception message with a reason (audited); exceptions about a planned order also close when it is converted,
+    cancelled or unfirmed, and every open exception of a material closes as SUPERSEDED when a later live run plans it again."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/mrp/exceptions/{exception_id}/close", key, body)
+        if idem.replay:
+            return idem.replay
+        exc = s.get(MrpException, exception_id, with_for_update=True)
+        if exc is None:
+            raise not_found("MRP exception", exception_id)
+        planning.ensure_readable(s, exc.plant or s.get(MrpRun, exc.mrp_run_id).plant, "MRP exception", str(exception_id))
+        return idem.store(row(planning.close_exception(s, exc, body.reason)))
 
 
 @router.post("/planned-orders/{ref}/firm", tags=["F1 MRP"])
 def firm_planned_order(ref: str, p: Principal = Depends(require("mrp:plan"))):
     with uow(p) as s:
-        return row(planning.firm(s, by_ref(s, PlannedOrder, ref, lock=True)))
+        return row(planning.firm(s, _planned_order(s, ref, lock=True)))
+
+
+@router.post("/planned-orders/{ref}/cancel", tags=["F1 MRP"])
+def cancel_planned_order(ref: str, body: ReasonIn, p: Principal = Depends(require("mrp:plan")), key: Optional[str] = Depends(idempotency_key)):
+    """Cancel a CREATED or FIRMED planned order (e.g. on a CANCEL exception message); its open exceptions close with the reason."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/planned-orders/{ref}/cancel", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(row(planning.cancel(s, _planned_order(s, ref, lock=True), body.reason)))
+
+
+@router.post("/planned-orders/{ref}/unfirm", tags=["F1 MRP"])
+def unfirm_planned_order(ref: str, body: ReasonIn, p: Principal = Depends(require("mrp:plan")), key: Optional[str] = Depends(idempotency_key)):
+    """Take the firming off a FIRMED planned order (back to CREATED: the next run may change or replace it)."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/planned-orders/{ref}/unfirm", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(row(planning.unfirm(s, _planned_order(s, ref, lock=True), body.reason)))
 
 
 @router.post("/planned-orders/{ref}/convert", tags=["F1 MRP"])
@@ -76,7 +130,7 @@ def convert_planned_order(ref: str, p: Principal = Depends(require("mrp:plan")),
         idem = idempotent(s, f"POST /v1/planned-orders/{ref}/convert", key, {})
         if idem.replay:
             return idem.replay
-        pr = planning.convert(s, by_ref(s, PlannedOrder, ref, lock=True))
+        pr = planning.convert(s, _planned_order(s, ref, lock=True))
         return idem.store(views.requisition(s, pr))
 
 
@@ -96,10 +150,27 @@ class QuoteRefIn(BaseModel):
     date: date
 
 
+class SowIn(BaseModel):
+    """Structured statement of work of a category SOW form (BP M04 request templates). Kept on the line (pr_line.sow) and carried to the
+    sourcing event line and the PO line; the line description stays the short text."""
+    template: Optional[str] = Field(default=None, max_length=40)
+    title: Optional[str] = Field(default=None, max_length=200)
+    text: Optional[str] = Field(default=None, max_length=requisition.SOW_TEXT_LIMIT)
+    attributes: dict = {}
+
+
 class PrLineIn(BaseModel):
     item_type: str = Field(pattern="^(MATERIAL|FREE_TEXT|CATALOGUE|CONTRACT|SERVICE)$")
     purchase_type: str
     description: Optional[str] = None
+    sow: Optional[SowIn] = None
+
+    @field_validator("description")
+    @classmethod
+    def _short_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value.strip()) > requisition.DESCRIPTION_LIMIT:
+            raise ValueError(requisition.DESCRIPTION_MESSAGE.format(n=len(value.strip())))
+        return value
     material: Optional[str] = None
     catalogue_item_id: Optional[str] = None
     contract_line_id: Optional[str] = None
@@ -173,7 +244,7 @@ class LineChange(BaseModel):
     account_assignment_type: Optional[str] = None
     account_assignment_code: Optional[str] = None
     need_date: Optional[date] = None
-    description: Optional[str] = None
+    description: Optional[str] = Field(default=None, min_length=1, max_length=200)
     justification: Optional[str] = None  # soft budget stop when a change after approval re-books the budget
 
 
@@ -210,6 +281,87 @@ def buyer_workbench(origin: Optional[str] = None, p: Principal = Depends(require
         return requisition.buyer_queue(s, origin)
 
 
+# ---------------------------------------------------------------- M04 hosted catalogue maintenance (flow fixes A11)
+CATALOGUE_SCOPE = require_any("sourcing:manage", "contract:manage")
+
+
+class CatalogueItemIn(BaseModel):
+    supplier: str = Field(min_length=1, max_length=30)
+    supplier_part_no: str = Field(min_length=1, max_length=60)
+    description: str = Field(min_length=1, max_length=200)
+    material_group: str = Field(min_length=1, max_length=30)
+    category: Optional[str] = Field(default=None, max_length=40)
+    uom: str = Field(min_length=1, max_length=5)
+    price_minor: int = Field(gt=0)
+    currency: str = Field(default="INR", pattern="^[A-Za-z]{3}$")
+    gst_rate: Decimal = Decimal(18)
+    hsn_code: Optional[str] = Field(default=None, max_length=10)
+    material: Optional[str] = Field(default=None, max_length=30)
+    contract: Optional[str] = Field(default=None, max_length=30)
+    valid_from: Optional[date] = None
+    valid_to: Optional[date] = None
+    lead_time_days: Optional[int] = Field(default=None, ge=0, le=730)
+
+
+class CatalogueChangeIn(BaseModel):
+    changes: dict = Field(min_length=1)
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+@router.get("/catalogue-items", tags=["F2 Requisition"])
+def list_catalogue_items(supplier: Optional[str] = None, active: Optional[bool] = None, q: Optional[str] = Query(default=None, max_length=100),
+                         category: Optional[str] = None, limit: int = Query(default=200, ge=1, le=500), p: Principal = Depends(require(READ))):
+    with uow(p) as s:
+        return catalogue.listing(s, supplier=supplier, active=active, q=q, category=category, limit=limit)
+
+
+@router.get("/catalogue-items/{item_id}", tags=["F2 Requisition"])
+def get_catalogue_item(item_id: str, p: Principal = Depends(require(READ))):
+    with uow(p) as s:
+        return catalogue.view(s, catalogue.get(s, item_id))
+
+
+@router.post("/catalogue-items", status_code=201, tags=["F2 Requisition"])
+def create_catalogue_item(body: CatalogueItemIn, p: Principal = Depends(CATALOGUE_SCOPE), key: Optional[str] = Depends(idempotency_key)):
+    """A hosted catalogue item: supplier part, price and its validity, optionally the material and the contract that fixes the price."""
+    with uow(p) as s:
+        idem = idempotent(s, "POST /v1/catalogue-items", key, body)
+        if idem.replay:
+            return idem.replay
+        data = body.model_dump()
+        item = catalogue.create(s, supplier=data.pop("supplier"), supplier_part_no=data.pop("supplier_part_no"),
+                                **{k: v for k, v in data.items() if v is not None or k in ("valid_from", "valid_to")})
+        return idem.store(catalogue.view(s, item), 201)
+
+
+@router.patch("/catalogue-items/{item_id}", tags=["F2 Requisition"])
+def change_catalogue_item(item_id: str, body: CatalogueChangeIn, p: Principal = Depends(CATALOGUE_SCOPE), key: Optional[str] = Depends(idempotency_key)):
+    """Change price, validity, texts, tax data, lead time or the material / contract link (audited before / after, with the reason)."""
+    with uow(p) as s:
+        idem = idempotent(s, f"PATCH /v1/catalogue-items/{item_id}", key, body)
+        if idem.replay:
+            return idem.replay
+        item = catalogue.get(s, item_id)
+        s.refresh(item, with_for_update=True)
+        return idem.store(catalogue.view(s, catalogue.update(s, item, body.changes, body.reason)))
+
+
+@router.post("/catalogue-items/{item_id}/deactivate", tags=["F2 Requisition"])
+def deactivate_catalogue_item(item_id: str, body: ReasonIn, p: Principal = Depends(CATALOGUE_SCOPE)):
+    with uow(p) as s:
+        item = catalogue.get(s, item_id)
+        s.refresh(item, with_for_update=True)
+        return catalogue.view(s, catalogue.set_active(s, item, False, body.reason))
+
+
+@router.post("/catalogue-items/{item_id}/reactivate", tags=["F2 Requisition"])
+def reactivate_catalogue_item(item_id: str, body: ReasonIn, p: Principal = Depends(CATALOGUE_SCOPE)):
+    with uow(p) as s:
+        item = catalogue.get(s, item_id)
+        s.refresh(item, with_for_update=True)
+        return catalogue.view(s, catalogue.set_active(s, item, True, body.reason))
+
+
 # ---------------------------------------------------------------- F9 material governance
 class MaterialRequestIn(BaseModel):
     description: str
@@ -221,6 +373,8 @@ class MaterialRequestIn(BaseModel):
     hsn_code: Optional[str] = None
     mpn: Optional[str] = None
     attributes: Optional[dict] = None
+    # Planning mode of the new material (STOCK only); omitted = the tenant default of rule MATERIAL-DEFAULTS (stock: PD)
+    mrp_type: Optional[str] = Field(default=None, pattern="^(PD|PW|PM|VB|KB|ND)$")
 
 
 @router.post("/materials/requests", status_code=201, tags=["F9 MDM"])
@@ -248,6 +402,17 @@ class OverrideIn(BaseModel):
 def override_duplicate(ref: str, body: OverrideIn, p: Principal = Depends(require(READ))):
     with uow(p) as s:
         return views.material_request(s, mdm.steward_override(s, by_ref(s, MaterialRequest, ref, lock=True), body.reason))
+
+
+@router.post("/materials/requests/{ref}/withdraw", tags=["F9 MDM"])
+def withdraw_material_request(ref: str, body: OverrideIn, p: Principal = Depends(require("req:create")),
+                              key: Optional[str] = Depends(idempotency_key)):
+    """The requester withdraws an open request (also one blocked as a duplicate); steward tasks are cancelled and the process ends."""
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/materials/requests/{ref}/withdraw", key, body)
+        if idem.replay:
+            return idem.replay
+        return idem.store(views.material_request(s, mdm.withdraw(s, by_ref(s, MaterialRequest, ref, lock=True), body.reason)))
 
 
 class MergeIn(BaseModel):

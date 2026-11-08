@@ -91,7 +91,9 @@ def submit(session: Session, invoice: Invoice, *, supplier_debit_note_no: str, n
     p = principal(session)
     rule = p2p_rules.rule(session, KEY, company_code=invoice.company_code)
     require_supplier_user(session, invoice.supplier_id)
-    if "SUPPLIER_USER" not in p.roles and not set(p.roles) & set(rule.body.get("requiredRoles") or ["AP_CLERK"]):
+    # On the supplier's behalf: a role named in the rule, or the permission (requiredScopes, default invoice:capture) so tenant roles work (C4).
+    on_behalf = set(p.roles) & set(rule.body.get("requiredRoles") or ["AP_CLERK"]) or p.scopes & set(rule.body.get("requiredScopes") or ["invoice:capture"])
+    if "SUPPLIER_USER" not in p.roles and not on_behalf:
         raise Problem(403, "FORBIDDEN", "A debit note is raised by the supplier, or by accounts payable on the supplier's behalf")
     if invoice.status == "REJECTED":
         raise illegal_transition("Invoice", invoice.number, invoice.status, "debit")

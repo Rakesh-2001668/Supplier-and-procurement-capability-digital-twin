@@ -21,6 +21,8 @@ class Invoice(TenantScoped, Base):
         # Internal document number (payables._internal_number) is the key every screen, payment run and lookup uses.
         UniqueConstraint("tenant_id", "number", name="uq_invoice_tenant_number"),
         CheckConstraint("payment_option IN ('STANDARD','EARLY_DISCOUNT','SCF')", name="payment_option"),
+        # Copilot / search by the supplier's own invoice number across suppliers and company codes (flow fixes C6).
+        Index("ix_invoice_tenant_supplier_invoice_no", "tenant_id", "supplier_invoice_no"),
     )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     supplier_invoice_no: Mapped[str] = mapped_column(String(40), nullable=False)

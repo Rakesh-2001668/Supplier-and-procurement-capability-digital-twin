@@ -88,6 +88,9 @@ class Idempotent:
         if existing.response is None:
             raise Problem(409, "REQUEST_IN_PROGRESS", "A request with this Idempotency-Key is still being processed")
         self.replay = dict(existing.response, replayed=True)
+        state = idempotency.STATE.get()
+        if state is not None:
+            state["replayed"] = True  # the HTTP layer sets the documented Idempotent-Replayed: true header on this answer
 
     def release(self, response: dict) -> dict:
         """The outcome is not final yet (e.g. the ERP did not answer, the post is queued for retry): forget the reservation so that the

@@ -236,6 +236,9 @@ class MaterialRequest(TenantScoped, Base):
     material_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     merged_into_material_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
     rule_set_version: Mapped[Optional[str]] = mapped_column(String(80))
+    # MRP type the new material is created with (PD, PW, PM, VB, KB, ND); null = the default of rule MATERIAL-DEFAULTS for its type.
+    mrp_type: Mapped[Optional[str]] = mapped_column(String(4))
+    withdrawal_reason: Mapped[Optional[str]] = mapped_column(Text)  # set when the requester withdraws the request (status WITHDRAWN)
 
 
 class InfoRecord(TenantScoped, Base):
@@ -283,7 +286,10 @@ class QuotaLine(TenantScoped, Base):
 
 
 class CatalogueItem(TenantScoped, Base):
+    """Hosted catalogue item (M04 CATALOGUE channel), maintained through /v1/catalogue-items or tools/load_catalogue.py. The price is
+    valid from ``valid_from`` to ``valid_to`` (open ends allowed); a deactivated item (``active`` false) is no longer offered."""
     __tablename__ = "catalogue_item"
+    __table_args__ = (Index("ix_catalogue_item_supplier_part", "tenant_id", "supplier_id", "supplier_part_no"),)
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)
     supplier_part_no: Mapped[str] = mapped_column(String(60), nullable=False)
     description: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -297,6 +303,9 @@ class CatalogueItem(TenantScoped, Base):
     gst_rate: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=18)
     hsn_code: Mapped[Optional[str]] = mapped_column(String(10))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    valid_from: Mapped[Optional[date]] = mapped_column(Date)
+    valid_to: Mapped[Optional[date]] = mapped_column(Date)
+    lead_time_days: Mapped[Optional[int]] = mapped_column(Integer)
 
 
 class Budget(TenantScoped, Base):
@@ -350,7 +359,8 @@ class StockMovement(TenantScoped, Base):
     the reason of a scrap, block or count difference."""
     __tablename__ = "stock_movement"
     __table_args__ = (Index("ix_stock_movement_material_plant_created", "tenant_id", "material_id", "plant", "created_at"),
-                      Index("ix_stock_movement_reference", "tenant_id", "reference_type", "reference_id"))
+                      Index("ix_stock_movement_reference", "tenant_id", "reference_type", "reference_id"),
+                      Index("ix_stock_movement_plant_created", "tenant_id", "plant", "created_at"))  # net-change MRP: stock changed since the last run
     material_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.material.id"), nullable=False)
     plant: Mapped[str] = mapped_column(String(10), nullable=False)
     storage_location: Mapped[str] = mapped_column(String(10), nullable=False)

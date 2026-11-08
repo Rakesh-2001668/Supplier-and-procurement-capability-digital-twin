@@ -72,8 +72,9 @@ def create_users(sc: Scenario, users: list[tuple[str, str, list[str], dict]], pa
 
 
 def number_range(sc: Scenario, object_type: str, prefix: str, next_value: int, padding: int = 0) -> None:
-    """Document-type number range (e.g. subcontracts SC-118, statements of work SOW-4410). Contracts of different types
-    share the CONTRACT range in the platform, so the range is switched before each contract type is created."""
+    """Document-type number range (e.g. subcontracts SC-118, statements of work SOW-4410). Each contract type draws from its own
+    range (contract.CONTRACT_NUMBER_RANGES: a value contract from CONTRACT_VC), so pass that range; switching it before each
+    contract gives the pack's document numbers."""
     with tenant_tx(sc.tenant_id) as s:
         nr = s.execute(select(NumberRange).where(NumberRange.object_type == object_type)).scalar_one()
         before = {"prefix": nr.prefix, "next": nr.next_value}

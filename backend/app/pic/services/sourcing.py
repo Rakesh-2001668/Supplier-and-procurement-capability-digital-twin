@@ -70,6 +70,22 @@ BID_FIELDS = ("line", "unit_price", "freight", "duty", "packaging", "payment_ter
 EXCEPTION_NEEDS_RATIONALE = ("NOT_LOWEST", "LIMITED_COMPETITION", "INCOMPLETE_TCO", "UNVERIFIED_CAPACITY", "NEGATIVE_SAVINGS")
 
 
+# Own number range per event type for new events (flow fixes B6): RFQ keeps the original SOURCING_EVENT range (RFQ-2231 of the
+# signature case), the others get their own prefix. A tenant whose ranges predate the split (no row yet) keeps numbering from the
+# SOURCING_EVENT range until migration 0024 / reference.ensure_extensions adds them; existing numbers are never renumbered.
+EVENT_NUMBER_RANGES = {"RFQ": "SOURCING_EVENT", "RFI": "SOURCING_EVENT_RFI", "RFP": "SOURCING_EVENT_RFP", "REVERSE_AUCTION": "SOURCING_EVENT_AUC"}
+
+
+def event_number(session: Session, type: str) -> str:
+    object_type = EVENT_NUMBER_RANGES.get((type or "").upper(), "SOURCING_EVENT")
+    try:
+        return next_number(session, object_type)
+    except Problem as exc:
+        if exc.code != "NUMBER_RANGE_MISSING" or object_type == "SOURCING_EVENT":
+            raise
+        return next_number(session, "SOURCING_EVENT")
+
+
 def aware(value: Optional[datetime]) -> Optional[datetime]:
     """A deadline without a zone is read as Indian Standard Time (the business time of the tenant), never compared naive."""
     if value is not None and value.tzinfo is None:
@@ -201,7 +217,7 @@ def create_event(session: Session, *, type: str, title: str, category: str, line
     tco_snapshot = tco_svc.snapshot(session, tco_params)
     reference_date = reference_date or clock.today()
     event = SourcingEvent(
-        tenant_id=current_tenant(session), number=next_number(session, "SOURCING_EVENT"), type=type, title=title,
+        tenant_id=current_tenant(session), number=event_number(session, type), type=type, title=title,
         category=category, status="DRAFT", owner_id=p.user_id, close_at=close_at, baseline_method=baseline_method,
         constraints=constraints, tco_params=tco_snapshot, savings_target_pct=savings_target_pct,
         should_cost=should_cost(should_cost_params) if should_cost_params else None, scoring_method=scoring_method,
@@ -521,7 +537,8 @@ def publish(session: Session, event: SourcingEvent) -> SourcingEvent:
     workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, event.close_at, {"round": event.round})
     outbox.emit(session, "sourcing.event.published", "SOURCING_EVENT", event.id, event.number,
                 {"category": event.category, "baselineMinor": event.baseline_price_minor, "closeAt": event.close_at.isoformat(),
-                 "lines": _published_lines(session, event)})
+                 "lines": _published_lines(session, event), "type": event.type,
+                 "openAt": event.open_at.isoformat() if event.open_at else None, "inviteeSupplierIds": _invitee_ids(session, event)})
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
     workflow.step(session, instance, "F3-02", outcome="published; weights locked")
     workflow.wait(session, instance, "F3-03", outcome=(f"round {event.round}: live reverse auction until {event.close_at.isoformat()} (soft close)"
@@ -1336,6 +1353,42 @@ def new_round(session: Session, event: SourcingEvent, close_at: datetime, note: 
     auction_svc.on_new_round(event)
     workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, close_at, {"round": event.round})
     workflow.wait(session, instance, "F3-03", outcome=f"round {event.round}: sealed bids until {close_at.isoformat()}")
+    outbox.emit(session, "sourcing.round.opened", "SOURCING_EVENT", event.id, event.number,
+                {"round": event.round, "closeAt": close_at.isoformat(), "note": note or None, "inviteeSupplierIds": _invitee_ids(session, event)})
+    return event
+
+
+def _invitee_ids(session: Session, event: SourcingEvent) -> list[str]:
+    return [str(i) for i in session.execute(select(Invitee.supplier_id).where(Invitee.event_id == event.id).order_by(Invitee.created_at)).scalars()]
+
+
+def extend_deadline(session: Session, event: SourcingEvent, close_at: datetime, reason: str) -> SourcingEvent:
+    """Move the bid deadline of a published or open event later (owner or category manager, reason required). Bids already sealed
+    stay sealed and valid; the clarification window moves with the deadline when it was derived from it; every invited supplier is
+    told (``sourcing.deadline.extended``). A deadline can only move later: an earlier close would cut short suppliers still preparing
+    their bid. A live reverse auction extends itself by its soft-close rule instead."""
+    auction_svc._require_manager(session, event)
+    abac.guard(session, "SOURCING_MANAGE", event)
+    reason = (reason or "").strip()
+    if not reason:
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for the extension", rule_ref="SRC-EXTEND")
+    if event.status not in ("PUBLISHED", "OPEN"):
+        raise illegal_transition("Sourcing event", event.number, event.status, "extend_deadline")
+    if event.type == "REVERSE_AUCTION":
+        raise rule_violation("A reverse auction is extended by its soft-close rule, not by hand", "SRC-EXTEND")
+    close_at = aware(close_at)
+    previous = event.close_at
+    if close_at is None or close_at <= previous:
+        raise rule_violation(f"The new deadline must be after the current one ({previous.isoformat()})", "SRC-EXTEND")
+    if close_at <= clock.now():
+        raise rule_violation("Close time must be in the future", "SRC-CLOSE")
+    event.close_at = close_at
+    workflow.create_timer(session, "SOURCING_CLOSE", "SOURCING_EVENT", event.id, close_at, {"round": event.round})
+    audit.record(session, "SOURCING_EVENT", event.id, "DEADLINE_EXTENDED", object_ref=event.number,
+                 before={"closeAt": previous.isoformat()}, after={"closeAt": close_at.isoformat(), "round": event.round}, reason=reason)
+    outbox.emit(session, "sourcing.deadline.extended", "SOURCING_EVENT", event.id, event.number,
+                {"round": event.round, "previousCloseAt": previous.isoformat(), "closeAt": close_at.isoformat(), "reason": reason,
+                 "inviteeSupplierIds": _invitee_ids(session, event)})
     return event
 
 
@@ -2449,3 +2502,49 @@ def bundle_preview(session: Session, selections: list[dict], *, kind: str = "PR_
             "companyCodes": sorted(companies), "origins": sorted(origins), "warnings": warnings,
             "estimatedValueMinor": sum(p["valueMinor"] for p in proposed),
             "note": "annual_qty defaults to the requirement quantity and monthly_qty to one twelfth of it: adjust before creating the event"}
+
+
+# ---------------------------------------------------------------- offer-validity expiry (flow fixes B9)
+OFFER_OPEN_EVENTS = ("CLOSED", "UNDER_EVALUATION", "AWARD_PENDING", "OPEN")
+
+
+def expire_offers(session: Session, *, dry_run: bool = False) -> dict:
+    """Bids whose offer validity (``valid_until``, given by the supplier) has passed while the event is still being evaluated or awarded:
+    each is recorded once in the audit trail (OFFER_EXPIRED) and the event owner is told, so the buyer asks the supplier to extend its
+    offer (or a new round) before awarding on a price the supplier no longer holds."""
+    from app.pic.services.notifications import _user, link_for, notify
+    today = clock.today()
+    expired = []
+    rows = session.execute(select(Bid, SourcingEvent).join(SourcingEvent, SourcingEvent.id == Bid.event_id).where(
+        Bid.valid_until.is_not(None), Bid.valid_until < today, Bid.status.in_(("SEALED", "UNSEALED")),
+        SourcingEvent.status.in_(OFFER_OPEN_EVENTS), Bid.round == SourcingEvent.round).order_by(SourcingEvent.number, Bid.created_at)).all()
+    for bid, event in rows:
+        supplier = session.get(Supplier, bid.supplier_id)
+        expired.append({"event": event.number, "supplier": supplier.code, "validUntil": bid.valid_until.isoformat()})
+        if dry_run:
+            continue
+        already = session.execute(select(AuditEvent.seq).where(AuditEvent.object_id == event.id, AuditEvent.action == "OFFER_EXPIRED",
+                                                              AuditEvent.after["bidId"].astext == str(bid.id)).limit(1)).first()
+        if already:
+            continue
+        audit.record(session, "SOURCING_EVENT", event.id, "OFFER_EXPIRED", object_ref=event.number,
+                     after={"bidId": str(bid.id), "supplier": supplier.code, "validUntil": bid.valid_until.isoformat(), "round": bid.round})
+        notify(session, _user(session, event.owner_id), kind="SOURCING_OFFER_EXPIRED", dedup_key=f"SOURCING_OFFER_EXPIRED:{bid.id}",
+               title=f"{event.number}: the offer of {supplier.code} has expired",
+               body=f"The offer of {supplier.legal_name} in {event.number} was valid until {bid.valid_until.isoformat()}. Ask the supplier to "
+                    "extend its validity, or run a new round, before awarding on this price.",
+               link=link_for("SOURCING_EVENT", event.number), object_type="SOURCING_EVENT", object_ref=event.number)
+    return {"expired": expired[:500], "count": len(expired), "dryRun": dry_run}
+
+
+def _register_jobs() -> None:
+    from app.pic.services import jobs
+
+    @jobs.job("bid-offer-expiry", name="Bid offer-validity expiry", schedule="30 0 * * *", dry_run=True,
+              description="Finds the bids whose offer validity has passed while their event is still open, in evaluation or awaiting the award "
+                          "decision, records each once (OFFER_EXPIRED) and tells the event owner.")
+    def bid_offer_expiry(ctx) -> dict:
+        return expire_offers(ctx.session, dry_run=ctx.dry_run)
+
+
+_register_jobs()

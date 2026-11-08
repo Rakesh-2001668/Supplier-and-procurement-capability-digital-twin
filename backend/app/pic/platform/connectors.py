@@ -233,7 +233,7 @@ class SapS4Simulator(Connector):
 
 
 # ---------------------------------------------------------------- SAP S/4HANA: sandbox simulator by default, the real connector when configured
-REF_LEN = {"PURCHASE_ORDER": 12, "SUPPLIER_INVOICE": 25, "SUPPLIER_CREDIT_MEMO": 25, "GOODS_RECEIPT": 25, "STOCK_POSTING": 25, "SUPPLIER_MASTER": 20,
+REF_LEN = {"PURCHASE_ORDER": 12, "SUPPLIER_INVOICE": 25, "SUPPLIER_CREDIT_MEMO": 25, "SUPPLIER_DEBIT_MEMO": 25, "GOODS_RECEIPT": 25, "STOCK_POSTING": 25, "SUPPLIER_MASTER": 20,
            "PURCHASE_REQUISITION": 40, "MATERIAL_MASTER": 40, "PAYMENT": 25}
 # message type -> (mapping key in sap_mapping.SERVICES, entity set, reference field, number field, select)
 SAP_FIND = {
@@ -241,6 +241,7 @@ SAP_FIND = {
     "PURCHASE_ORDER": ("A_PurchaseOrder", "CorrespncExternalReference", "PurchaseOrder"),
     "SUPPLIER_INVOICE": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
     "SUPPLIER_CREDIT_MEMO": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
+    "SUPPLIER_DEBIT_MEMO": ("A_SupplierInvoice", "DocumentHeaderText", "SupplierInvoice"),
     "GOODS_RECEIPT": ("A_MaterialDocumentHeader", "MaterialDocumentHeaderText", "MaterialDocument"),
     "STOCK_POSTING": ("A_MaterialDocumentHeader", "MaterialDocumentHeaderText", "MaterialDocument"),
     "SUPPLIER_MASTER": ("A_BusinessPartner", "SearchTerm1", "BusinessPartner"),
@@ -395,9 +396,18 @@ class SapS4(SapS4Simulator):
             material = session.get(Material, po_line.material_id) if po_line.material_id else None
             if material is None:
                 raise ConnectorRejected(f"{po.number} line {po_line.line_no} has no material: a goods movement needs one")
-            items.append({"material": material.number, "plant": po_line.plant, "storageLocation": po_line.storage_location, "po": po.erp_doc_no,
-                          "poItem": po_line.line_no, "qty": line["accepted"], "uom": po_line.uom})
-        return [i for i in items if Decimal(str(i["qty"])) > 0]
+            items.append({"material": material.number, "plant": po_line.plant,
+                          "storageLocation": line.get("storageLocation") or po_line.storage_location, "po": po.erp_doc_no,
+                          "poItem": po_line.line_no, "qty": line["accepted"], "uom": po_line.uom, "batch": line.get("batch") or None})
+        items = [i for i in items if Decimal(str(i["qty"])) > 0]
+        if not items and p.get("movement") == "102":
+            # Older reversal messages carried no lines: there is nothing a live system could post against (retry dead-letters it, visible).
+            raise ConnectorRejected(f"reversal of goods receipt {p.get('gr')} carries no lines: post the 102 in SAP against {p.get('reverses')}")
+        try:
+            sap_mapping.gr_movement(p)
+        except ValueError as exc:
+            raise ConnectorRejected(f"goods receipt {p.get('gr')}: {exc}")
+        return items
 
     def _stock_items(self, session: Session, message: IntegrationMessage, ctx: dict) -> list[dict]:
         """Material-document items of an inventory message (stock posting, count differences, reservation issue). The payload carries PIC keys
@@ -457,6 +467,33 @@ class SapS4(SapS4Simulator):
             raise ConnectorRejected(f"invoice {invoice.number} has no lines to post")
         return out
 
+    def _debit_items(self, session: Session, message: IntegrationMessage) -> list[dict]:
+        """Items of a supplier debit memo: PRICE lines against the SAP PO item of the invoice line (subsequent debit), CHARGE lines on the
+        G/L account for postings without PO items (PIC_ERP_SAP_S4_GL_ACCOUNT)."""
+        from app.pic.models import DebitNote, InvoiceLine, PoLine, PurchaseOrder
+        note = session.get(DebitNote, message.object_id)
+        if note is None:
+            raise ConnectorRejected(f"debit note {message.object_ref} not found")
+        lines = {l.line_no: l for l in session.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == note.invoice_id)).scalars()}
+        out = []
+        for entry in note.lines or []:
+            net = int(entry.get("netMinor") or 0)
+            if entry.get("kind") == "PRICE":
+                inv_line = lines.get(int(entry.get("invoice_line") or 0))
+                po_line = session.get(PoLine, inv_line.po_line_id) if inv_line is not None and inv_line.po_line_id else None
+                po = session.get(PurchaseOrder, po_line.po_id) if po_line is not None else None
+                if po is None or not po.erp_doc_no:
+                    raise ConnectorRejected(f"debit note {note.number} line {entry.get('invoice_line')}: no SAP purchase order item to debit")
+                out.append({"po": po.erp_doc_no, "poItem": po_line.line_no, "netMinor": net, "qty": entry.get("qty") or inv_line.qty, "uom": po_line.uom})
+            elif self.env("GL_ACCOUNT"):
+                out.append({"glAccount": self.env("GL_ACCOUNT"), "netMinor": net, "text": entry.get("description") or entry.get("charge")})
+            else:
+                raise ConnectorRejected(f"debit note {note.number}: the {entry.get('charge') or 'additional'} charge needs a G/L account; set "
+                                        "PIC_ERP_SAP_S4_GL_ACCOUNT")
+        if not out:
+            raise ConnectorRejected(f"debit note {note.number} has no lines to post")
+        return out
+
     def _supplier_master(self, session: Session, message: IntegrationMessage) -> dict:
         from app.pic.models import Supplier, SupplierBankAccount
         from app.pic.platform import crypto
@@ -489,6 +526,8 @@ class SapS4(SapS4Simulator):
             invoice = session.get(Invoice, message.object_id)
             scale = Decimal(p.get("grossMinor") or 0) / Decimal(invoice.gross_minor) if invoice is not None and invoice.gross_minor else None
             return sap_mapping.supplier_invoice(p, ctx, self._invoice_items(session, message, scale), credit=True)
+        if t == "SUPPLIER_DEBIT_MEMO":
+            return sap_mapping.supplier_debit_memo(p, ctx, self._debit_items(session, message))
         if t == "SUPPLIER_MASTER":
             return sap_mapping.business_partner(p, ctx, self._supplier_master(session, message))
         if t == "MATERIAL_MASTER":

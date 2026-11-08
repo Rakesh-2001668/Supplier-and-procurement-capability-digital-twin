@@ -345,7 +345,7 @@ export function MaterialDetail({ number }: { number: string }) {
 
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="MDM-04 · Material master" title={<>{m.number} <span className="text-base font-normal text-slate-500">{m.description}</span></>}
+      <PageHeader eyebrow="M03 · Material master (change requests: MDM-02 steward workbench)" title={<>{m.number} <span className="text-base font-normal text-slate-500">{m.description}</span></>}
         subtitle={<span className="inline-flex items-center gap-2"><StatusChip status={m.status} /> version {m.version} · {m.erp_synced ? 'in sync with ERP' : 'ERP update pending'}</span>}
         actions={<>
           <Link href="/pic/materials" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-50">Back to materials</Link>
@@ -430,7 +430,7 @@ export function ChangeRequestDetail({ number }: { number: string }) {
 
   return (
     <div className="space-y-5">
-      <PageHeader eyebrow="MDM-04 · Material change request" title={<>{r.number} <span className="text-base font-normal text-slate-500">{r.material} {r.materialDescription}</span></>}
+      <PageHeader eyebrow="MDM-02 · Steward workbench · Material change request" title={<>{r.number} <span className="text-base font-normal text-slate-500">{r.material} {r.materialDescription}</span></>}
         subtitle={<span className="inline-flex items-center gap-2"><StatusChip status={r.status === 'APPLIED' ? 'COMPLETED' : r.status} />
           {r.status === 'APPLIED' ? `material now at version ${r.to_version}` : `requested on version ${r.from_version}`}</span>}
         actions={<>

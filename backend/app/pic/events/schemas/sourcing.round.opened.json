@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.round.opened",
+  "title": "sourcing.round.opened",
+  "description": "Payload (outbox_event.payload) of sourcing.round.opened on SOURCING_EVENT. Produced by services/sourcing.py. A negotiation round of an event under evaluation was opened; every invited supplier is notified.",
+  "type": "object",
+  "properties": {
+    "round": {
+      "type": "integer"
+    },
+    "closeAt": {
+      "type": "string"
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "inviteeSupplierIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "round",
+    "closeAt",
+    "note",
+    "inviteeSupplierIds"
+  ],
+  "additionalProperties": true
+}

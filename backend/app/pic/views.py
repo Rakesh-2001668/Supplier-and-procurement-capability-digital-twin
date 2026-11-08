@@ -88,8 +88,11 @@ def sourcing_event(session: Session, event: SourcingEvent) -> dict:
     criteria = session.execute(select(Criterion).where(Criterion.event_id == event.id)).scalars().all()
     invitees = session.execute(select(Invitee).where(Invitee.event_id == event.id)).scalars().all()
     bids = session.execute(select(Bid).where(Bid.event_id == event.id)).scalars().all()
-    scenarios = session.execute(select(AwardScenario).where(AwardScenario.event_id == event.id)).scalars().all()
-    decisions = session.execute(select(AwardDecision).where(AwardDecision.event_id == event.id)).scalars().all()
+    # created_at is the business clock (pinned in seeds and tests): the time-ordered id (uuid7) breaks ties, so the order is always the creation order
+    scenarios = session.execute(select(AwardScenario).where(AwardScenario.event_id == event.id)
+                                .order_by(AwardScenario.created_at, AwardScenario.id)).scalars().all()
+    decisions = session.execute(select(AwardDecision).where(AwardDecision.event_id == event.id)
+                                .order_by(AwardDecision.created_at, AwardDecision.id)).scalars().all()
     pr_numbers = {r.id: r.number for r in session.execute(select(Requisition).where(
         Requisition.id.in_([l.requisition_id for l in lines if l.requisition_id]))).scalars()}
     return row(event, extra={

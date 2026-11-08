@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { ReactNode, useMemo, useState, useSyncExternalStore } from 'react';
 import { ObjectPage } from '@/components/pic/object';
 import { Button, DataTable, Dialog, Empty, Facts, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
@@ -26,6 +26,7 @@ type Contract = {
   under_tolerance_pct: string; price_tolerance_pct: string; target_value_minor: number; index_ref: IndexRef | null; source_event_id: string | null;
   thresholds_hit: number[] | null; rule_set_version: string; activated_at: string | null; version: number;
   terminated_at: string | null; termination_reason: string | null; framework_contract_id: string | null; jurisdiction: string | null;
+  renews_contract_id?: string | null; erp_doc_no?: string | null;
   lines: ContractLine[]; priceValidity: PriceValidity[]; clauses: Clause[]; signatures: Signature[]; pendingRedlines?: PendingRedline[];
   demoSignature?: boolean;
 };
@@ -55,7 +56,7 @@ export default function ContractPage() {
   const ready = cookie !== null;
   const user = useMemo<SessionUser | null>(() => (cookie === null ? null : readSessionUser()), [cookie]);
   const manager = ready && (!user || user.roles.includes('CONTRACT_MANAGER'));
-  const [dialog, setDialog] = useState<'sign' | 'index' | null>(null);
+  const [dialog, setDialog] = useState<'sign' | 'index' | 'renew' | null>(null);
   const [reviewing, setReviewing] = useState<PendingRedline | null>(null);
   const [amend, setAmend] = useState<AmendKind | null>(null);
   const amendRule = useAmendmentRule(c && AMENDABLE.includes(c.status) ? c.number : undefined);
@@ -97,6 +98,7 @@ export default function ContractPage() {
             )}
             {['ACTIVE', 'EXPIRING'].includes(c.status) && c.index_ref && <Button onClick={() => setDialog('index')}>Index reset</Button>}
             {AMENDABLE.includes(c.status) && <Button onClick={() => setAmend('VARIATION')}>Amend</Button>}
+            {AMENDABLE.includes(c.status) && <Button onClick={() => setDialog('renew')} title="A new contract for the next period; this one becomes RENEWED when it takes effect">Renew as successor</Button>}
             {AMENDABLE.includes(c.status) && <Button variant="danger" onClick={() => setAmend('TERMINATION')}>Terminate</Button>}
           </>
         )}
@@ -118,6 +120,7 @@ export default function ContractPage() {
               ['Activated', dateTime(c.activated_at)],
               ['Playbook', <span key="p" className="font-mono text-xs">{c.rule_set_version}</span>],
               ['Version', `v${c.version ?? 1}`],
+              ['ERP outline agreement', c.erp_doc_no ?? (['MASTER_AGREEMENT', 'NDA'].includes(c.type) ? 'not posted (no lines)' : '–')],
               ...(c.terminated_at ? [['Terminated', `${dateTime(c.terminated_at)} – ${c.termination_reason ?? ''}`] as [string, string]] : []),
             ]} />
             {AMENDABLE.includes(c.status) && <AmendmentSummary contractNumber={c.number} />}
@@ -169,6 +172,7 @@ export default function ContractPage() {
       />
       {c && dialog === 'sign' && <SignDialog contract={c} defaultName={user ? `${user.name}` : ''} onClose={() => setDialog(null)} />}
       {c && dialog === 'index' && c.index_ref && <IndexResetDialog contract={c} indexRef={c.index_ref} onClose={() => setDialog(null)} />}
+      {c && dialog === 'renew' && <RenewDialog contract={c} onClose={() => setDialog(null)} />}
       {c && reviewing && <RedlineReviewDialog contract={c} redline={reviewing} onClose={() => setReviewing(null)} />}
       {c && amend && <AmendmentDialog contract={c} initialKind={amend} noticeDays={amendRule?.noticeDays} onClose={() => setAmend(null)} />}
     </>
@@ -526,6 +530,37 @@ function IndexResetDialog({ contract, indexRef, onClose }: { contract: Contract;
           </div>
         </>
       )}
+    </Dialog>
+  );
+}
+
+
+// ---------------------------------------------------------------- renewal by a successor contract (TD §6 Renewed)
+function RenewDialog({ contract, onClose }: { contract: Contract; onClose: () => void }) {
+  const router = useRouter();
+  const dayAfter = new Date(`${contract.valid_to}T00:00:00`);
+  dayAfter.setDate(dayAfter.getDate() + 1);
+  const [validFrom, setValidFrom] = useState(dayAfter.toISOString().slice(0, 10));
+  const [validTo, setValidTo] = useState('');
+  const [reason, setReason] = useState('');
+  const renew = useCommand(() => api.post<{ number: string }>(`/contracts/${encodeURIComponent(contract.number)}/renewals`, {
+    reason: reason.trim(), valid_from: validFrom || undefined, valid_to: validTo || undefined,
+  }), { success: (r) => `Successor ${r.number} drafted`, onSuccess: (r) => router.push(`/pic/contracts/${encodeURIComponent(r.number)}`) });
+  const valid = reason.trim().length >= 3 && (!validTo || validTo > validFrom);
+  return (
+    <Dialog open title={`Renew ${contract.number} by a successor contract`} onClose={onClose}>
+      <p className="text-sm text-slate-600">The successor is drafted with the current lines and prices for the next period and goes through review, approval and
+        signature like any contract. {contract.number} becomes RENEWED once the successor is active and its validity has started. To extend this contract
+        itself, approve its renewal task or raise an extension amendment instead.</p>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <Field label="Valid from">{(id) => <Input id={id} type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} />}</Field>
+        <Field label="Valid to" hint="Default: the renewal period of rule CONTRACT-AMENDMENT">{(id) => <Input id={id} type="date" value={validTo} onChange={(e) => setValidTo(e.target.value)} />}</Field>
+        <div className="md:col-span-2"><Field label="Reason *">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Annual renewal at the agreed prices" />}</Field></div>
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={!valid} busy={renew.isPending} onClick={() => renew.mutate()}>Draft successor</Button>
+      </div>
     </Dialog>
   );
 }

@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,7 @@ class PurchaseOrder(TenantScoped, Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "number"),
         CheckConstraint("status IN (" + ",".join(f"'{s}'" for s in PO_STATUSES) + ")", name="status"),
+        Index("ix_purchase_order_touched", "tenant_id", text("coalesce(updated_at, created_at)")),  # net-change MRP (M02, migration 0023)
     )
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -53,6 +54,13 @@ class PurchaseOrder(TenantScoped, Base):
     # BP M06: an order to a supplier that is not Qualified/Preferred for the category is released only under rule ONE-TIME-VENDOR
     # {"reason", "requestedBy", "rule", "valueMinor", "approvedBy", "approvedAt"}
     one_time_vendor: Mapped[Optional[dict]] = mapped_column(JSONB)
+    # Flow fixes (migration 0024): how the order was created (REQUISITION | CONTRACT | PLANNED_ORDER | MANUAL) and, for an order in a
+    # currency other than the company code's, the reference exchange rate fixed at creation (company-currency units per unit of the
+    # order currency, rule-free: the FX table of M10) used for approval bands and ABAC value limits; the invoice fixes its own rate at posting.
+    origin: Mapped[str] = mapped_column(String(20), nullable=False, default="REQUISITION", server_default="REQUISITION")
+    fx_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 8))
+    fx_date: Mapped[Optional[date]] = mapped_column(Date)
+    reason: Mapped[Optional[str]] = mapped_column(Text)  # why a manual order was raised without a requisition (mandatory for MANUAL)
 
 
 class PoLine(TenantScoped, Base):
@@ -60,6 +68,7 @@ class PoLine(TenantScoped, Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "po_id", "line_no"),
         Index("ix_po_line_material_plant", "tenant_id", "material_id", "plant"),
+        Index("ix_po_line_plant_touched", "tenant_id", "plant", text("coalesce(updated_at, created_at)")),  # net-change MRP (migration 0023)
         # §5.2: a contract-priced line outside tolerance must carry a justification.
         CheckConstraint("NOT price_deviation OR deviation_reason IS NOT NULL", name="deviation_reason"),
     )
@@ -103,6 +112,8 @@ class PoLine(TenantScoped, Base):
     # M09 receipt tolerance in force for this line (receipt_tolerance override at PO creation); null = the order's tolerance
     over_tol_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
     under_tol_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    # Category SOW of the requisition line (pr_line.sow), copied when the line is created (services/requisition.py, migration 0023)
+    sow: Mapped[Optional[dict]] = mapped_column(JSONB)
 
 
 class PoVersion(TenantScoped, Base):
@@ -128,7 +139,8 @@ class PoConfirmation(TenantScoped, Base):
 
 class Asn(TenantScoped, Base):
     __tablename__ = "asn"
-    __table_args__ = (UniqueConstraint("tenant_id", "number"),)
+    __table_args__ = (UniqueConstraint("tenant_id", "number"),
+                      Index("ix_asn_touched", "tenant_id", text("coalesce(updated_at, created_at)")))  # net-change MRP (migration 0023)
     number: Mapped[str] = mapped_column(String(30), nullable=False)
     po_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.purchase_order.id"), nullable=False)
     supplier_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.supplier.id"), nullable=False)
@@ -210,7 +222,12 @@ class ReturnDelivery(TenantScoped, Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     replacement_required: Mapped[bool] = mapped_column(Boolean, default=False)
     credit_note_expected: Mapped[bool] = mapped_column(Boolean, default=True)
-    status: Mapped[str] = mapped_column(String(20), default="CREATED")
+    status: Mapped[str] = mapped_column(String(20), default="CREATED")  # CREATED | REPLACEMENT_DUE | CREDITED | REPLACED | CLOSED
+    # How the return was settled (flow fixes C1): quantity covered so far by credit notes or replacement receipts, the settling documents
+    # [{"type": "CREDIT_NOTE"|"GOODS_RECEIPT"|"MANUAL", "ref", "qty", "at"}] and when it was closed.
+    settled_qty: Mapped[Decimal] = mapped_column(QTY, nullable=False, default=0, server_default="0")
+    settlements: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 class ServiceEntry(TenantScoped, Base):

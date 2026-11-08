@@ -70,6 +70,8 @@ class EventLine(TenantScoped, Base):
     lot_code: Mapped[Optional[str]] = mapped_column(String(20))  # lines of one lot can be bid and awarded as a bundle
     baseline_price_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
     need_date: Mapped[Optional[date]] = mapped_column(Date)  # earliest need date of the requirement lines behind this line
+    # Category SOW of the requisition line (pr_line.sow), copied when the line is created (services/requisition.py, migration 0023)
+    sow: Mapped[Optional[dict]] = mapped_column(JSONB)
 
 
 class Invitee(TenantScoped, Base):
@@ -273,6 +275,10 @@ class Contract(TenantScoped, Base):
     framework_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract.id"))  # call-off of a master agreement
     jurisdiction: Mapped[Optional[str]] = mapped_column(String(10))  # governing-law code of the clause library variant (IN-MH, IN-DL, ...)
     category: Mapped[Optional[str]] = mapped_column(String(40))  # category whose clause overlay (CLM-PLAYBOOK.categoryClauses) the draft used
+    # Flow fixes (migration 0024): the contract this one renews (successor renewal; the predecessor becomes RENEWED) and the ERP outline
+    # agreement number of its current version (message OUTLINE_AGREEMENT).
+    renews_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract.id"))
+    erp_doc_no: Mapped[Optional[str]] = mapped_column(String(40))
 
 
 class ContractLine(TenantScoped, Base):

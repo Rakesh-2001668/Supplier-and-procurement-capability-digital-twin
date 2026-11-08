@@ -20,8 +20,10 @@ type MaterialRequest = {
   valuation_class: string | null; hsn_code: string | null; mpn: string | null; attributes: Record<string, unknown>;
   source_pr_id: string | null; source_pr_line: number | null; duplicate_score: string | null; duplicate_candidates: Candidate[] | null;
   override_reason: string | null; material_id: string | null; merged_into_material_id: string | null; rule_set_version: string | null;
-  requested_by: string; created_at: string; updated_at: string | null;
+  requested_by: string; created_at: string; updated_at: string | null; mrp_type?: string | null; withdrawal_reason?: string | null;
 };
+/** States in which the requester may withdraw a request (POST /materials/requests/{n}/withdraw), a blocked duplicate included. */
+const WITHDRAWABLE = ['DRAFT', 'DUPLICATE_CHECK', 'DUPLICATE_BLOCKED', 'IN_STEWARDSHIP'];
 type Task = { id: string; name: string; kind: string; object_ref: string; status?: string; due_at: string | null };
 type Me = { userId: string; roles: string[] };
 type Material = { id: string; number: string; description: string };
@@ -45,7 +47,7 @@ function MaterialRequestPage() {
   const me = useApi<Me>('/me');
   // The request carries material ids only; resolve created / merged material numbers from the master list.
   const materials = useApi<{ items: Material[] }>('/materials?limit=200');
-  const [dialog, setDialog] = useState<'override' | null>(null);
+  const [dialog, setDialog] = useState<'override' | 'withdraw' | null>(null);
 
   if (isLoading) return <Loading />;
   if (error || !mr) return <ProblemBox error={error} />;
@@ -68,8 +70,14 @@ function MaterialRequestPage() {
             <StatusChip status={mr.status} />
           </div>
         </div>
-        {mr.status === 'DUPLICATE_BLOCKED' && isSteward && <Button onClick={() => setDialog('override')}>Steward override</Button>}
+        <div className="flex gap-2">
+          {WITHDRAWABLE.includes(mr.status) && isRequester && <Button variant="danger" onClick={() => setDialog('withdraw')}>Withdraw request</Button>}
+          {mr.status === 'DUPLICATE_BLOCKED' && isSteward && <Button onClick={() => setDialog('override')}>Steward override</Button>}
+        </div>
       </div>
+      {mr.status === 'WITHDRAWN' && (
+        <p role="status" className="rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-800"><span className="font-semibold">Withdrawn by the requester · </span>{mr.withdrawal_reason}</p>
+      )}
 
       {mr.status === 'DUPLICATE_BLOCKED' && (
         <div role="status" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -84,7 +92,7 @@ function MaterialRequestPage() {
         <Facts items={[
           ['Status', label(mr.status)], ['Duplicate score', pct(mr.duplicate_score)], ['Type', label(mr.type)], ['Base UoM', mr.base_uom],
           ['Material group', mr.material_group], ['Category', mr.category], ['HSN code', mr.hsn_code ?? '–'], ['MPN', mr.mpn ?? '–'],
-          ['Valuation class', mr.valuation_class ?? '–'],
+          ['Valuation class', mr.valuation_class ?? '–'], ['MRP type', mr.mrp_type ?? 'tenant default'],
           ['Source requisition', mr.source_pr_id ? <Link className="text-[#1A56DB] hover:underline" href={`/pic/requisitions/${mr.source_pr_id}`}>line {mr.source_pr_line} →</Link> : '–'],
           ['Material created', materialNo(mr.material_id) ?? '–'], ['Merged into', materialNo(mr.merged_into_material_id) ?? '–'],
           ['Override reason', mr.override_reason ?? '–'], ['Rules', mr.rule_set_version ?? '–'], ['Requested', dateTime(mr.created_at)],
@@ -118,6 +126,7 @@ function MaterialRequestPage() {
       </Card>
 
       {dialog === 'override' && <OverrideDialog mr={mr} onClose={() => setDialog(null)} />}
+      {dialog === 'withdraw' && <WithdrawDialog mr={mr} onClose={() => setDialog(null)} />}
     </div>
   );
 }
@@ -174,6 +183,23 @@ function StewardDecision({ mr, task }: { mr: MaterialRequest; task: Task }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function WithdrawDialog({ mr, onClose }: { mr: MaterialRequest; onClose: () => void }) {
+  const [reason, setReason] = useState('');
+  const withdraw = useCommand(() => api.post(`/materials/requests/${mr.number}/withdraw`, { reason: reason.trim() }),
+    { success: `${mr.number} withdrawn`, onSuccess: onClose });
+  return (
+    <Dialog open title={`Withdraw ${mr.number}`} onClose={onClose}>
+      <p className="text-sm text-slate-700">The request is closed as withdrawn and any open steward tasks are cancelled. The audit trail keeps the reason.</p>
+      <div className="mt-3"><Field label="Reason *">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field></div>
+      <div className="mt-3"><ProblemBox error={withdraw.error} /></div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Keep it</Button>
+        <Button variant="danger" busy={withdraw.isPending} disabled={reason.trim().length < 3} onClick={() => withdraw.mutate()}>Withdraw request</Button>
+      </div>
+    </Dialog>
   );
 }
 

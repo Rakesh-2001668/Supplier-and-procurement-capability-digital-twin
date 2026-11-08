@@ -16,7 +16,7 @@ export default function ReservationPage() {
   const a = r?.availabilityAtCreation;
   return (
     <ObjectPage
-      type="STOCK_RESERVATION" docRef={r?.number ?? ''} eyebrow="INV-05 · Reservation" loading={isLoading} error={error}
+      type="STOCK_RESERVATION" docRef={r?.number ?? ''} eyebrow="STK-05 · Reservation" loading={isLoading} error={error}
       title={<>{r?.number} <span className="text-base font-normal text-slate-500">{r?.description}</span></>}
       status={r?.status}
       actions={r && <ReservationActions reservation={r} />}

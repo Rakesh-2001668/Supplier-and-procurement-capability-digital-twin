@@ -35,6 +35,8 @@ def consumer(topic: str, name: str):
 
 def emit(session: Session, topic: str, object_type: str, object_id: uuid.UUID, object_ref: str, payload: dict) -> OutboxEvent:
     principal = session.info.get("principal")
+    if object_ref is not None and len(object_ref) > 60:  # outbox_event.object_ref is VARCHAR(60): cut a long reference, the object id is the key
+        object_ref = object_ref[:59] + "…"
     event = OutboxEvent(
         id=uuid.uuid7(), tenant_id=current_tenant(session), topic=topic, object_type=object_type, object_id=object_id,
         object_ref=object_ref, payload=jsonable(payload), actor=principal.actor if principal else "system",

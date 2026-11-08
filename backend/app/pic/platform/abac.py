@@ -64,15 +64,29 @@ FINANCE_ACTIONS = {
     "INVOICE_RESOLVE": {"check": ["company_code"]},
     "PERIOD_CLOSE": {"check": ["company_code"]},
 }
-ADDED_ACTIONS = {**INVENTORY_ACTIONS, **FINANCE_ACTIONS}
+# Flow fixes (M11): recording a negotiated price on an initiative someone else owns is limited to the categories of the user.
+SAVINGS_ACTIONS = {"SAVINGS_MANAGE": {"check": ["category"]}}
+# Supplier master governance (flow fixes M06, B7): a supplier carries no company code or plant of its own, so these actions are checked
+# against the supplier's scope instead (``supplier_scope``): its live categories and the company codes it holds contracts or orders in.
+SUPPLIER_ACTIONS = {
+    "SUPPLIER_BANK_CHANGE": {"check": ["company_code", "category"]},
+    "SUPPLIER_MASTER_CHANGE": {"check": ["company_code", "category"]},
+}
+# Flow fixes (M02, A5): an MRP controller runs MRP and firms, converts, cancels or unfirms planned orders (and closes exception
+# messages) only for the plants in their attributes.
+# Hosted catalogue maintenance (M04, A11): limited to the categories of the user.
+PLANNING_ACTIONS = {"MRP_RUN": {"check": ["plant"]}, "MRP_PLAN": {"check": ["plant"]}, "CATALOGUE_MANAGE": {"check": ["category"]}}
+ADDED_ACTIONS = {**INVENTORY_ACTIONS, **FINANCE_ACTIONS, **SAVINGS_ACTIONS, **SUPPLIER_ACTIONS, **PLANNING_ACTIONS}
 DEFAULT_POLICY["actions"].update(ADDED_ACTIONS)
 
 # Approval task kind -> ABAC action (workflow.complete calls ``guard_task``).
 TASK_ACTIONS = {
     "REQ_APPROVAL": "REQ_APPROVE", "PO_APPROVAL": "PO_APPROVE", "PO_CHANGE_APPROVAL": "PO_APPROVE", "PO_CHANGE_REVIEW": "PO_APPROVE",
-    "AWARD_APPROVAL": "AWARD_APPROVE", "CONTRACT_APPROVAL": "CONTRACT_SIGN", "BANK_CHANGE": "SUPPLIER_CHANGE",
+    "AWARD_APPROVAL": "AWARD_APPROVE", "CONTRACT_APPROVAL": "CONTRACT_SIGN", "BANK_CHANGE": "SUPPLIER_BANK_CHANGE",
+    "SUPPLIER_MASTER_CHANGE": "SUPPLIER_MASTER_CHANGE",
     "SES_APPROVAL": "INVOICE_APPROVE", "MDM_STEWARD": "MASTER_CHANGE",
     "STOCK_POSTING_APPROVAL": "INVENTORY_APPROVE", "PHYSICAL_INVENTORY_APPROVAL": "INVENTORY_APPROVE",
+    "INVOICE_APPROVAL": "INVOICE_APPROVE",  # invoice approval chain by value band (services/payables.py): each approver's value limit
 }
 VALUE_FIELDS = ("total_minor", "gross_minor", "net_minor", "amount_minor", "target_value_minor", "award_value_minor", "total_value_minor")
 MODES = ("ENFORCE", "AUDIT", "OFF")
@@ -234,6 +248,10 @@ def guard_task(session, task, decision: str) -> None:
     action = TASK_ACTIONS.get(task.kind)
     if action is None or decision.upper() != "APPROVE":
         return
+    supplier = _supplier_of(session, task.object_type, task.object_id)
+    if supplier is not None:
+        authorize_supplier(session, session.info.get("principal"), action, supplier)
+        return
     obj = _document(session, task.object_type, task.object_id)
     if obj is not None:
         guard(session, action, obj)
@@ -246,6 +264,91 @@ def _document(session, object_type: str, object_id):
              "MATERIAL_REQUEST": models.MaterialRequest, "STOCK_POSTING": models.StockPosting,
              "PHYSICAL_INVENTORY": models.PhysicalInventory}.get(object_type)
     return session.get(model, object_id) if model is not None else None
+
+
+# ---------------------------------------------------------------- supplier master governance (B7)
+SUPPLIER_DOCUMENTS = ("BANK_CHANGE", "SUPPLIER_MASTER_CHANGE")
+
+
+def _supplier_of(session, object_type: str, object_id):
+    """The supplier a bank change or supplier master change task is about (None for any other document)."""
+    if object_type not in SUPPLIER_DOCUMENTS:
+        return None
+    from app.pic import models
+    change = session.get(models.BankChangeRequest if object_type == "BANK_CHANGE" else models.SupplierMasterChange, object_id)
+    return session.get(models.Supplier, change.supplier_id) if change is not None else None
+
+
+def supplier_scope(session, supplier) -> dict:
+    """{"category": [...], "company_code": [...]} of a supplier: the categories it is registered for (not EXITED) and the company codes
+    it holds contracts or purchase orders in. A supplier with no contract or order yet may be used by every company code of the tenant,
+    so it is scoped to all of them (a user assigned only to a company code the tenant does not have is still refused). An empty
+    category list (no registration) leaves that dimension unchecked."""
+    from app.pic import models
+    categories = sorted(set(session.execute(select(models.SupplierCategoryStatus.category).where(
+        models.SupplierCategoryStatus.supplier_id == supplier.id, models.SupplierCategoryStatus.status != "EXITED")).scalars()))
+    companies = set(session.execute(select(models.Contract.company_code).where(models.Contract.supplier_id == supplier.id)).scalars())
+    companies |= set(session.execute(select(models.PurchaseOrder.company_code).where(models.PurchaseOrder.supplier_id == supplier.id)).scalars())
+    if not companies:
+        companies = set(session.execute(select(models.CompanyCode.code).where(models.CompanyCode.active.is_(True))).scalars())
+    return {"category": categories, "company_code": sorted(companies)}
+
+
+def _evaluate_supplier(session, principal, action: str, supplier) -> tuple[dict, dict]:
+    """(evaluation, dimensions) of a supplier master action for the principal: a supplier spans several categories and company codes, the
+    user needs one of each (the dimension value checked is a matching one, else all of them)."""
+    attributes = _attributes(session, principal)
+    policy = policy_for(session)
+    dims: dict = {"company_code": None, "plant": None, "category": None}
+    for dimension, values in supplier_scope(session, supplier).items():
+        if not values:
+            continue
+        attribute = (policy.get("dimensions") or {}).get(dimension)
+        allowed = _allowed(attributes, attribute) if attribute else None
+        if allowed is None or "*" in allowed:
+            dims[dimension] = values[0]
+            continue
+        matching = [v for v in values if str(v) in {str(a) for a in allowed}]
+        dims[dimension] = matching[0] if matching else ",".join(str(v) for v in values)
+    return evaluate(policy, attributes, action, dims), dims
+
+
+def task_allowed(session, principal, task) -> bool:
+    """Whether approving ``task`` would pass the ABAC check of ``guard_task`` for ``principal`` (company code, plant, category, value limit;
+    supplier scope for bank and master changes). Pure: no audit, no exception. The task inbox and the notification recipients use it so an
+    approver never sees, and is never asked to work, a task the guard would refuse (B7)."""
+    action = TASK_ACTIONS.get(task.kind)
+    if action is None or principal is None or getattr(principal, "is_agent", False) or (principal.attributes or {}).get("mfa_enrolment"):
+        return True
+    supplier = _supplier_of(session, task.object_type, task.object_id)
+    if supplier is not None:
+        result, _ = _evaluate_supplier(session, principal, action, supplier)
+    else:
+        obj = _document(session, task.object_type, task.object_id)
+        if obj is None:
+            return True
+        dims, value = dimensions_of(obj)
+        if value is not None:
+            value = _in_company_currency(session, obj, dims.get("company_code"), value)
+        policy = policy_for(session, company_code=dims.get("company_code"), plant=dims.get("plant"), category=dims.get("category"))
+        result = evaluate(policy, _attributes(session, principal), action, dims, value)
+    return bool(result["allowed"] or not result["enforced"])
+
+
+def authorize_supplier(session, principal, action: str, supplier) -> dict:
+    """``authorize`` for a supplier master action: the user must be assigned to at least one of the supplier's categories and to one of
+    its company codes (a supplier manager scoped to MRO may not request or approve a change of a FORGINGS-only supplier). Raises 403
+    FORBIDDEN (ruleRef ABAC) like every other check and audits the denial."""
+    if principal is None or principal.is_agent or principal.attributes.get("mfa_enrolment"):
+        return {"allowed": True, "enforced": False, "mode": "AGENT", "checked": [], "violations": [], "action": action}
+    result, dims = _evaluate_supplier(session, principal, action, supplier)
+    if result["allowed"]:
+        return result
+    _audit_denial(session, principal, action, supplier, result, dims, None)
+    if not result["enforced"]:
+        return result
+    raise Problem(403, result["violations"][0]["code"], "; ".join(describe(v) for v in result["violations"]), rule_ref="ABAC",
+                  action=action, violations=[{k: v for k, v in x.items() if k != "allowed"} for x in result["violations"]])
 
 
 def _audit_denial(session, principal, action: str, obj: Any, result: dict, dims: dict, value: Optional[int]) -> None:

@@ -44,6 +44,18 @@ SES_SM = StateMachine("SERVICE_ENTRY", {
     ("REJECTED", "submit"): "SUBMITTED",
     ("APPROVED", "revoke"): "REVOKED",
 })
+# Return deliveries (flow fixes C1): a return awaiting a credit note is CREDITED when quantity credit notes cover it, one awaiting a
+# replacement is REPLACED when the replacement is received; either can be CLOSED by hand (with a reason) when nothing more is due.
+RD_SM = StateMachine("RETURN_DELIVERY", {
+    ("CREATED", "request_replacement"): "REPLACEMENT_DUE",
+    ("CREATED", "credit"): "CREDITED",
+    ("REPLACEMENT_DUE", "replace"): "REPLACED",
+    ("REPLACED", "reopen"): "REPLACEMENT_DUE",   # the replacement receipt was reversed (102)
+    ("CREATED", "close"): "CLOSED",
+    ("REPLACEMENT_DUE", "close"): "CLOSED",
+})
+OPEN_RETURNS = ("CREATED", "REPLACEMENT_DUE")
+RETURN_STATUSES = ("CREATED", "REPLACEMENT_DUE", "CREDITED", "REPLACED", "CLOSED")
 
 # P08 purchase types that move stock at goods receipt, and the stock types of the special stocks (BP §22).
 STOCK_PURCHASE_TYPES = ("STOCK", "CONSIGNMENT", "SUBCONTRACTING")
@@ -298,6 +310,7 @@ def post_gr(session: Session, po: PurchaseOrder, *, lines: list[dict], asn: Opti
         if not line.quality_managed:
             line.accepted_qty += qty
         order_svc.allocate_receipts(session, po, line)
+        _settle_by_receipt(session, gr, gr_line)  # C1: a receipt on a line that owes a replacement settles the return(s) first
         if line.material_id and line.purchase_type in STOCK_PURCHASE_TYPES:
             _move(session, material_id=line.material_id, plant=line.plant, sloc=sloc, stock_type=stock_type, batch=batch, qty=qty,
                   movement="101", ref_type="GOODS_RECEIPT", ref_id=gr.id, ref=gr.number)
@@ -437,7 +450,9 @@ def _complete_receipt(session: Session, gr: GoodsReceipt, instance, outcome: str
                                   idempotency_key=f"GR|{gr.number}",
                                   object_type="GOODS_RECEIPT", object_id=gr.id, object_ref=gr.number,
                                   payload={"gr": gr.number, "po": po.number, "companyCode": po.company_code,
-                                           "lines": [{"poLine": str(l.po_line_id), "accepted": str(l.accepted_qty)}
+                                           "lines": [{"poLine": str(l.po_line_id), "accepted": str(l.accepted_qty),
+                                                      **({"batch": l.batch} if l.batch else {}),
+                                                      **({"storageLocation": l.storage_location} if l.storage_location else {})}
                                                      for l in session.execute(select(GrLine).where(GrLine.gr_id == gr.id)).scalars()],
                                            **({"capitalisation": capitalised} if capitalised else {})})
     integration.process(session, message)
@@ -512,11 +527,16 @@ def _after_reversal(session: Session, gr: GoodsReceipt, was: str, reason: str) -
     original = session.execute(select(IntegrationMessage).where(IntegrationMessage.idempotency_key == f"GR|{gr.number}",
                                                                 IntegrationMessage.status == "POSTED")).scalar_one_or_none()
     erp_reversal = None
+    _unsettle_by_receipt(session, gr)  # C1: a reversed replacement receipt leaves its return(s) due again
     if original is not None:
+        # C2: the reversal carries the lines the ERP received with the 101 (same PO items, quantities and batches), so a live connector
+        # can post the 102 against the PO items; the simulator ignores them.
+        lines = [dict(line) for line in (original.payload or {}).get("lines") or []]
         message = integration.enqueue(session, target_system=original.target_system, message_type="GOODS_RECEIPT",
                                       idempotency_key=f"GR|{gr.number}|102", object_type="GOODS_RECEIPT", object_id=gr.id,
                                       object_ref=gr.number, payload={"gr": gr.number, "po": po.number, "companyCode": po.company_code,
-                                                                     "movement": "102", "reverses": original.erp_doc_no, "reason": reason})
+                                                                     "movement": "102", "reverses": original.erp_doc_no, "reason": reason,
+                                                                     "lines": lines})
         integration.process(session, message)
         erp_reversal = message.erp_doc_no or message.status
     audit.record(session, "GOODS_RECEIPT", gr.id, "REVERSAL_COMPLETED", object_ref=gr.number, reason=reason,
@@ -543,6 +563,8 @@ def _reopen_for_replacement(session: Session, rd: ReturnDelivery, po: PurchaseOr
     if po_line.rejected_qty < rd.qty or po_line.received_qty < rd.qty:
         raise rule_violation(f"{rd.number}: {jsonable(rd.qty)} returned but the line holds only {jsonable(po_line.rejected_qty)} rejected; "
                              "this return is settled by credit note", "RCV-RETURN")
+    if not RD_SM.can(rd.status, "request_replacement"):
+        raise illegal_transition("Return delivery", rd.number, rd.status, "request replacement")
     po_line.received_qty -= rd.qty
     po_line.rejected_qty -= rd.qty
     po_line.shipped_qty = max(po_line.shipped_qty - rd.qty, Decimal(0))
@@ -566,6 +588,173 @@ def request_replacement(session: Session, rd: ReturnDelivery, reason: Optional[s
     if reason:
         audit.record(session, "RETURN_DELIVERY", rd.id, "REPLACEMENT_REASON", object_ref=rd.number, reason=reason)
     return rd
+
+
+def _settle(session: Session, rd: ReturnDelivery, qty: Decimal, kind: str, ref: str) -> Decimal:
+    """Book ``qty`` of a settling document (credit note or replacement receipt) against an open return; the return is CREDITED /
+    REPLACED (audited, event) once its whole quantity is covered. Returns the quantity taken."""
+    take = min(D(qty), D(rd.qty) - D(rd.settled_qty or 0))
+    if take <= 0:
+        return Decimal(0)
+    rd.settled_qty = D(rd.settled_qty or 0) + take
+    rd.settlements = [*(rd.settlements or []), {"type": kind, "ref": ref, "qty": jsonable(take), "at": clock.now().isoformat()}]
+    po_line = session.get(PoLine, rd.po_line_id)
+    po = session.get(PurchaseOrder, po_line.po_id)
+    if rd.settled_qty < rd.qty:
+        audit.record(session, "RETURN_DELIVERY", rd.id, "PARTIALLY_SETTLED", object_ref=rd.number, rule_set_version="RCV-RETURN",
+                     after={"by": kind, "ref": ref, "qty": jsonable(take), "settledQty": jsonable(rd.settled_qty), "qtyReturned": jsonable(rd.qty)})
+        return take
+    rd.closed_at = clock.now()
+    detail = {"po": po.number, "poLine": po_line.line_no, "qty": jsonable(rd.qty), "settlements": rd.settlements, "supplierId": str(po.supplier_id)}
+    if kind == "CREDIT_NOTE":
+        RD_SM.apply(session, rd, "credit", rule_set_version="RCV-RETURN", extra_after={"creditNotes": [x["ref"] for x in rd.settlements]})
+        outbox.emit(session, "return_delivery.credited", "RETURN_DELIVERY", rd.id, rd.number, detail)
+    else:
+        RD_SM.apply(session, rd, "replace", rule_set_version="RCV-RETURN", extra_after={"receipts": [x["ref"] for x in rd.settlements]})
+        outbox.emit(session, "return_delivery.replaced", "RETURN_DELIVERY", rd.id, rd.number, detail)
+    return take
+
+
+def settle_by_credit_note(session: Session, invoice: Invoice, note, return_delivery: Optional[str] = None) -> list[str]:
+    """A supplier credit note was received: its quantity lines settle the open returns awaiting a credit note on the same PO lines (oldest
+    first), or only the return named by the supplier / AP (``return_delivery``). Value (price-difference) lines settle no return.
+    Returns the numbers of the returns the note closed."""
+    by_line = {l.line_no: l for l in session.execute(select(InvoiceLine).where(InvoiceLine.invoice_id == invoice.id)).scalars()}
+    credited_lines = {by_line[int(e["invoice_line"])].po_line_id for e in note.lines
+                      if e.get("unitCreditMinor") is None and int(e["invoice_line"]) in by_line}
+    named = None
+    if return_delivery:
+        named = session.execute(select(ReturnDelivery).where(ReturnDelivery.number == return_delivery).with_for_update()).scalar_one_or_none()
+        if named is None:
+            raise Problem(404, "NOT_FOUND", f"Return delivery {return_delivery} not found")
+        if named.po_line_id not in credited_lines:
+            raise rule_violation(f"{named.number} is not on an order line this credit note credits by quantity", "RCV-RETURN")
+        if named.status != "CREATED" or not named.credit_note_expected:
+            raise illegal_transition("Return delivery", named.number, named.status, "credit")
+    closed = []
+    for entry in note.lines:
+        if entry.get("unitCreditMinor") is not None:
+            continue
+        line = by_line.get(int(entry["invoice_line"]))
+        if line is None or line.po_line_id is None:
+            continue
+        left = D(entry["qty"])
+        candidates = [named] if named is not None else session.execute(
+            select(ReturnDelivery).where(ReturnDelivery.po_line_id == line.po_line_id, ReturnDelivery.status == "CREATED",
+                                         ReturnDelivery.credit_note_expected.is_(True))
+            .order_by(ReturnDelivery.created_at, ReturnDelivery.number).with_for_update()).scalars().all()
+        for rd in candidates:
+            if rd.po_line_id != line.po_line_id or left <= 0 or rd.status != "CREATED":
+                continue
+            left -= _settle(session, rd, left, "CREDIT_NOTE", note.number)
+            if rd.status == "CREDITED":
+                closed.append(rd.number)
+    return closed
+
+
+def _settle_by_receipt(session: Session, gr: GoodsReceipt, gr_line: GrLine) -> None:
+    """A receipt on a PO line that owes a replacement (returns in REPLACEMENT_DUE) settles them first, oldest first."""
+    left = D(gr_line.qty)
+    for rd in session.execute(select(ReturnDelivery).where(ReturnDelivery.po_line_id == gr_line.po_line_id,
+                                                           ReturnDelivery.status == "REPLACEMENT_DUE")
+                              .order_by(ReturnDelivery.created_at, ReturnDelivery.number).with_for_update()).scalars().all():
+        if left <= 0:
+            break
+        left -= _settle(session, rd, left, "GOODS_RECEIPT", gr.number)
+
+
+def _unsettle_by_receipt(session: Session, gr: GoodsReceipt) -> None:
+    """The replacement receipt was reversed (102): the returns it settled are due again."""
+    po_lines = list(session.execute(select(GrLine.po_line_id).where(GrLine.gr_id == gr.id)).scalars())
+    for rd in session.execute(select(ReturnDelivery).where(ReturnDelivery.po_line_id.in_(po_lines or [uuid.UUID(int=0)]),
+                                                           ReturnDelivery.status.in_(("REPLACEMENT_DUE", "REPLACED")))).scalars().all():
+        taken = [x for x in rd.settlements or [] if x.get("type") == "GOODS_RECEIPT" and x.get("ref") == gr.number]
+        if not taken:
+            continue
+        qty = sum((D(x["qty"]) for x in taken), Decimal(0))
+        rd.settled_qty = max(D(rd.settled_qty or 0) - qty, Decimal(0))
+        rd.settlements = [x for x in rd.settlements if x not in taken]
+        if rd.status == "REPLACED":
+            rd.closed_at = None
+            RD_SM.apply(session, rd, "reopen", reason=f"replacement receipt {gr.number} reversed", rule_set_version="RCV-RETURN")
+        else:
+            audit.record(session, "RETURN_DELIVERY", rd.id, "SETTLEMENT_REVERSED", object_ref=rd.number,
+                         after={"receipt": gr.number, "qty": jsonable(qty), "settledQty": jsonable(rd.settled_qty)})
+
+
+def close_return(session: Session, rd: ReturnDelivery, reason: str) -> ReturnDelivery:
+    """Close an open return by hand when nothing more is due (e.g. the rejected quantity was never invoiced, or the supplier settled it
+    outside PIC). The reason is required and audited; the return keeps what was settled before."""
+    if len((reason or "").strip()) < 10:
+        raise Problem(422, "REASON_REQUIRED", "Say why the return is closed without a credit note or replacement (at least 10 characters)",
+                      rule_ref="RCV-RETURN")
+    po_line = session.get(PoLine, rd.po_line_id)
+    po = session.get(PurchaseOrder, po_line.po_id)
+    abac.guard(session, "STOCK_MOVE", po, plant=po_line.plant)
+    RD_SM.apply(session, rd, "close", reason=reason, rule_set_version="RCV-RETURN",
+                extra_after={"settledQty": jsonable(rd.settled_qty or 0), "qty": jsonable(rd.qty)})
+    rd.settlements = [*(rd.settlements or []), {"type": "MANUAL", "ref": principal(session).email,
+                                                "qty": jsonable(max(D(rd.qty) - D(rd.settled_qty or 0), Decimal(0))),
+                                                "at": clock.now().isoformat(), "reason": reason}]
+    rd.closed_at = clock.now()
+    outbox.emit(session, "return_delivery.closed", "RETURN_DELIVERY", rd.id, rd.number,
+                {"po": po.number, "poLine": po_line.line_no, "qty": jsonable(rd.qty), "reason": reason, "supplierId": str(po.supplier_id)})
+    return rd
+
+
+def return_view(session: Session, rd: ReturnDelivery, *, po_line: Optional[PoLine] = None, po: Optional[PurchaseOrder] = None,
+                gr_number: Optional[str] = None, supplier: Optional[Supplier] = None) -> dict:
+    po_line = po_line or session.get(PoLine, rd.po_line_id)
+    po = po or session.get(PurchaseOrder, po_line.po_id)
+    supplier = supplier or session.get(Supplier, po.supplier_id)
+    if gr_number is None:
+        gr_number = session.execute(select(GoodsReceipt.number).where(GoodsReceipt.id == rd.gr_id)).scalar_one_or_none()
+    material = session.get(Material, po_line.material_id) if po_line.material_id else None
+    open_qty = max(D(rd.qty) - D(rd.settled_qty or 0), Decimal(0)) if rd.status in OPEN_RETURNS else Decimal(0)
+    return {"id": str(rd.id), "number": rd.number, "status": rd.status, "gr": gr_number, "po": po.number, "poLine": po_line.line_no,
+            "supplier": supplier.code if supplier else None, "supplierName": supplier.legal_name if supplier else None,
+            "material": material.number if material else None, "description": po_line.description, "uom": po_line.uom, "plant": po_line.plant,
+            "qty": jsonable(rd.qty), "settledQty": jsonable(rd.settled_qty or 0), "openQty": jsonable(open_qty),
+            "valueMinor": line_amount(D(rd.qty), po_line.unit_price_minor), "openValueMinor": line_amount(open_qty, po_line.unit_price_minor),
+            "reason": rd.reason, "replacementRequired": rd.replacement_required, "creditNoteExpected": rd.credit_note_expected,
+            "settlements": rd.settlements or [], "createdAt": rd.created_at.isoformat() if rd.created_at else None,
+            "closedAt": rd.closed_at.isoformat() if rd.closed_at else None, "version": rd.row_version}
+
+
+def list_returns(session: Session, *, status: Optional[str] = None, open_only: bool = False, supplier: Optional[str] = None,
+                 po: Optional[str] = None, gr: Optional[str] = None, plant: Optional[str] = None, supplier_id: Optional[uuid.UUID] = None,
+                 plants: Optional[list] = None, limit: int = 200) -> dict:
+    """Return deliveries with their settlement (filters: status, open, supplier code, PO, receipt, plant). ``supplier_id`` limits a supplier
+    user to their own returns; ``plants`` is the caller's plant read scope (ABAC)."""
+    if status and status.upper() not in RETURN_STATUSES:
+        raise Problem(422, "INVALID_STATUS", f"status must be one of {', '.join(RETURN_STATUSES)}")
+    query = (select(ReturnDelivery, PoLine, PurchaseOrder, Supplier, GoodsReceipt.number)
+             .join(PoLine, PoLine.id == ReturnDelivery.po_line_id).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id)
+             .join(Supplier, Supplier.id == PurchaseOrder.supplier_id).join(GoodsReceipt, GoodsReceipt.id == ReturnDelivery.gr_id))
+    if status:
+        query = query.where(ReturnDelivery.status == status.upper())
+    if open_only:
+        query = query.where(ReturnDelivery.status.in_(OPEN_RETURNS))
+    if supplier:
+        query = query.where(Supplier.code == supplier)
+    if supplier_id is not None:
+        query = query.where(PurchaseOrder.supplier_id == supplier_id)
+    if po:
+        query = query.where(PurchaseOrder.number == po)
+    if gr:
+        query = query.where(GoodsReceipt.number == gr)
+    if plant:
+        query = query.where(PoLine.plant == plant)
+    if plants is not None:
+        query = query.where(PoLine.plant.in_(plants))
+    found = session.execute(query.order_by(ReturnDelivery.created_at.desc(), ReturnDelivery.number.desc())
+                            .limit(min(max(int(limit), 1), 500))).all()
+    items = [return_view(session, rd, po_line=pl, po=po_row, gr_number=gr_no, supplier=sup) for rd, pl, po_row, sup, gr_no in found]
+    counts: dict = {}
+    for item in items:
+        counts[item["status"]] = counts.get(item["status"], 0) + 1
+    return {"items": items, "total": len(items), "countsByStatus": counts,
+            "openValueMinor": sum(i["openValueMinor"] for i in items)}
 
 
 # ---------------------------------------------------------------- P08 special stocks: lots, subcontracting, consignment (BP §22, §23)
@@ -1015,6 +1204,53 @@ def submit_ses(session: Session, ses: ServiceEntry) -> ServiceEntry:
                             chain=["SERVICE_OWNER"], step_id="F6-04", initiator_id=ses.entered_by, exclude=[po.created_by],
                             evidence={"totalMinor": ses.total_minor, "method": ses.method})
     return ses
+
+
+def resubmit_ses(session: Session, ses: ServiceEntry) -> ServiceEntry:
+    """POST /v1/service-entries/{ref}/submit: a DRAFT sheet (created with submit=false) or a REJECTED one is submitted (again) by the
+    supplier; ``submit_ses`` re-checks the PO line value against the sheets entered since and opens a new approval."""
+    require_supplier_user(session, session.get(PurchaseOrder, ses.po_id).supplier_id)
+    if not SES_SM.can(ses.status, "submit"):
+        raise illegal_transition("Service entry", ses.number, ses.status, "submit")
+    if ses.status == "DRAFT":
+        _check_ses_cap(session, ses, lock=False)
+    return submit_ses(session, ses)
+
+
+def revoke_ses(session: Session, ses: ServiceEntry, reason: str) -> ServiceEntry:
+    """APPROVED -> REVOKED: the service owner withdraws an approval given in error. The approved value leaves the PO line again; refused while
+    an invoice that is not rejected claims the line's approved service value beyond what would remain (reject or credit it first)."""
+    if len((reason or "").strip()) < 10:
+        raise Problem(422, "REASON_REQUIRED", "Say why the approval is revoked (at least 10 characters)", rule_ref="RCV-SES")
+    if not SES_SM.can(ses.status, "revoke"):
+        raise illegal_transition("Service entry", ses.number, ses.status, "revoke")
+    po = session.get(PurchaseOrder, ses.po_id)
+    if principal(session).user_id in (ses.entered_by, po.created_by):  # the same four-eyes exclusions as the approval itself
+        raise Problem(409, "SOD_CONFLICT", "The approval of a service entry is revoked by a service owner other than the supplier and the "
+                      "PO creator", rule_ref="RCV-SES")
+    amounts: dict = {}
+    for line in session.execute(select(SesLine).where(SesLine.ses_id == ses.id)).scalars():
+        amounts[line.po_line_id] = amounts.get(line.po_line_id, 0) + line.amount_minor
+    from app.pic.services import payables
+    for po_line_id, amount in sorted(amounts.items(), key=lambda item: str(item[0])):
+        po_line = session.get(PoLine, po_line_id, with_for_update=True, populate_existing=True)
+        abac.guard(session, "GR_POST", po, plant=po_line.plant)
+        _, pending_value = payables.pending_on_line(session, po_line.id, None)
+        if po_line.ses_approved_minor - amount < po_line.invoiced_minor + pending_value:
+            raise rule_violation(f"{ses.number}: line {po_line.line_no} is invoiced against the approved service value "
+                                 f"({fmt_minor(po_line.invoiced_minor + pending_value)} invoiced or in matching); reject or credit the invoice first",
+                                 "RCV-SES")
+        po_line.ses_approved_minor -= amount
+    SES_SM.apply(session, ses, "revoke", reason=reason, extra_after={"totalMinor": ses.total_minor})
+    outbox.emit(session, "service_entry.revoked", "SERVICE_ENTRY", ses.id, ses.number, {"po": po.number, "totalMinor": ses.total_minor, "reason": reason})
+    instance = workflow.find(session, "SERVICE_ENTRY", ses.id, PROCESS)
+    if instance is not None:
+        workflow.step(session, instance, "F6-09", outcome=f"approval revoked: {reason}")
+    return ses
+
+
+def fmt_minor(minor: int) -> str:
+    return f"{minor / 100:,.2f}"
 
 
 @workflow.on_task("SES_APPROVAL")

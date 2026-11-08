@@ -123,4 +123,9 @@ BODIES = {
     "SALES-ORDER-ACCOUNT": (SALES_ORDER_ACCOUNT, "Sales-order account assignment on requisition and PO lines (BP M04)"),
     "ASSET-CAPITALISATION": (ASSET_CAPITALISATION, "Capitalisation data on the goods receipt of asset lines (BP §22)"),
     "MANDATORY-FIELDS": (MANDATORY_FIELDS, "Mandatory fields per document type (TD §6, P14)"),
+    # Flow fixes (C3): approval chain of an invoice by value band after the accounts-payable approval. No band = AP approval only (the default
+    # matrix of BP §24 has no invoice row); add bands per company code, e.g. [{"fromMinor": 1000000000, "approvers": ["FINANCE_CONTROLLER"]}].
+    "INVOICE-APPROVAL": ({"bands": [], "slaBusinessDays": 2},
+                         "Invoice approval chain by value band (gross in company currency) after accounts payable: approver roles per band, "
+                         "worked in the task inbox with delegation, SLA escalation, value limits and SOD-08/09"),
 }

@@ -12,7 +12,7 @@ export default function Inventory() {
   const me = rules.data?.me;
   return (
     <div>
-      <PageHeader eyebrow="INV-01 · Inventory" title="Inventory"
+      <PageHeader eyebrow="STK-01 · Inventory" title="Inventory"
         subtitle="Stock by plant, location, type and batch; alerts; the movement ledger; governed stock postings, blind physical inventory and reservations. Stock changes only through postings, counts and goods movements." />
       <Card>
         <Tabs label="Inventory sections" tabs={[

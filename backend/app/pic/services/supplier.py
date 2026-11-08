@@ -15,7 +15,7 @@ from app.pic.models import (
     AuditEvent, BankChangeRequest, Certificate, GoodsReceipt, GrLine, Invoice, InvoiceException, PoLine, PoScheduleLine, PurchaseOrder,
     Qualification, SanctionEntry, Scorecard, Supplier, SupplierBankAccount, SupplierCategoryStatus, Task, Timer, TwinFeedback, TwinSnapshot,
 )
-from app.pic.platform import audit, clock, crypto, integration, outbox, rules, sod, workflow
+from app.pic.platform import abac, audit, clock, crypto, integration, outbox, rules, sod, workflow
 from app.pic.platform.core import next_number
 from app.pic.platform.errors import Problem, illegal_transition, not_found, rule_violation
 from app.pic.services import master_changes
@@ -172,16 +172,13 @@ def submit_profile(session: Session, supplier: Supplier, *, bank_account: Option
     instance = _instance(session, supplier)
     onboarding = instance is not None and instance.status == "RUNNING"
     if bank:
-        if supplier.status == "BLOCKED":
-            raise Problem(409, "SUPPLIER_BLOCKED", f"{supplier.code} is blocked; bank details cannot be changed", rule_ref="MDM-04")
+        if supplier.status in BANK_CHANGE_REFUSED_STATUSES:
+            ensure_bank_change_allowed(session, supplier)  # SUPPLIER_BLOCKED / SUPPLIER_INACTIVE, the same answer as the bank-change route
         if not onboarding:
             raise Problem(409, "BANK_CHANGE_PROCESS_REQUIRED",
                           f"Onboarding of {supplier.code} has ended: bank details change only through POST /v1/suppliers/{supplier.code}/bank-changes "
                           "(call-back and dual finance approval)", rule_ref="MDM-04", endpoint=f"/v1/suppliers/{supplier.code}/bank-changes")
-        pending = session.execute(select(BankChangeRequest.number).where(
-            BankChangeRequest.supplier_id == supplier.id, BankChangeRequest.status.in_(("PENDING_CALLBACK", "PENDING_APPROVAL")))).scalar()
-        if pending:
-            raise Problem(409, "BANK_CHANGE_PENDING", f"Bank change {pending} is still being verified; wait for its decision", rule_ref="MDM-04")
+        ensure_bank_change_allowed(session, supplier)
     created = add_certificates(session, supplier, certificates)
     result = {"certificates": [{"id": str(c.id), "type": c.type, "number": c.number, "mandatoryFor": list(c.mandatory_for or [])}
                                for c in created]}
@@ -447,10 +444,35 @@ def dispose_screening(session: Session, supplier: Supplier, decision: str, note:
 
 
 # ---------------------------------------------------------------- MDM-04 bank change (F8-04)
+BANK_CHANGE_OPEN = ("PENDING_CALLBACK", "PENDING_APPROVAL")
+# A blocked supplier keeps its verified account until it is unblocked; an exited, merged or rejected supplier is no longer paid at all.
+BANK_CHANGE_REFUSED_STATUSES = ("BLOCKED", "EXITED", "MERGED", "REJECTED")
+
+
+def ensure_bank_change_allowed(session: Session, supplier: Supplier) -> None:
+    """The one guard of every bank change (onboarding profile, supplier manager, the supplier's own portal user): never on a
+    blocked / exited / merged / rejected supplier, and never while another change of the same supplier is still being verified
+    (call-back or dual approval pending), so two changes can never race to become the active account (MDM-04)."""
+    if supplier.status == "BLOCKED":
+        raise Problem(409, "SUPPLIER_BLOCKED", f"{supplier.code} is blocked; bank details cannot be changed", rule_ref="MDM-04")
+    if supplier.status in BANK_CHANGE_REFUSED_STATUSES:
+        raise Problem(409, "SUPPLIER_INACTIVE", f"{supplier.code} is {supplier.status}; bank details cannot be changed", rule_ref="MDM-04")
+    pending = session.execute(select(BankChangeRequest.number).where(
+        BankChangeRequest.supplier_id == supplier.id, BankChangeRequest.status.in_(BANK_CHANGE_OPEN))
+        .order_by(BankChangeRequest.created_at)).scalars().first()
+    if pending:
+        raise Problem(409, "BANK_CHANGE_PENDING", f"Bank change {pending} is still being verified; wait for its decision", rule_ref="MDM-04",
+                      pending=pending)
+
+
 def request_bank_change(session: Session, supplier: Supplier, *, bank_account: str, ifsc: Optional[str], holder_name: str,
                         in_onboarding: bool = False, country: str = "IN", swift_bic: Optional[str] = None, intermediary_bic: Optional[str] = None,
                         charge_bearer: Optional[str] = None, purpose_code: Optional[str] = None) -> BankChangeRequest:
     p = principal(session)
+    require_supplier_user(session, supplier.id)       # a supplier's portal user changes only its own company's account
+    if not in_onboarding:
+        abac.authorize_supplier(session, p, "SUPPLIER_BANK_CHANGE", supplier)
+    ensure_bank_change_allowed(session, supplier)
     tenant_id = current_tenant(session)
     country = (country or "IN").upper()
     if country == "IN":
@@ -487,6 +509,13 @@ def request_bank_change(session: Session, supplier: Supplier, *, bank_account: s
                             "chargeBearer": charge_bearer, "purposeCode": account.purpose_code} if country != "IN" else {})})
     if not in_onboarding:
         workflow.start(session, PROCESS, "BANK_CHANGE", change.id, change.number)
+    if "SUPPLIER_USER" in p.roles:  # asked from the portal: the supplier managers must call the supplier back before anything else
+        from app.pic.services.notifications import link_for, notify, users_with_role
+        notify(session, [u for u in users_with_role(session, "SUPPLIER_MANAGER") if u.supplier_id is None], kind="CHANGE_REQUEST",
+               dedup_key=f"BANK_CHANGE_REQUESTED:{change.id}", title=f"Bank change {change.number} requested by {supplier.code}",
+               body=f"{supplier.legal_name} asked from the portal to change its bank account to {account.account_masked}. Verify it by a call-back "
+                    "to the contact on record (never to a number given in the request) before the finance approvals.",
+               link=link_for("SUPPLIER", supplier.code), object_type="SUPPLIER", object_ref=supplier.code)
     return change
 
 
@@ -1059,3 +1088,61 @@ def recalculate_scorecards(session: Session, period: str, *, dry_run: bool = Fal
                      rule_set_version="M06-SCORECARD")
     return {"period": period, "suppliers": len(set(facts) | set(cards)), "corrected": len(changed), "unchanged": unchanged,
             "changes": changed[:100]}
+
+
+# ---------------------------------------------------------------- scheduled sanctions re-screening (F8-03, flow fixes B9)
+RESCREEN_STATUSES = ("REGISTERED", "UNDER_QUALIFICATION", "ACTIVE", "CONDITIONAL", "QUALIFIED", "PREFERRED")
+
+
+def rescreen_sanctions(session: Session, *, dry_run: bool = False, sync: bool = True) -> dict:
+    """Re-screen every live supplier against the current sanctions lists (the licensed provider's list refreshed first when one is
+    configured). A supplier that newly matches is screened in full and blocked (``screen`` -> ``block``: payment block, open POs
+    flagged); the others keep their screening result and get the re-screening date. Duplicate findings and a manager's clearance of
+    them are not re-opened here: only the sanctions part is re-checked."""
+    synced = None
+    if sync and not dry_run and sanctions_provider() is not None:
+        try:
+            synced = sync_sanctions(session)
+        except Problem as exc:  # the list download failing must not stop the re-screening against the stored list
+            synced = {"error": exc.detail}
+    entries = session.execute(select(SanctionEntry)).scalars().all()
+    provider = sanctions_provider()
+    checked, newly_blocked, errors = 0, [], []
+    for supplier in session.execute(select(Supplier).where(Supplier.status.in_(RESCREEN_STATUSES)).order_by(Supplier.code)).scalars():
+        checked += 1
+        hits = [e.source for e in entries
+                if difflib.SequenceMatcher(None, e.name.lower(), supplier.legal_name.lower()).ratio() > SANCTIONS_MATCH_RATIO]
+        if provider is not None:
+            try:
+                if provider.search(supplier.legal_name, supplier.country) and provider.name not in hits:
+                    hits.append(provider.name)
+            except Exception as exc:  # noqa: BLE001 - an outage is reported, the supplier stays as it is
+                errors.append(f"{supplier.code}: {type(exc).__name__}"[:120])
+        if dry_run:
+            if hits:
+                newly_blocked.append(supplier.code)
+            continue
+        if hits:
+            screen(session, supplier, record_step=False)
+            newly_blocked.append(supplier.code)
+        else:
+            supplier.screening = {**(supplier.screening or {}), "rescreenedAt": clock.now().isoformat()}
+    if not dry_run:
+        audit.record(session, "SANCTIONS_LIST", uuid.uuid5(uuid.NAMESPACE_URL, "pic-sanctions:rescreen"), "SANCTIONS_RESCREENED",
+                     object_ref="RESCREEN", after={"suppliers": checked, "blocked": newly_blocked, "providerErrors": errors[:50],
+                                                   "sync": synced})
+    return {"suppliers": checked, "matches" if dry_run else "blocked": newly_blocked, "providerErrors": errors[:50], "sync": synced,
+            "dryRun": dry_run}
+
+
+def _register_jobs() -> None:
+    from app.pic.services import jobs
+
+    @jobs.job("sanctions-rescreen", name="Sanctions re-screening", schedule="30 4 * * *", dry_run=True,
+              description="Refreshes the licensed sanctions list when a provider is configured (PIC_SANCTIONS_*) and re-screens every live "
+                          "supplier against the current lists; a new match blocks the supplier (payment block, open orders flagged for review).")
+    def sanctions_rescreen(ctx) -> dict:
+        return rescreen_sanctions(ctx.session, dry_run=ctx.dry_run)
+
+
+_register_jobs()

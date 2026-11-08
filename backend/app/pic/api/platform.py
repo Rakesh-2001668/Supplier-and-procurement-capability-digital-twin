@@ -196,6 +196,8 @@ def new_rule_version(body: RuleSetIn, p: Principal = Depends(require("admin:rule
     from app.pic.platform import inventory_defaults, sourcing_defaults
     from app.pic.services import spend_workflow
     problems = inventory_defaults.validate(body.key, body.body) + sourcing_defaults.validate(body.key, body.body) + spend_workflow.validate_rule(body.key, body.body)
+    from app.pic.services import job_handlers, payables
+    problems += payables.validate_approval_rule(body.key, body.body) + job_handlers.validate_rule(body.key, body.body)  # flow fixes (C3, A14)
     if problems:
         raise Problem(422, "RULE_INVALID", f"{body.key}: " + "; ".join(problems), rule_ref=body.key, errors=problems)
     with uow(p) as s:

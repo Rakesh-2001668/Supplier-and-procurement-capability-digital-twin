@@ -1,5 +1,21 @@
-"""F5 Purchase order → supplier confirmation → delivery (M08)."""
+"""F5 Purchase order → supplier confirmation → delivery (M08).
+
+How an order is created (BP §14.1 "automatic PO from PR, manual PO, release order against contract"; flow fixes B2):
+- REQUISITION: from an approved requisition (source determination, contract reference or a chosen supplier) - the main path;
+- CONTRACT: a release order against live contract lines (``create_from_contract``): supplier, price, terms and tolerances come from the
+  contract; the contract quantity is checked at creation and again at release;
+- PLANNED_ORDER: the BP keeps MRP demand on the requisition path (P02 "planned order -> PR"), so ``create_from_planned_order`` converts
+  the planned order into its MRP requisition (same approval controls, DMN-01) and orders it at once when that requisition is approved
+  without a human step; otherwise the requisition is returned and is ordered once approved;
+- MANUAL: an order without a requisition (``create_manual``) for a documented reason (mandatory) and purpose code, priced by the buyer,
+  checked against contract / last price (PO-PRICE-CHECK), never touchless (price source MANUAL) and approved by the PO-APPROVAL bands.
+Every order carries its currency (validated against the tenant's currencies; a foreign-currency order fixes the reference exchange rate of
+the M10 FX table on its creation date, used for the approval bands and the ABAC value limits) and its purchasing organisation (explicit,
+else the purchasing group of the plant, else the company code's purchasing organisation from the org masters, D19). ABAC PO_CREATE is
+checked on creation and PO_RELEASE on release (company code, plant, category; value limit on release).
+"""
 import uuid
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Optional
@@ -11,7 +27,7 @@ from app.pic.db import current_tenant
 from app.pic.models import (
     CatalogueItem, Contract, ContractLine, Material, PoConfirmation, PoLine, PoScheduleLine, PoVersion, PrLine, PurchaseOrder, Requisition, Supplier, Task,
 )
-from app.pic.platform import agents, audit, clock, integration, outbox, rules, sod, workflow
+from app.pic.platform import abac, agents, audit, clock, integration, outbox, rules, sod, workflow
 from app.pic.platform.auth import agent_principal
 from app.pic.platform.core import StateMachine, link, next_number, upstream_chain
 from app.pic.platform.errors import Problem, illegal_transition, rule_violation
@@ -87,7 +103,8 @@ def create_from_requisition(session: Session, *, requisition: str, lines: list[i
                             contract_ref: Optional[str] = None, release_qty: Optional[Decimal] = None,
                             need_date: Optional[date] = None, unit_price_minor: Optional[int] = None,
                             deviation_reason: Optional[str] = None, retention_pct: Optional[Decimal] = None,
-                            one_time_vendor_reason: Optional[str] = None) -> list[PurchaseOrder]:
+                            one_time_vendor_reason: Optional[str] = None, currency: Optional[str] = None,
+                            purchasing_org: Optional[str] = None) -> list[PurchaseOrder]:
     pr = by_ref(session, Requisition, requisition)
     if pr.status not in ("APPROVED", "PARTIALLY_ORDERED"):
         raise rule_violation(f"{pr.number} is {pr.status}; only approved requisitions can be ordered", "P07")
@@ -148,7 +165,7 @@ def create_from_requisition(session: Session, *, requisition: str, lines: list[i
     pos = []
     for supplier_id, items in groups.items():
         pos.append(_create_po(session, pr, supplier_id, items, need_date, unit_price_minor, deviation_reason, determinations,
-                              one_time_vendor_reason))
+                              one_time_vendor_reason, currency=currency, purchasing_org=purchasing_org))
     _apply_retention(session, pos, retention_pct)
     return pos
 
@@ -197,12 +214,16 @@ def subcontracting_bom(session: Session, material: Optional[Material], qty: Deci
 
 
 def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items, need_date, price_override, deviation_reason,
-               determinations, one_time_vendor_reason: Optional[str] = None) -> PurchaseOrder:
+               determinations, one_time_vendor_reason: Optional[str] = None, *, currency: Optional[str] = None,
+               purchasing_org: Optional[str] = None, origin: str = "REQUISITION", reason: Optional[str] = None) -> PurchaseOrder:
+    """``pr`` is the requisition, or for an order without one (contract release, manual) a ``Header`` with the same attributes."""
     p = principal(session)
     supplier = session.get(Supplier, supplier_id)
     contract = session.get(Contract, items[0][1].contract_id) if items[0][1].contract_id else None
+    purch_org = purchasing_org_for(session, pr.company_code, pr.plant, purchasing_org)
+    currency, fx = order_currency(session, pr.company_code, currency, contract)
     # ADM-01: a deactivated organisation record is refused on a new order (its requisition may predate the deactivation)
-    org_guard.ensure_active(session, "purchase order", company_code=pr.company_code, plant=pr.plant, purchasing_org="1000")
+    org_guard.ensure_active(session, "purchase order", company_code=pr.company_code, plant=pr.plant, purchasing_org=purch_org)
     for pr_line, _ in items:
         org_guard.ensure_active(session, "purchase order", plant=pr_line.plant, storage_location=pr_line.storage_location,
                                 cost_object=((pr_line.account_assignment_type or "").upper(), pr_line.account_assignment_code))
@@ -212,14 +233,18 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
                   "price_pct": jsonable(contract.price_tolerance_pct)} if contract else receipt_rule.body)
     po = PurchaseOrder(
         tenant_id=current_tenant(session), number=next_number(session, "PURCHASE_ORDER"), version=1,
-        company_code=pr.company_code, purch_org="1000", plant=pr.plant, supplier_id=supplier.id, status="DRAFT",
-        contract_id=contract.id if contract else None, purpose_code=pr.purpose_code, currency="INR",
+        company_code=pr.company_code, purch_org=purch_org, plant=pr.plant, supplier_id=supplier.id, status="DRAFT",
+        contract_id=contract.id if contract else None, purpose_code=pr.purpose_code, currency=currency,
+        origin=origin, reason=reason, fx_rate=fx[0] if fx else None, fx_date=fx[1] if fx else None,
         payment_terms=contract.payment_terms if contract else supplier.payment_terms,
         incoterms=contract.incoterms if contract else supplier.incoterms, tolerance=tolerance,
         rule_set_version=rules.refs(matrix, receipt_rule), created_by=p.user_id,
     )
     session.add(po)
     session.flush()
+    # SEC-AZ: the buyer must be assigned to the company code and every plant of the order (PO_CREATE; category for tenants whose rule checks it)
+    for line_plant in dict.fromkeys([pr.plant] + [line.plant for line, _ in items]):
+        abac.guard(session, "PO_CREATE", po, plant=line_plant, category=_category_of(session, items[0][0]))
     sod.guard(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
     sod.record(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
     po_controls.record_one_time_vendor(session, po, one_time_vendor_reason, p.actor)
@@ -245,8 +270,9 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
         if not allocation.contract_line_id and allocation.price_source != "CONTRACT":
             # BP §24 / APR-8: a line not priced by a contract is checked against the contract price (+2%) and the last price paid (+5%);
             # a deviation needs a reason and the buyer lead's approval (PO-APPROVAL deviationChain, added by route()).
-            findings = po_controls.price_findings(session, supplier_id=supplier.id, material_id=pr_line.material_id, unit_price_minor=price,
-                                                  plant=pr_line.plant, exclude_po=po.id, company_code=pr.company_code)
+            findings = po_controls.price_findings(session, supplier_id=supplier.id, material_id=pr_line.material_id,
+                                                  unit_price_minor=to_company_minor(price, fx), plant=pr_line.plant, exclude_po=po.id,
+                                                  company_code=pr.company_code)
             if findings:
                 if not (deviation_reason or "").strip():
                     raise rule_violation("Price deviates from the contract / last price paid beyond the band; a deviation reason is required: "
@@ -276,9 +302,10 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
         if pr_line.purchase_type == "SUBCONTRACTING":
             components[str(po_line.line_no)] = subcontracting_bom(session, material, allocation.qty)
         total += net
-        req_svc.mark_ordered(session, pr, pr_line, allocation.qty)
-        link(session, "REQUISITION", pr.id, pr.number, "PURCHASE_ORDER", po.id, po.number, "converted_from",
-             from_line=pr_line.line_no, to_line=po_line.line_no)
+        if pr.id is not None:  # an order from a requisition consumes its open quantity
+            req_svc.mark_ordered(session, pr, pr_line, allocation.qty)
+            link(session, "REQUISITION", pr.id, pr.number, "PURCHASE_ORDER", po.id, po.number, "converted_from",
+                 from_line=pr_line.line_no, to_line=po_line.line_no)
         if allocation.contract_id:
             c = session.get(Contract, allocation.contract_id)
             cl = session.get(ContractLine, allocation.contract_line_id)
@@ -291,16 +318,280 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
         _default_schedule(session, po_line)
     po.inherited = {"price": items[0][1].unit_price_minor, "paymentTerms": po.payment_terms, "incoterms": po.incoterms,
                     "tolerance": tolerance, "contract": contract.number if contract else None,
-                    "sourceDetermination": determinations, **({"components": components} if components else {})}
+                    "sourceDetermination": determinations, **({"components": components} if components else {}),
+                    "origin": origin, "purchasingOrg": purch_org, "currency": currency,
+                    **({"fxRate": str(fx[0]), "fxDate": fx[1].isoformat(), "totalCompanyMinor": to_company_minor(total, fx)} if fx else {})}
     session.flush()
     audit.record(session, "PURCHASE_ORDER", po.id, "CREATED", object_ref=po.number,
                  after={"supplier": supplier.code, "totalMinor": total, "inherited": po.inherited, "overrides": overrides},
                  rule_set_version=po.rule_set_version)
     instance = workflow.start(session, PROCESS, "PURCHASE_ORDER", po.id, po.number)
-    workflow.step(session, instance, "F5-02", outcome=f"{supplier.code}; inherited from {pr.number}" + (f" and {contract.number}" if contract else ""))
+    source_text = (f"inherited from {pr.number}" + (f" and {contract.number}" if contract else "") if pr.id is not None else
+                   f"release order against {contract.number}" if contract else f"manual order: {reason}")
+    workflow.step(session, instance, "F5-02", outcome=f"{supplier.code}; {source_text}")
     validate(session, po)
     route(session, po)
     return po
+
+
+# ---------------------------------------------------------------- order header: purchasing organisation, currency (flow fixes B2)
+@dataclass
+class Header:
+    """The requisition-shaped header of an order created without a requisition (contract release order, manual order)."""
+    company_code: str
+    plant: str
+    purpose_code: str
+    id: Optional[uuid.UUID] = None
+    number: Optional[str] = None
+
+
+@dataclass
+class LineSpec:
+    """The requisition-line-shaped description of an order line created without a requisition."""
+    item_type: str
+    purchase_type: str
+    material_id: Optional[uuid.UUID]
+    description: str
+    material_group: str
+    qty: Decimal
+    uom: str
+    price_est_minor: int
+    need_date: date
+    plant: str
+    storage_location: Optional[str] = None
+    account_assignment_type: Optional[str] = None
+    account_assignment_code: Optional[str] = None
+    catalogue_item_id: Optional[uuid.UUID] = None
+    category: Optional[str] = None
+    line_no: Optional[int] = None
+    sow: Optional[dict] = None
+
+
+def _category_of(session: Session, line) -> Optional[str]:
+    material = session.get(Material, line.material_id) if getattr(line, "material_id", None) else None
+    return material.category if material is not None else (getattr(line, "category", None) or getattr(line, "material_group", None))
+
+
+def purchasing_org_for(session: Session, company_code: str, plant: Optional[str], requested: Optional[str] = None) -> str:
+    """The purchasing organisation of a new order (org masters, D19): the one asked for (it must belong to the company code), else
+    the purchasing group of the plant, else the company code's purchasing organisation (the one whose code equals the company code
+    when several exist). A tenant without a purchasing-organisation master orders under its company code."""
+    from app.pic.models import PurchasingGroup, PurchasingOrg
+    if requested:
+        org = session.execute(select(PurchasingOrg).where(PurchasingOrg.code == requested)).scalar_one_or_none()
+        if org is None:
+            raise Problem(422, "UNKNOWN_PURCHASING_ORG", f"Purchasing organisation {requested} does not exist", rule_ref="ADM-01")
+        if org.company_code != company_code:
+            raise Problem(422, "PURCHASING_ORG_COMPANY_MISMATCH",
+                          f"Purchasing organisation {requested} belongs to company code {org.company_code}, not {company_code}", rule_ref="ADM-01")
+        return org.code
+    orgs = {o.code: o for o in session.execute(select(PurchasingOrg).where(PurchasingOrg.company_code == company_code)
+                                               .order_by(PurchasingOrg.code)).scalars()}
+    if plant:
+        for group in session.execute(select(PurchasingGroup).where(PurchasingGroup.plant == plant, PurchasingGroup.active.is_(True),
+                                                                   PurchasingGroup.purchasing_org.is_not(None))
+                                     .order_by(PurchasingGroup.code)).scalars():
+            if group.purchasing_org in orgs and orgs[group.purchasing_org].active:
+                return group.purchasing_org
+    active = [o for o in orgs.values() if o.active]
+    if active:
+        same = next((o for o in active if o.code == company_code), None)
+        return (same or active[0]).code
+    return next(iter(orgs), company_code)
+
+
+def company_currency(session: Session, company_code: str) -> str:
+    from app.pic.models import CompanyCode
+    return (session.execute(select(CompanyCode.currency).where(CompanyCode.code == company_code)).scalar() or "INR").upper()
+
+
+def order_currency(session: Session, company_code: str, requested: Optional[str], contract: Optional[Contract] = None) -> tuple[str, Optional[tuple]]:
+    """(currency, (rate, rate date) | None) of a new order: the currency asked for, else the contract's, else the company code's. It must
+    be an active currency of the tenant; a contract-priced order is in the contract's currency. A foreign-currency order needs an
+    exchange rate valid today in the FX table (409 FX_RATE_MISSING, as at invoice posting in M10)."""
+    from app.pic.models import Currency
+    home = company_currency(session, company_code)
+    currency = (requested or (contract.currency if contract is not None else None) or home).upper()
+    if contract is not None and (contract.currency or home).upper() != currency:
+        raise Problem(422, "CURRENCY_MISMATCH", f"{contract.number} is priced in {contract.currency}; a release order against it is in "
+                      f"{contract.currency}, not {currency}", rule_ref="CLM-PO")
+    known = session.execute(select(Currency).where(Currency.code == currency)).scalar_one_or_none()
+    if known is None or not known.active:
+        raise Problem(422, "UNKNOWN_CURRENCY", f"{currency} is not an active currency of the tenant", rule_ref="P14")
+    if currency == home:
+        return currency, None
+    from app.pic.services import spend_cube
+    found = spend_cube._rate(session, currency, home, clock.today())
+    if found is None:
+        raise Problem(409, "FX_RATE_MISSING", f"No {currency}->{home} exchange rate is valid on {clock.today().isoformat()}: load it "
+                      "(ADM reference data, fx_rate) before ordering in that currency", rule_ref="P14")
+    return currency, (Decimal(found[0]), found[1])
+
+
+def to_company_minor(amount_minor: Optional[int], fx: Optional[tuple]) -> Optional[int]:
+    if amount_minor is None or not fx:
+        return amount_minor
+    from decimal import ROUND_HALF_UP
+    return int((Decimal(amount_minor) * Decimal(fx[0])).quantize(Decimal(1), ROUND_HALF_UP))
+
+
+def company_value(po: PurchaseOrder) -> int:
+    """The order value in the company-code currency (approval bands, risk band, touchless limit)."""
+    return to_company_minor(po.total_minor, (po.fx_rate, po.fx_date) if po.fx_rate is not None else None)
+
+
+# ---------------------------------------------------------------- release order against a contract (BP §14.1)
+def create_from_contract(session: Session, *, contract_ref: str, lines: list[dict], purpose_code: Optional[str] = None,
+                         need_date: Optional[date] = None, deviation_reason: Optional[str] = None, unit_price_minor: Optional[int] = None,
+                         currency: Optional[str] = None, purchasing_org: Optional[str] = None, storage_location: Optional[str] = None,
+                         account_assignment_type: Optional[str] = None, account_assignment_code: Optional[str] = None,
+                         retention_pct: Optional[Decimal] = None) -> PurchaseOrder:
+    """A release order (call-off) against lines of a live contract: [{"line": 10, "qty": "100", "needDate": "2027-01-15"}]. Supplier,
+    price valid on the need date, payment terms, incoterms and tolerances come from the contract; the quantity must fit what the
+    contract line still has (target + over-delivery tolerance, counting open drafts), and is checked again at release."""
+    from app.pic.services import contract as contract_svc
+    contract = by_ref(session, Contract, contract_ref)
+    if contract.status not in ("ACTIVE", "EXPIRING"):
+        raise rule_violation(f"{contract.number} is {contract.status}; only executed contracts can be released against", "CLM-PO")
+    if contract.type in contract_svc.FRAMEWORK_TYPES:
+        raise rule_violation(f"{contract.number} is a {contract.type.replace('_', ' ').lower()}: it carries no lines to release against; "
+                             "use a call-off contract under it", "CLM-PO")
+    if not lines:
+        raise Problem(422, "LINES_REQUIRED", "Name at least one contract line and quantity", rule_ref="CLM-PO")
+    supplier = session.get(Supplier, contract.supplier_id)
+    items, determinations, plants = [], {}, set()
+    for index, entry in enumerate(lines, start=1):
+        line_no = int(entry.get("line") or 0)
+        contract_line = session.execute(select(ContractLine).where(ContractLine.contract_id == contract.id,
+                                                                   ContractLine.line_no == line_no)).scalar_one_or_none()
+        if contract_line is None:
+            raise rule_violation(f"{contract.number} has no line {line_no}", "CLM-PO")
+        qty = D(entry.get("qty") or 0)
+        if qty <= 0:
+            raise Problem(422, "VALIDATION_FAILED", f"Line {line_no}: the release quantity must be above zero", rule_ref="CLM-PO")
+        when = date.fromisoformat(str(entry["needDate"])) if entry.get("needDate") else (need_date or clock.today() + timedelta(days=14))
+        if not contract.valid_from <= when <= contract.valid_to:
+            raise rule_violation(f"Line {line_no}: need date {when} is outside the validity of {contract.number} "
+                                 f"({contract.valid_from} to {contract.valid_to})", "CLM-PO")
+        committed = contract_svc.committed_qty(session, contract_line)
+        limit = contract_line.target_qty * (1 + D(contract.over_tolerance_pct) / 100)
+        if committed + qty > limit:
+            raise rule_violation(f"{contract.number} line {contract_line.line_no}: {committed} of {contract_line.target_qty} {contract_line.uom} is "
+                                 f"already committed; {qty} more exceeds the contract quantity (+{contract.over_tolerance_pct}% tolerance)", "CLM-PO")
+        validity = source.contract_price(session, contract_line.id, when)
+        if validity is None:
+            raise rule_violation(f"{contract.number} line {line_no} has no published price valid on {when}", "CLM-PO")
+        material = session.get(Material, contract_line.material_id) if contract_line.material_id else None
+        purchase_type = str(entry.get("purchaseType") or ("STOCK" if material is not None else "SERVICE" if contract.type in ("RATE_CARD", "SOW") else "EXPENSE")).upper()
+        spec = LineSpec(item_type="MATERIAL" if material is not None else "FREE_TEXT", purchase_type=purchase_type,
+                        material_id=contract_line.material_id, description=contract_line.description,
+                        material_group=(material.material_group if material is not None and getattr(material, "material_group", None) else (contract.category or "GENERAL"))[:30],
+                        qty=qty, uom=contract_line.uom, price_est_minor=validity.unit_price_minor, need_date=when, plant=contract_line.plant,
+                        storage_location=entry.get("storageLocation") or storage_location,
+                        account_assignment_type=entry.get("accountAssignmentType") or account_assignment_type,
+                        account_assignment_code=entry.get("accountAssignmentCode") or account_assignment_code,
+                        category=material.category if material is not None else contract.category)
+        plants.add(spec.plant)
+        items.append((spec, source.Allocation(supplier.id, supplier.code, qty, validity.unit_price_minor, "CONTRACT", contract.id,
+                                              contract_line.id, validity.id)))
+        determinations[index * 10] = {"method": "CONTRACT_RELEASE", "contract": contract.number, "line": line_no}
+    if len(plants) > 1:
+        raise rule_violation("A release order is for one plant: release the lines of each plant separately", "CLM-PO")
+    header = Header(company_code=contract.company_code, plant=plants.pop(), purpose_code=(purpose_code or "CONTRACT_RELEASE").strip()[:30])
+    po = _create_po(session, header, supplier.id, items, None, unit_price_minor, deviation_reason, determinations, None,
+                    currency=currency, purchasing_org=purchasing_org, origin="CONTRACT", reason=None)
+    _apply_retention(session, [po], retention_pct)
+    return po
+
+
+# ---------------------------------------------------------------- manual order without a requisition (BP §14.1)
+MANUAL_REASON_MIN = 10
+
+
+def create_manual(session: Session, *, supplier_code: str, plant: str, purpose_code: str, reason: str, lines: list[dict],
+                  currency: Optional[str] = None, purchasing_org: Optional[str] = None, deviation_reason: Optional[str] = None,
+                  one_time_vendor_reason: Optional[str] = None, retention_pct: Optional[Decimal] = None) -> PurchaseOrder:
+    """A manual order: no requisition behind it, so it states why (``reason``, at least 10 characters) and its purpose code (P01).
+    Lines: a material master {"material", "qty", "unitPriceMinor", "needDate"} or free text {"description", "materialGroup", "qty",
+    "uom", "unitPriceMinor", "needDate", "accountAssignmentType", "accountAssignmentCode"}. Every line is priced by the buyer (MANUAL),
+    checked against the contract / last price paid (PO-PRICE-CHECK), and the order is approved by the PO-APPROVAL bands (never
+    touchless). The SoD and four-eyes rules of every order apply (the creator never approves it)."""
+    from app.pic.models import Plant
+    reason = " ".join((reason or "").split())
+    if len(reason) < MANUAL_REASON_MIN:
+        raise Problem(422, "REASON_REQUIRED", f"A manual order needs the reason it is raised without a requisition (at least {MANUAL_REASON_MIN} characters)",
+                      rule_ref="P01")
+    purpose_code = (purpose_code or "").strip()
+    if not purpose_code:
+        raise rule_violation("A purpose code is mandatory on every order", "P01")
+    plant_row = session.execute(select(Plant).where(Plant.code == plant)).scalar_one_or_none()
+    if plant_row is None:
+        raise Problem(422, "UNKNOWN_PLANT", f"Plant {plant} does not exist", rule_ref="ADM-01")
+    supplier = supplier_by_code(session, supplier_code)
+    if not lines:
+        raise Problem(422, "LINES_REQUIRED", "A manual order needs at least one line", rule_ref="P01")
+    matrix = rules.resolve(session, "PURCHASE-TYPE-MATRIX", company_code=plant_row.company_code)
+    items, determinations = [], {}
+    for index, entry in enumerate(lines, start=1):
+        material = None
+        if entry.get("material"):
+            material = session.execute(select(Material).where(Material.number == str(entry["material"]))).scalar_one_or_none()
+            if material is None:
+                raise Problem(404, "NOT_FOUND", f"Material {entry['material']} not found")
+        qty = D(entry.get("qty") or 0)
+        price = int(entry.get("unitPriceMinor") or 0)
+        if qty <= 0 or price <= 0:
+            raise Problem(422, "VALIDATION_FAILED", f"Line {index * 10}: quantity and unit price must be above zero", rule_ref="P07")
+        purchase_type = str(entry.get("purchaseType") or ("STOCK" if material is not None else "EXPENSE")).upper()
+        if purchase_type not in matrix.body:
+            raise Problem(422, "VALIDATION_FAILED", f"Line {index * 10}: purchase type {purchase_type} is not in PURCHASE-TYPE-MATRIX", rule_ref=matrix.ref)
+        description = (entry.get("description") or (material.description if material is not None else "")).strip()[:200]
+        group = (entry.get("materialGroup") or (getattr(material, "material_group", None) if material is not None else None)
+                 or (material.category if material is not None else None) or "").strip()[:30]
+        if material is None and (not description or not group):
+            raise Problem(422, "VALIDATION_FAILED", f"Line {index * 10}: a free-text line needs a description and a material group (P04)", rule_ref="P04")
+        assignment = (entry.get("accountAssignmentType") or None, entry.get("accountAssignmentCode") or None)
+        if purchase_type != "STOCK" and not assignment[1]:
+            raise Problem(422, "VALIDATION_FAILED", f"Line {index * 10}: a {purchase_type.lower()} line needs an account assignment (cost centre, "
+                          "WBS element or order)", rule_ref="P04")
+        when = date.fromisoformat(str(entry["needDate"])) if entry.get("needDate") else clock.today() + timedelta(days=14)
+        if when < clock.today():
+            raise Problem(422, "VALIDATION_FAILED", f"Line {index * 10}: the need date {when} is in the past", rule_ref="P07")
+        spec = LineSpec(item_type="MATERIAL" if material is not None else "FREE_TEXT", purchase_type=purchase_type,
+                        material_id=material.id if material is not None else None, description=description or material.description,
+                        material_group=group or "GENERAL", qty=qty, uom=(entry.get("uom") or (material.base_uom if material is not None else "EA"))[:5],
+                        price_est_minor=price, need_date=when, plant=plant, storage_location=entry.get("storageLocation"),
+                        account_assignment_type=assignment[0], account_assignment_code=assignment[1],
+                        category=material.category if material is not None else (entry.get("category") or group))
+        items.append((spec, source.Allocation(supplier.id, supplier.code, qty, price, "MANUAL")))
+        determinations[index * 10] = {"method": "MANUAL_ORDER"}
+    header = Header(company_code=plant_row.company_code, plant=plant, purpose_code=purpose_code[:30])
+    po = _create_po(session, header, supplier.id, items, None, None, deviation_reason, determinations, one_time_vendor_reason,
+                    currency=currency, purchasing_org=purchasing_org, origin="MANUAL", reason=reason)
+    _apply_retention(session, [po], retention_pct)
+    return po
+
+
+# ---------------------------------------------------------------- from a planned order: through its MRP requisition (BP P02)
+def create_from_planned_order(session: Session, *, planned_order: str, purpose_code: str = "MRP_REPLENISHMENT", **po_args) -> dict:
+    """Convert the planned order into its MRP requisition (planning.convert: DMN-01 approval like every requisition) and, when that
+    requisition is approved at once (auto-approval band), order it in the same step. {"requisition", "requisitionStatus", "purchaseOrders"}."""
+    from app.pic.models import PlannedOrder
+    from app.pic.services import planning
+    from app.pic.models import Plant
+    p = principal(session)
+    if not (p.is_agent or "MRP_CONTROLLER" in p.roles):
+        raise Problem(403, "FORBIDDEN", "Converting a planned order is the MRP controller's step (BP P02): ask the MRP controller to convert it, "
+                      "then order the requisition", rule_ref="P02")
+    order = by_ref(session, PlannedOrder, planned_order, lock=True)
+    company_code = session.execute(select(Plant.company_code).where(Plant.code == order.plant)).scalar()
+    abac.guard(session, "PO_CREATE", None, plant=order.plant, company_code=company_code)  # before anything is converted
+    pr = planning.convert(session, order, purpose_code=purpose_code)
+    if pr.status not in ("APPROVED", "PARTIALLY_ORDERED"):
+        return {"requisition": pr.number, "requisitionStatus": pr.status, "purchaseOrders": []}
+    lines = [l.line_no for l in session.execute(select(PrLine).where(PrLine.requisition_id == pr.id).order_by(PrLine.line_no)).scalars()]
+    pos = create_from_requisition(session, requisition=pr.number, lines=lines, **po_args)
+    return {"requisition": pr.number, "requisitionStatus": pr.status, "purchaseOrders": pos}
 
 
 # ---------------------------------------------------------------- validation (F5-03) and DMN-02 (F5-04)
@@ -340,11 +631,12 @@ def validate(session: Session, po: PurchaseOrder) -> dict:
                       f"{split_material['windowDays']} days, each below {split_material['perOrderBelowMinor'] / 100:,.0f} "
                       f"({', '.join(split_material['orders'])})") if split_material else None
     price_findings = [f for o in (po.overrides or []) for f in o.get("findings") or []]
+    value = company_value(po)
     risk = rules.po_risk(risk_rule, late_prob=late, price_deviation=price_dev, supplier_not_qualified=status not in ("QUALIFIED", "PREFERRED"),
-                         value_above_band=po.total_minor > risk_rule.body["valueBandMinor"], split_pattern=split,
+                         value_above_band=value > risk_rule.body["valueBandMinor"], split_pattern=split,
                          account_changed=account_changed, model_version=twin.model_version if twin else "n/a",
                          price_evidence=po_controls.findings_text(price_findings) if price_findings else None, split_evidence=split_evidence)
-    decision = rules.touchless(dmn, price_sources={l.price_source for l in lines}, supplier_status=status, value_minor=po.total_minor,
+    decision = rules.touchless(dmn, price_sources={l.price_source for l in lines}, supplier_status=status, value_minor=value,
                                split_pattern=split, late_prob=late, risk_score=risk["score"], account_changed=account_changed)
     po.risk_score = risk["score"]
     po.risk_factors = risk["factors"]
@@ -376,8 +668,11 @@ def route(session: Session, po: PurchaseOrder) -> None:
     po_controls.check_mandatory(session, po, po_lines)                 # TD §6 / P14 rule MANDATORY-FIELDS (PO_RELEASE)
     otv = po_controls.one_time_vendor_gate(session, po, po_lines)      # BP M06 hard block unless ONE-TIME-VENDOR allows it
     instance = _instance(session, po)
+    if po.touchless and po.origin == "MANUAL":
+        po.touchless = False  # a manual order is always approved by a person (BP §14.4), whatever its price source
+        po.touchless_reasons = list(po.touchless_reasons or []) + ["manual order without requisition"]
     if po.touchless:
-        allowed, reason = agents.guard(session, "TOUCHLESS_PO", required_level="L4", scope="po:release", value_minor=po.total_minor,
+        allowed, reason = agents.guard(session, "TOUCHLESS_PO", required_level="L4", scope="po:release", value_minor=company_value(po),
                                         sod_action="PO_RELEASE", sod_refs={"po_id": po.id, "supplier_id": po.supplier_id})
         if allowed:
             workflow.step(session, instance, "F5-04", outcome="yes: touchless criteria met (DMN-02)")
@@ -397,7 +692,7 @@ def route(session: Session, po: PurchaseOrder) -> None:
     else:
         workflow.step(session, instance, "F5-04", outcome="no: " + "; ".join(po.touchless_reasons))
     rule = rules.resolve(session, "PO-APPROVAL", company_code=po.company_code)
-    chain = rules.band_chain(rule, po.total_minor)
+    chain = rules.band_chain(rule, company_value(po))
     if any(l.price_deviation for l in po_lines):
         chain = list(dict.fromkeys(chain + rule.body["deviationChain"]))
     if otv:  # the one-time-vendor approver(s) join the chain; the order is never released touchless
@@ -425,6 +720,13 @@ def _release(session: Session, po: PurchaseOrder, ai_ref: Optional[str] = None, 
         raise Problem(422, "PO_SUPPLIER_BLOCKED", f"{supplier.code} is blocked", rule_ref="SLM-BLOCK")
     release_lines = lines_of(session, po)
     po_controls.check_mandatory(session, po, release_lines)
+    category, _ = po_controls.category_and_status(session, po, release_lines) if release_lines else (None, None)
+    for line_plant in dict.fromkeys([po.plant] + [line.plant for line in release_lines]):
+        abac.guard(session, "PO_RELEASE", po, plant=line_plant, category=category)   # SEC-AZ (agents: their autonomy limits)
+    from app.pic.services import contract as contract_svc
+    contract_checks = contract_svc.check_release(session, po, release_lines)       # B3: the contract may have been used up meanwhile
+    if contract_checks:
+        audit.record(session, "PURCHASE_ORDER", po.id, "CONTRACT_RECHECKED", object_ref=po.number, after={"checks": contract_checks})
     otv = po_controls.one_time_vendor_gate(session, po, release_lines, releasing=True)
     if otv:
         po_controls.settle_one_time_vendor(session, po, otv)
@@ -1332,3 +1634,60 @@ def expedite(session: Session, po: PurchaseOrder, line_no: int, message: Optiona
              if agents.permit(session, "EXPEDITING", object_type="PURCHASE_ORDER", object_id=po.id, object_ref=po.number, required_level="L2") else None)
     audit.record(session, "PURCHASE_ORDER", po.id, "EXPEDITED", object_ref=po.number, after={"line": line_no, "message": draft}, ai_ref=ai_ref)
     return {"po": po.number, "line": line_no, "message": draft, "aiRef": ai_ref}
+
+
+# ---------------------------------------------------------------- nightly ERP reconciliation of purchase orders (TD §12.2 step 5, flow fixes B9)
+PO_IN_ERP = ("RELEASED", "TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED", "RECEIVED", "INVOICED", "CLOSED")
+
+
+def reconcile_purchase_orders(session: Session, company_code: str, target_system: str) -> list[tuple]:
+    """Purchase orders of the company code against the ERP documents (the ``erp-reconciliation`` job adds them to the nightly run):
+    a released order whose current version is not in the ERP (PO_MISSING_IN_ERP), an ERP document number that differs from the
+    order's (PO_DOCUMENT_MISMATCH), a cancelled order still open in the ERP (PO_CANCEL_NOT_IN_ERP) and an ERP purchase order PIC does
+    not know (PO_MISSING_IN_PLATFORM). Items: (kind, ref, erp doc no, platform minor, erp minor, "PURCHASE_ORDER")."""
+    from app.pic.models import ErpDocument
+    doc_type = integration.DOC_TYPES["PURCHASE_ORDER"][0]
+    docs = {d.external_ref: d for d in session.execute(select(ErpDocument).where(
+        ErpDocument.system == target_system, ErpDocument.doc_type == doc_type, ErpDocument.company_code == company_code)).scalars()}
+    items, known = [], set()
+    for po in session.execute(select(PurchaseOrder).where(PurchaseOrder.company_code == company_code,
+                                                          PurchaseOrder.status.in_(PO_IN_ERP + ("CANCELLED",)))
+                              .order_by(PurchaseOrder.number)).scalars():
+        known.add(po.number)
+        if po.status == "CANCELLED":
+            if po.erp_doc_no and f"{company_code}|PO|{po.number}|CANCEL" not in docs:
+                items.append(("PO_CANCEL_NOT_IN_ERP", po.number, po.erp_doc_no, po.total_minor, None, "PURCHASE_ORDER"))
+            continue
+        current = docs.get(f"{company_code}|PO|{po.number}|v{po.version}")
+        if current is None:
+            items.append(("PO_MISSING_IN_ERP", po.number, po.erp_doc_no, po.total_minor, None, "PURCHASE_ORDER"))
+        elif po.erp_doc_no and po.erp_doc_no != current.doc_no:
+            items.append(("PO_DOCUMENT_MISMATCH", po.number, current.doc_no, po.total_minor, current.amount_minor, "PURCHASE_ORDER"))
+    for key, doc in docs.items():
+        parts = key.split("|")
+        if len(parts) >= 3 and parts[1] == "PO" and parts[2] not in known:
+            items.append(("PO_MISSING_IN_PLATFORM", parts[2], doc.doc_no, None, doc.amount_minor, "PURCHASE_ORDER"))
+    return items
+
+
+def add_reconciliation_items(session: Session, run_number: Optional[str], company_code: str, target_system: str, items: list[tuple]) -> dict:
+    """Write the PO items into the night's reconciliation run (``run_number``), or into a run of their own when the company code had
+    no posted invoices to reconcile. Returns {"run", "differences"}."""
+    from app.pic.models import ReconciliationItem, ReconciliationRun
+    p = principal(session)
+    run = session.execute(select(ReconciliationRun).where(ReconciliationRun.number == run_number)).scalar_one_or_none() if run_number else None
+    if run is None:
+        run = ReconciliationRun(tenant_id=current_tenant(session), number=next_number(session, "RECONCILIATION"), target_system=target_system,
+                                company_code=company_code, as_of=clock.now(), platform_count=0, erp_count=0, platform_minor=0, erp_minor=0,
+                                differences=0, created_by=p.user_id)
+        session.add(run)
+        session.flush()
+    for kind, ref, doc_no, platform_minor, erp_minor, object_type in items:
+        session.add(ReconciliationItem(tenant_id=run.tenant_id, run_id=run.id, kind=kind, object_type=object_type, object_ref=str(ref)[:60],
+                                       erp_doc_no=doc_no, platform_minor=platform_minor, erp_minor=erp_minor, created_by=p.user_id))
+    run.differences = (run.differences or 0) + len(items)
+    session.flush()
+    audit.record(session, "RECONCILIATION_RUN", run.id, "PURCHASE_ORDERS_RECONCILED", object_ref=run.number,
+                 after={"companyCode": company_code, "system": target_system, "differences": len(items),
+                        "kinds": sorted({i[0] for i in items})})
+    return {"run": run.number, "differences": run.differences, "purchaseOrderDifferences": len(items)}

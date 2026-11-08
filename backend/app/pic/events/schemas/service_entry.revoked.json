@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:service_entry.revoked",
+  "title": "service_entry.revoked",
+  "description": "Payload (outbox_event.payload) of service_entry.revoked on SERVICE_ENTRY. Produced by services/receiving.py.",
+  "type": "object",
+  "properties": {
+    "po": {},
+    "totalMinor": {},
+    "reason": {}
+  },
+  "required": [
+    "po",
+    "totalMinor",
+    "reason"
+  ],
+  "additionalProperties": true
+}

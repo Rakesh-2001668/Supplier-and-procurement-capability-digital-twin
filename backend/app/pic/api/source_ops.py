@@ -72,6 +72,28 @@ def terminate_contract(ref: str, body: TerminateIn, p: Principal = Depends(requi
         return idem.store(amendments.view(s, amendment), 201)
 
 
+class RenewalIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=2000)
+    valid_from: Optional[date] = None   # default: the day after the current contract ends
+    valid_to: Optional[date] = None     # default: + CONTRACT-AMENDMENT.renewalExtensionMonths
+    title: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/contracts/{ref}/renewals", status_code=201, tags=["F4 Contract"])
+def renew_contract(ref: str, body: RenewalIn, p: Principal = Depends(require("contract:manage")), key: Optional[str] = Depends(idempotency_key)):
+    """Renew by a successor contract (TD §6 Renewed): a new draft with the current lines and prices for the next period, which goes
+    through negotiation, approval and signature; the current contract becomes RENEWED when the successor takes effect. (To renew the
+    same contract instead, approve the renewal task: it drafts an EXTENSION amendment.)"""
+    from app.pic import views
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/contracts/{ref}/renewals", key, body)
+        if idem.replay:
+            return idem.replay
+        successor = contract_svc.renew_as_successor(s, _contract(s, ref, p, lock=True), reason=body.reason, valid_from=body.valid_from,
+                                                    valid_to=body.valid_to, title=body.title)
+        return idem.store(views.contract(s, successor), 201)
+
+
 @router.post("/contracts/{ref}/amendments/preview", tags=["F4 Contract"])
 def preview_amendment(ref: str, body: PreviewIn, p: Principal = Depends(require("contract:manage"))):
     """Validate a change set and show its effect, value delta and approval chain without saving it."""

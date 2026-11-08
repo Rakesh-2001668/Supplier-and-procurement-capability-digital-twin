@@ -21,6 +21,13 @@ from app.pic.services import guided_buying, mandatory, mdm, org_guard, request_t
 from app.pic.services.common import material_by_number, principal
 
 PROCESS = "pic.requisition"
+# The line description is the short text (200 characters, as on the PO line and the ERP item text); a category SOW form's full statement
+# of work goes into ``pr_line.sow`` (template, title, text up to SOW_TEXT_LIMIT characters, structured attributes).
+DESCRIPTION_LIMIT = 200
+SOW_TEXT_LIMIT = 20_000
+SOW_JSON_LIMIT = 64_000
+DESCRIPTION_MESSAGE = ("the line description is the short text, at most 200 characters (got {n}); put the full statement of work in "
+                       "`sow` (template, title, text, attributes)")
 NEEDS_ACCOUNT = ("NON_STOCK", "SERVICE", "EXPENSE", "ASSET")
 NEEDS_MATERIAL = ("CONSIGNMENT", "SUBCONTRACTING", "STOCK")  # P08: stock and special stocks are kept per material master
 CAPEX_ACCOUNTS = ("ASSET", "WBS")
@@ -106,7 +113,9 @@ def search(session: Session, query: str, plant: Optional[str] = None) -> dict:
     catalogue_hits = [
         {"channel": "CATALOGUE", "id": str(c.id), "supplierPartNo": c.supplier_part_no, "description": c.description,
          "unitPriceMinor": c.price_minor, "uom": c.uom, "score": round(score(c.description), 2)}
-        for c in session.execute(select(CatalogueItem).where(CatalogueItem.active.is_(True))).scalars() if score(c.description) >= 0.6
+        for c in session.execute(select(CatalogueItem).where(
+            CatalogueItem.active.is_(True), or_(CatalogueItem.valid_from.is_(None), CatalogueItem.valid_from <= today),
+            or_(CatalogueItem.valid_to.is_(None), CatalogueItem.valid_to >= today))).scalars() if score(c.description) >= 0.6
     ]
     material_hits = [
         {"channel": "MATERIAL", "material": m.number, "description": m.description, "uom": m.base_uom, "score": round(score(m.description), 2)}
@@ -210,10 +219,19 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
         validity = source.contract_price(session, contract_line.id, max(clock.today(), session.get(Contract, contract_line.contract_id).valid_from))
         if validity is not None:
             data = {**data, "price_est_minor": validity.unit_price_minor}
+    if catalogue is not None and not punchout:
+        today = clock.today()
+        if not catalogue.active or (catalogue.valid_from and catalogue.valid_from > today) or (catalogue.valid_to and catalogue.valid_to < today):
+            raise rule_violation(f"Catalogue item {catalogue.supplier_part_no} is not offered today (inactive or outside its price validity)", "P03")
     description = data.get("description") or (material.description if material else catalogue.description if catalogue else None)
     material_group = data.get("material_group") or (material.material_group if material else catalogue.material_group if catalogue else None)
     if not description or not material_group:
         raise rule_violation("Every line needs a description and a material group", "P04")
+    description = description.strip()
+    if len(description) > DESCRIPTION_LIMIT:
+        raise Problem(422, "DESCRIPTION_TOO_LONG", f"line {line_no}: " + DESCRIPTION_MESSAGE.format(n=len(description)), rule_ref="REQ-02",
+                      field="description", limit=DESCRIPTION_LIMIT)
+    sow = _sow(line_no, data, template)
     price = data.get("price_est_minor")
     if catalogue is not None and not punchout:
         price = catalogue.price_minor
@@ -258,8 +276,53 @@ def _build_line(session: Session, pr: Requisition, line_no: int, data: dict) -> 
         plant=data.get("plant", pr.plant), storage_location=data.get("storage_location"),
         quotes_attached=len({q["supplier"].upper() for q in quotes}), reusable=bool(data.get("reusable", False)),
         planned_order_id=data.get("planned_order_id"), source_determination=determination,
-        preferred_supplier_id=data.get("preferred_supplier_id"), created_by=pr.created_by,
+        preferred_supplier_id=data.get("preferred_supplier_id"), created_by=pr.created_by, sow=sow,
     )
+
+
+def _copy_sow(mapper, connection, target) -> None:
+    """The category SOW travels with its requisition line: a PO line or sourcing-event line created from a requisition line gets the
+    line's ``sow`` (mapper hook, so every creation path, today's and future ones, carries it without code of its own)."""
+    if getattr(target, "sow", None) is not None or not getattr(target, "requisition_id", None) or getattr(target, "pr_line_no", None) is None:
+        return
+    target.sow = connection.execute(select(PrLine.sow).where(PrLine.requisition_id == target.requisition_id,
+                                                             PrLine.line_no == target.pr_line_no)).scalar()
+
+
+def _register_sow_hooks() -> None:
+    from sqlalchemy import event
+
+    from app.pic.models import EventLine, PoLine
+    for model in (PoLine, EventLine):
+        if not event.contains(model, "before_insert", _copy_sow):
+            event.listen(model, "before_insert", _copy_sow)
+
+
+_register_sow_hooks()
+
+
+def _sow(line_no: int, data: dict, template: Optional[str]) -> Optional[dict]:
+    """The structured statement of work of a line: ``sow`` as sent, or (older clients) the category form's ``attributes`` with a
+    ``sowType`` on a template line. Limited in size; the template code is kept with it."""
+    import json
+
+    raw = data.get("sow")
+    if raw is None and template and isinstance(data.get("attributes"), dict) and data["attributes"].get("sowType"):
+        raw = {"attributes": data["attributes"]}
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise rule_violation(f"line {line_no}: the statement of work must be an object (template, title, text, attributes)", "REQ-02")
+    sow = {"template": raw.get("template") or (str(template) if template else None), "title": (raw.get("title") or None),
+           "text": raw.get("text") or None, "attributes": dict(raw.get("attributes") or {})}
+    if sow["title"] and len(str(sow["title"])) > DESCRIPTION_LIMIT:
+        raise Problem(422, "SOW_TOO_LONG", f"line {line_no}: the SOW title is at most {DESCRIPTION_LIMIT} characters", rule_ref="REQ-02")
+    if sow["text"] and len(str(sow["text"])) > SOW_TEXT_LIMIT:
+        raise Problem(422, "SOW_TOO_LONG", f"line {line_no}: the SOW text is at most {SOW_TEXT_LIMIT:,} characters", rule_ref="REQ-02")
+    size = len(json.dumps(sow, default=str))
+    if size > SOW_JSON_LIMIT:
+        raise Problem(422, "SOW_TOO_LONG", f"line {line_no}: the statement of work is {size:,} bytes; at most {SOW_JSON_LIMIT:,}", rule_ref="REQ-02")
+    return sow
 
 
 def _lines(session: Session, pr: Requisition) -> list[PrLine]:
@@ -663,8 +726,58 @@ def _approved(session: Session, pr: Requisition, instance) -> None:
                 line.sourcing_status = "SOURCED" if determination.method != "NONE" else "OPEN"
     outbox.emit(session, "requisition.approved", "REQUISITION", pr.id, pr.number,
                 {"origin": pr.origin, "totalMinor": pr.total_minor, "lines": [l.line_no for l in lines]})
-    workflow.end(session, instance, "F2-09", outcome="approved PR to buyer workbench")
+    message = send_to_erp(session, pr, lines)
+    workflow.end(session, instance, "F2-09", outcome="approved PR to buyer workbench"
+                 + (f"; ERP purchase requisition {message.erp_doc_no or message.status}" if message is not None else ""))
     planning.on_requisition_approved(session, pr)
+
+
+# ---------------------------------------------------------------- M04 / M13: approved requisitions to the ERP (PURCHASE_REQUISITION)
+ERP_MESSAGE = "PURCHASE_REQUISITION"
+
+
+def erp_enabled(session: Session, company_code: str) -> bool:
+    """Rule ERP-TARGET ``sendPurchaseRequisitions`` (default true; per company code): false keeps requisitions in PIC only."""
+    try:
+        body = rules.resolve(session, "ERP-TARGET", company_code=company_code).body
+    except Problem as exc:
+        if exc.code != "RULE_SET_MISSING":
+            raise
+        return True
+    return body.get("sendPurchaseRequisitions", True) is not False
+
+
+def send_to_erp(session: Session, pr: Requisition, lines: Optional[list] = None):
+    """Queue (and post, like every other message) the ERP purchase requisition of an approved requisition, once per approval round
+    (idempotency key ``<company>|PR|<number>|r<round>``: a re-approval after a change sends the new state). Skipped, with an audit entry
+    when the target connector does not map purchase requisitions, and silently when rule ERP-TARGET turns it off."""
+    from app.pic.models import IntegrationMessage
+    from app.pic.platform import connectors, integration
+
+    if not erp_enabled(session, pr.company_code):
+        return None
+    target = integration.target_system(session, pr.company_code)
+    connector = connectors.REGISTRY.get(target)
+    if connector is not None and ERP_MESSAGE not in tuple(getattr(connector, "message_types", ()) or ()):
+        audit.record(session, "REQUISITION", pr.id, "ERP_NOT_SENT", object_ref=pr.number,
+                     after={"system": target, "reason": f"{target} does not map {ERP_MESSAGE}"})
+        return None
+    sent = session.execute(select(IntegrationMessage).where(IntegrationMessage.message_type == ERP_MESSAGE,
+                                                            IntegrationMessage.object_id == pr.id)).scalars().all()
+    lines = lines if lines is not None else _lines(session, pr)
+    materials = dict(session.execute(select(Material.id, Material.number).where(
+        Material.id.in_([l.material_id for l in lines if l.material_id]))).all()) if lines else {}
+    key = f"{pr.company_code}|PR|{pr.number}|r{len(sent) + 1}"
+    payload = {"pr": pr.number, "companyCode": pr.company_code, "plant": pr.plant, "origin": pr.origin, "purposeCode": pr.purpose_code,
+               "totalMinor": pr.total_minor, "currency": pr.currency,
+               "lines": [{"line": l.line_no, "material": materials.get(l.material_id), "description": l.description, "plant": l.plant,
+                          "qty": str(l.qty), "uom": l.uom, "priceMinor": l.price_est_minor, "needDate": l.need_date.isoformat(),
+                          "materialGroup": l.material_group, "accountType": l.account_assignment_type,
+                          "accountCode": l.account_assignment_code} for l in lines]}
+    message = integration.enqueue(session, target_system=target, message_type=ERP_MESSAGE, idempotency_key=key, object_type="REQUISITION",
+                                  object_id=pr.id, object_ref=pr.number, payload=payload)
+    integration.process(session, message)
+    return message
 
 
 # ---------------------------------------------------------------- change after approval
@@ -701,6 +814,12 @@ def change_line(session: Session, pr: Requisition, line_no: int, changes: dict) 
                 raise rule_violation(f"line {line_no}: the estimated price cannot be negative", "REQ-02")
             if field == "need_date" and not isinstance(value, date):
                 value = date.fromisoformat(str(value))
+            if field == "description":
+                value = str(value or "").strip()
+                if not value or len(value) > DESCRIPTION_LIMIT:
+                    raise Problem(422, "DESCRIPTION_TOO_LONG" if value else "VALIDATION_FAILED",
+                                  f"line {line_no}: " + (DESCRIPTION_MESSAGE.format(n=len(value)) if value else "the description cannot be empty"),
+                                  rule_ref="REQ-02", field="description", limit=DESCRIPTION_LIMIT)
             setattr(line, field, value)
     if ((line.account_assignment_type or "").upper() == sales_order.TYPE and line.account_assignment_code
             and {"qty", "account_assignment_code", "account_assignment_type"} & set(changes)):
@@ -782,7 +901,20 @@ def cancel(session: Session, pr: Requisition, reason: str) -> Requisition:
             workflow.end(session, instance, "F2-09", outcome=f"cancelled by {p.actor}: {reason}", status="CANCELLED")
     SM.apply(session, pr, "cancel", reason=reason, extra_after={"tasksCancelled": cancelled, "cancelledBy": p.actor})
     outbox.emit(session, "requisition.cancelled", "REQUISITION", pr.id, pr.number, {"reason": reason, "previousStatus": before})
+    _erp_cancel_note(session, pr)
     return pr
+
+
+def _erp_cancel_note(session: Session, pr: Requisition) -> None:
+    """A cancelled requisition that was posted to the ERP: the ERP copy must be closed there (the OData mapping of a requisition
+    deletion is not part of the connector contract yet), so the cancellation records which ERP document to close."""
+    from app.pic.models import IntegrationMessage
+
+    posted = session.execute(select(IntegrationMessage.erp_doc_no).where(
+        IntegrationMessage.message_type == ERP_MESSAGE, IntegrationMessage.object_id == pr.id, IntegrationMessage.status == "POSTED")).scalars().all()
+    if posted:
+        audit.record(session, "REQUISITION", pr.id, "ERP_CLOSE_REQUIRED", object_ref=pr.number,
+                     after={"erpDocuments": [d for d in posted if d]}, reason="requisition cancelled after it was posted to the ERP")
 
 
 def buyer_queue(session: Session, origin: Optional[str] = None) -> list[dict]:
@@ -796,7 +928,9 @@ def buyer_queue(session: Session, origin: Optional[str] = None) -> list[dict]:
              "purchaseType": l.purchase_type, "material": materials.get(l.material_id), "category": l.category,
              "priceEstMinor": l.price_est_minor,
              "qty": str(l.qty - l.ordered_qty), "uom": l.uom, "needDate": l.need_date.isoformat(), "plant": l.plant,
-             "sourcingStatus": l.sourcing_status, "source": l.source_determination}
+             "sourcingStatus": l.sourcing_status, "source": l.source_determination, "sow": l.sow,
+             "freeText": unstructured(l), "materialRequestId": str(l.mdm_request_id) if l.mdm_request_id else None,
+             "requesterId": str(pr.requester_id)}
             for l, pr in session.execute(query.order_by(PrLine.need_date)).all()]
 
 

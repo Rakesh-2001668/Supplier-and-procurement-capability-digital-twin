@@ -4,6 +4,12 @@ Order: 1 active contract line → 2 quota arrangement (split by %, running count
 → 3 source list → 4 purchasing info record → 5 none (buyer queue).
 Suppliers that are Blocked or not Qualified for the category are excluded.
 
+Several live contract lines for the same material and plant and no quota arrangement (flow fixes B4): the choice is deterministic,
+never the first row of an unordered query. ``rank_contracts`` orders the candidates by (1) the lowest net unit price valid on the need
+date (a line without a valid published price comes last), (2) the earliest contract validity end (use up the contract that runs out
+first), (3) the contract number and line number; the first candidate whose supplier is eligible wins, and the determination records how
+many live contracts were compared (``candidates``). A quota arrangement remains the way to split volume between contracts on purpose.
+
 ``determine`` reads through a lookup: by default one query per read (POs, PRs, conversions); an MRP run passes a
 ``Preloaded`` lookup that bulk-loads the same rows for one plant once, so the run does not query per planned order.
 """
@@ -52,9 +58,28 @@ class Determination:
     method: str  # CONTRACT | QUOTA | SOURCE_LIST | INFO_RECORD | NONE
     allocations: list[Allocation] = field(default_factory=list)
     excluded: list[dict] = field(default_factory=list)
+    candidates: Optional[list[dict]] = None  # several live contracts compared (rank_contracts), in rank order
 
     def as_dict(self) -> dict:
-        return {"method": self.method, "allocations": [a.as_dict() for a in self.allocations], "excluded": self.excluded}
+        out = {"method": self.method, "allocations": [a.as_dict() for a in self.allocations], "excluded": self.excluded}
+        if self.candidates:
+            out["candidates"] = self.candidates
+            out["basis"] = RANK_BASIS
+        return out
+
+
+RANK_BASIS = "lowest valid net price, then earliest validity end, then contract number (TD 9.2)"
+
+
+def rank_contracts(lookup: "Lookup", rows: list, on: date) -> list[tuple]:
+    """(line, contract, validity) for the live contract lines, best first: lowest valid net price, earliest validity end, number."""
+    ranked = []
+    for line, contract in rows:
+        validity = lookup.price(line.id, on)
+        ranked.append((line, contract, validity))
+    ranked.sort(key=lambda item: (item[2] is None, item[2].unit_price_minor if item[2] is not None else 0, item[1].valid_to,
+                                  item[1].number, item[0].line_no))
+    return ranked
 
 
 def contract_price(session: Session, contract_line_id: uuid.UUID, on: date) -> Optional[PriceValidity]:
@@ -263,15 +288,18 @@ def determine(session: Session, material: Material, plant: str, need_date: date,
     quota = lookup.quota(material.id, plant, need_date)
     contract_rows = lookup.contract_rows(material.id, plant, need_date)
 
-    # 1. Single active contract line (no quota split).
+    # 1. Active contract line (no quota split): the best ranked line whose supplier is eligible.
     if contract_rows and quota is None:
-        line, contract = contract_rows[0]
-        if _eligible(lookup, contract.supplier_id, category, excluded):
-            validity = lookup.price(line.id, need_date)
-            supplier = lookup.supplier(contract.supplier_id)
-            return Determination("CONTRACT", [Allocation(contract.supplier_id, supplier.code, qty,
-                                                         validity.unit_price_minor if validity else None, "CONTRACT",
-                                                         contract.id, line.id, validity.id if validity else None)], excluded)
+        ranked = rank_contracts(lookup, contract_rows, need_date)
+        candidates = ([{"contract": c.number, "line": l.line_no, "unitPriceMinor": v.unit_price_minor if v is not None else None,
+                        "validTo": c.valid_to.isoformat()} for l, c, v in ranked] if len(ranked) > 1 else None)
+        for line, contract, validity in ranked:
+            if _eligible(lookup, contract.supplier_id, category, excluded):
+                supplier = lookup.supplier(contract.supplier_id)
+                return Determination("CONTRACT", [Allocation(contract.supplier_id, supplier.code, qty,
+                                                             validity.unit_price_minor if validity else None, "CONTRACT",
+                                                             contract.id, line.id, validity.id if validity else None)], excluded,
+                                     candidates=candidates)
 
     # 2. Quota arrangement: split by share, prices from each supplier's contract.
     if quota is not None:

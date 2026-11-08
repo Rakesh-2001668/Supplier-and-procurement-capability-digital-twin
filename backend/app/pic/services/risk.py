@@ -469,3 +469,19 @@ def set_preferred(session: Session, supplier: Supplier, category: str, preferred
     if open_pos:
         audit.record(session, "SUPPLIER", supplier.id, "EXIT_WITH_OPEN_POS", object_ref=supplier.code, after={"openPos": open_pos}, reason=reason)
     return status
+
+
+# ---------------------------------------------------------------- scheduled supplier risk scan (flow fixes B9)
+from app.pic.services import jobs as _jobs  # noqa: E402
+
+
+@_jobs.job("supplier-risk-scan", name="Supplier risk scan", schedule="0 5 * * *", dry_run=True,
+           description="Runs the Supplier Risk Agent over every supplier (sanctions hits, legacy compliance, financial tier, certificates, "
+                       "delivery and quality evidence and the external feeds of rule SUPPLIER-RISK) and raises a signal with a mitigation "
+                       "recommendation for each new finding. Signals are deduplicated, so a rerun only adds what is new.")
+def scheduled_risk_scan(ctx) -> dict:
+    session = ctx.session
+    if ctx.dry_run:
+        return {"suppliers": session.execute(select(func.count()).select_from(Supplier)).scalar_one(), "wouldScan": True}
+    created = [s for s in scan(session) if s is not None]
+    return {"newSignals": len(created), "suppliers": sorted({str(s.supplier_id) for s in created})[:200]}

@@ -313,3 +313,22 @@ def by_number(session: Session, ref: str, lock: bool = False) -> RebateAgreement
     if found is None:
         raise not_found("Rebate agreement", ref)
     return found
+
+
+# ---------------------------------------------------------------- scheduled accrual (flow fixes B9)
+def _register_jobs() -> None:
+    from app.pic.services import jobs
+
+    @jobs.job("rebate-accrual", name="Rebate accrual", schedule="15 3 * * *", dry_run=True,
+              description="Accrues every active rebate agreement for its current period from the posted invoices (also the catch-up after "
+                          "back-dated postings); the event-driven accrual on invoice.posted keeps running, this run makes the figure right "
+                          "whatever was missed. Idempotent per agreement and period.")
+    def rebate_accrual(ctx) -> dict:
+        from sqlalchemy import func
+        if ctx.dry_run:
+            return {"agreements": ctx.session.execute(select(func.count()).select_from(RebateAgreement).where(
+                RebateAgreement.status == "ACTIVE")).scalar_one(), "wouldAccrue": True}
+        return accrue_all(ctx.session)
+
+
+_register_jobs()

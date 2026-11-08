@@ -53,8 +53,14 @@ def field_ownership(type: str = Query("STOCK", pattern="^(STOCK|NON_STOCK|SERVIC
         return material_changes.ownership_view(s, type)
 
 
+class MaterialChangePreviewIn(BaseModel):
+    """A preview needs only the changes; a reason may be sent (the screen sends what the requester typed so far)."""
+    changes: dict = Field(min_length=1)
+    reason: Optional[str] = Field(default=None, max_length=1000)
+
+
 @router.post("/materials/{number}/change-requests/preview", tags=["F9 MDM"])
-def preview_material_change(number: str, body: MaterialChangeIn, p: Principal = Depends(require_any("mdm:request", "req:create"))):
+def preview_material_change(number: str, body: MaterialChangePreviewIn, p: Principal = Depends(require_any("mdm:request", "req:create"))):
     """Before/after, owning domains, routing and impact analysis without creating the request."""
     with uow(p) as s:
         return material_changes.preview(s, material_by_number(s, number), body.changes)

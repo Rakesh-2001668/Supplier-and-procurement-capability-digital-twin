@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:material_request.withdrawn",
+  "title": "material_request.withdrawn",
+  "description": "Payload (outbox_event.payload) of material_request.withdrawn on MATERIAL_REQUEST. Produced by services/mdm.py.",
+  "type": "object",
+  "properties": {
+    "previousStatus": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "previousStatus",
+    "reason"
+  ],
+  "additionalProperties": true
+}

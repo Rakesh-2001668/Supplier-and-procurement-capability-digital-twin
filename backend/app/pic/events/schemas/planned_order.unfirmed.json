@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:planned_order.unfirmed",
+  "title": "planned_order.unfirmed",
+  "description": "Payload (outbox_event.payload) of planned_order.unfirmed on PLANNED_ORDER. Produced by services/planning.py.",
+  "type": "object",
+  "properties": {
+    "qty": {
+      "type": "string"
+    },
+    "needDate": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "qty",
+    "needDate",
+    "reason"
+  ],
+  "additionalProperties": true
+}

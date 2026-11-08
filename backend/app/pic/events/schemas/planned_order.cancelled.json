@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:planned_order.cancelled",
+  "title": "planned_order.cancelled",
+  "description": "Payload (outbox_event.payload) of planned_order.cancelled on PLANNED_ORDER. Produced by services/planning.py.",
+  "type": "object",
+  "properties": {
+    "qty": {
+      "type": "string"
+    },
+    "needDate": {
+      "type": "string"
+    },
+    "previousStatus": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "qty",
+    "needDate",
+    "previousStatus",
+    "reason"
+  ],
+  "additionalProperties": true
+}

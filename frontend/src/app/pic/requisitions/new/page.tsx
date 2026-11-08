@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useState } from 'react';
-import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
+import { Button, Card, Empty, Field, Input, Loading, PageHeader, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { inr, label, qty as fmtQty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
@@ -30,8 +30,12 @@ type DraftLine = {
   key: string; item_type: ItemType; source: string; material?: string; catalogue_item_id?: string; contract_line_id?: string;
   description: string; material_group: string; category: string; purchase_type: string; qty: string; uom: string;
   price: string; priceFixed: boolean; aat: string; aac: string; need_date: string; quotes: QuoteRef[]; reusable: boolean; mpn: string;
-  template?: string; attributes?: Record<string, unknown>;
+  template?: string; attributes?: Record<string, unknown>; sow?: SowData;
 };
+/** Structured statement of work of a category SOW form: stored on the line (pr_line.sow); the description stays the short text. */
+type SowData = { template: string; title: string; text: string; attributes: Record<string, unknown> };
+/** pr_line.description is the 200-character short text (as on the PO line); the API answers 422 above it. */
+const DESCRIPTION_LIMIT = 200;
 
 /** BP M04 request template (GET /request-templates): defaults, required fields, quote policy and approver hints for services, IT, marketing, facilities. */
 type RequestTemplate = { code: string; name: string; group: string | null; guidance: string | null; line: Record<string, string>;
@@ -95,6 +99,7 @@ function NewRequisition() {
       template: l.template || undefined,
       mpn: l.item_type === 'FREE_TEXT' && l.reusable && l.mpn.trim() ? l.mpn.trim() : undefined,
       attributes: l.attributes || undefined,
+      sow: l.sow || undefined,
     })),
   }), { success: (r) => `${r.number} created as draft`, onSuccess: (r) => setCreated(r) });
 
@@ -137,6 +142,9 @@ function NewRequisition() {
       if (!l.need_date) out.push(`${n}: need date is required.`);
       if (!l.priceFixed && !(Number(l.price) > 0)) out.push(`${n}: an estimated unit price is required.`);
       if ((l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') && !l.description.trim()) out.push(`${n}: description is required.`);
+      if ((l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') && l.description.trim().length > DESCRIPTION_LIMIT) {
+        out.push(`${n}: the description is the short text, at most ${DESCRIPTION_LIMIT} characters (${l.description.trim().length} now); the full statement of work goes with the SOW form.`);
+      }
       if ((l.item_type === 'FREE_TEXT' || l.item_type === 'SERVICE') && !l.material_group.trim()) out.push(`${n}: material group is required (P04).`);
       if (l.quotes.some((q) => !q.supplier.trim() || !q.reference.trim() || !q.date)) out.push(`${n}: every quote needs the supplier, its reference and date.`);
       if (l.purchase_type === 'STOCK' && !l.material) out.push(`${n}: stock purchases need a material master.`);
@@ -283,6 +291,7 @@ function NewRequisition() {
               aac: lineData.aac,
               need_date: lineData.need_date,
               attributes: lineData.attributes,
+              sow: lineData.sow,
             });
           }}
         />
@@ -483,7 +492,7 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-xs text-slate-500">{lineNo}</span>
           <span className="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{label(line.item_type)}</span>
-          {line.attributes?.sowType ? (
+          {line.sow || line.attributes?.sowType ? (
             <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] font-bold text-blue-800">
               SOW CONFIGURED
             </span>
@@ -500,14 +509,16 @@ function LineEditor({ lineNo, line, reference, onChange, onRemove }: {
         {free && (
           <>
             <div className="md:col-span-2">
-              <Field label="Description *">{(id) => (
-                line.description && line.description.includes('\n') ? (
-                  <Textarea id={id} rows={4} className="font-mono text-xs" value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
-                ) : (
-                  <Input id={id} value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
-                )
+              <Field label="Description *" hint={`Short text, ${line.description.trim().length}/${DESCRIPTION_LIMIT} characters`}>{(id) => (
+                <Input id={id} maxLength={DESCRIPTION_LIMIT} value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
               )}</Field>
             </div>
+            {line.sow && (
+              <details className="md:col-span-4 rounded-lg border border-blue-200 bg-blue-50/40 p-3 text-xs">
+                <summary className="cursor-pointer font-semibold text-blue-900">Statement of work{line.sow.title ? ` · ${line.sow.title}` : ''} (kept with the line, carried to sourcing and the PO)</summary>
+                <pre className="mt-2 whitespace-pre-wrap font-mono text-[11px] text-slate-700">{line.sow.text}</pre>
+              </details>
+            )}
             <Field label="Material group *">{(id) => <Input id={id} list="pic-material-groups" value={line.material_group} onChange={(e) => onChange({ material_group: e.target.value })} />}</Field>
             <Field label="Category">{(id) => <Input id={id} list="pic-categories" value={line.category} onChange={(e) => onChange({ category: e.target.value })} placeholder="Defaults to material group" />}</Field>
           </>

@@ -6,21 +6,29 @@ from datetime import date, timedelta
 from decimal import ROUND_CEILING, Decimal
 from typing import Optional
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.pic.db import current_tenant
 from app.pic.models import (
-    Asn, AsnLine, DemandElement, DocumentLink, Material, MrpException, MrpRun, Plant, PlannedOrder, PlanningParameter, PoLine, PurchaseOrder, Stock,
+    Asn, AsnLine, DemandElement, DocumentLink, Material, MrpException, MrpRun, Plant, PlannedOrder, PlanningParameter, PoLine, PrLine,
+    PurchaseOrder, Requisition, Stock, StockMovement,
 )
-from app.pic.platform import agents, audit, clock, outbox, workflow
+from app.pic.platform import abac, agents, audit, clock, outbox, workflow
 from app.pic.platform.core import insert_rows, link, link_many, next_number, next_numbers
-from app.pic.platform.errors import Problem, illegal_transition
+from app.pic.platform.errors import Problem, illegal_transition, rule_violation
 from app.pic.services import source
 from app.pic.services.common import principal
 
 PROCESS = "pic.mrp-to-pr"
 OPEN_PO_STATUSES = ("RELEASED", "TRANSMITTED", "CONFIRMED", "PARTIALLY_RECEIVED")
+# A purchase order still being drafted or approved is supply too: its requisition already counts the quantity as ordered
+# (pr_line.ordered_qty), so leaving the order out would open a gap and the next run would plan the same demand again.
+SUPPLY_PO_STATUSES = ("DRAFT", "IN_APPROVAL") + OPEN_PO_STATUSES
+# Open requisitions are supply (fixed receipts) from submission until they are ordered: the not-yet-ordered quantity of stock lines.
+OPEN_PR_STATUSES = ("SUBMITTED", "IN_APPROVAL", "APPROVED", "PARTIALLY_ORDERED")
+STOCK_PR_TYPES = ("STOCK", "CONSIGNMENT", "SUBCONTRACTING")
+PLATFORM = "PLATFORM"  # planned_order.source_system of the orders this engine creates; any other value was imported from an ERP
 
 # MRP types (material.mrp_type, BP M02): PD plans in daily buckets (the default), PW weekly (Monday to Sunday), PM monthly
 # (calendar month), VB reorder-point planning (order up to the maximum when stock plus receipts fall to the reorder point).
@@ -30,6 +38,19 @@ PLANNED_TYPES = ("PD", "PW", "PM", "VB")
 
 
 # ---------------------------------------------------------------- lot sizing
+LOT_PERIODS = ("WEEK", "MONTH")
+
+
+def lot_period(material: Material) -> str:
+    """The lot-size period of the PERIOD policy (BP M02 "period (weekly/monthly)"): ``attributes.lotSizePeriod`` (WEEK | MONTH) when
+    maintained, else the MRP type's bucket for weekly and monthly planning, else a week."""
+    chosen = str((material.attributes or {}).get("lotSizePeriod") or "").upper()
+    if chosen in LOT_PERIODS:
+        return chosen
+    bucket = BUCKET_BY_TYPE.get(material.mrp_type, "DAY")
+    return bucket if bucket in LOT_PERIODS else "WEEK"
+
+
 def lot_size(material: Material, net: Decimal, period_net: Optional[Decimal] = None, projected: Decimal = Decimal(0)) -> Decimal:
     policy = material.lot_size_policy
     if policy == "FIXED" and material.lot_size_qty:
@@ -52,8 +73,11 @@ def lot_size(material: Material, net: Decimal, period_net: Optional[Decimal] = N
 
 
 # ---------------------------------------------------------------- supply and demand
-def _assemble_supply(on_hand, po_rows, asn_rows, firmed: list) -> dict:
-    """Receipts and totals from the open supply of one material and plant (rows as selected in ``_supply``)."""
+def _assemble_supply(on_hand, po_rows, asn_rows, firmed: list, pr_rows=(), erp_orders=()) -> dict:
+    """Receipts and totals from the open supply of one material and plant (rows as selected in ``_supply``): on-hand stock, open purchase
+    orders, ASNs in transit, firmed planned orders, the not-yet-ordered quantity of open requisitions (``pr_rows``: a converted planned
+    order is not planned again while its requisition waits for approval or a PO) and the unfirmed planned orders imported from the ERP
+    (``erp_orders``: the ERP planned that demand, so this engine does not plan it a second time)."""
     receipts: list[tuple[date, Decimal, str, str]] = []  # (date, qty, kind, ref)
     open_po = Decimal(0)
     for qty, shipped_qty, received_qty, need_date, line_no, po_number in po_rows:
@@ -72,12 +96,64 @@ def _assemble_supply(on_hand, po_rows, asn_rows, firmed: list) -> dict:
     for order in firmed:
         receipts.append((order.need_date, order.qty, "FIRM_PLANNED", order.number))
         firm_receipts += order.qty
+    for order in erp_orders:
+        receipts.append((order.need_date, order.qty, "ERP_PLANNED", order.number))
+        firm_receipts += order.qty
+    open_req = Decimal(0)
+    for qty, ordered_qty, need_date, line_no, pr_number in pr_rows:
+        remaining = max(Decimal(qty) - Decimal(ordered_qty or 0), Decimal(0))
+        if remaining > 0:
+            receipts.append((need_date, remaining, "OPEN_REQUISITION", f"{pr_number}/{line_no}"))
+            open_req += remaining
     return {"on_hand": Decimal(on_hand), "open_po": open_po, "in_transit": in_transit, "firm_receipts": firm_receipts,
-            "receipts": receipts, "firmed": firmed}
+            "open_req": open_req, "receipts": receipts, "firmed": firmed}
 
 
 _PO_COLUMNS = (PoLine.qty, PoLine.shipped_qty, PoLine.received_qty, PoLine.need_date, PoLine.line_no, PurchaseOrder.number)
 _ASN_COLUMNS = (AsnLine.qty, AsnLine.received_qty, Asn.expected_date, Asn.number)
+_PR_COLUMNS = (PrLine.qty, PrLine.ordered_qty, PrLine.need_date, PrLine.line_no, Requisition.number)
+
+
+# Rule MRP-SUPPLY (optional; this default when a tenant has none): requisitions whose purpose code is listed under
+# ``requisitionsNotSupply`` are sourcing requirements, not deliveries, and are not netted as fixed receipts. An annual or outline
+# requirement raised to run an RFQ for a contract or scheduling agreement (purpose ANNUAL_SOURCING) states a year's volume, not a
+# delivery on its need date; counting it would suppress the replenishment MRP must keep planning, and the call-offs against the
+# resulting agreement are planned (and become supply) one by one. Every other submitted stock requisition (manual or converted from a
+# planned order) stays a fixed receipt.
+SUPPLY_RULE = "MRP-SUPPLY"
+DEFAULT_SUPPLY_RULE = {"requisitionsNotSupply": ["ANNUAL_SOURCING"]}
+
+
+def requisitions_not_supply(session: Session) -> tuple:
+    """Purpose codes of requisitions that MRP does not count as supply (rule MRP-SUPPLY ``requisitionsNotSupply``)."""
+    from app.pic.platform import batch, rules
+
+    def load():
+        try:
+            body = rules.resolve(session, SUPPLY_RULE).body
+        except Problem as exc:
+            if exc.code != "RULE_SET_MISSING":
+                raise
+            body = DEFAULT_SUPPLY_RULE
+        return tuple(str(code) for code in body.get("requisitionsNotSupply", DEFAULT_SUPPLY_RULE["requisitionsNotSupply"]) or ())
+
+    return batch.memo(session, ("mrp-supply-rule",), load)
+
+
+def _open_pr_query(*columns, excluded: tuple = DEFAULT_SUPPLY_RULE["requisitionsNotSupply"]):
+    """Open requisition lines that are supply: submitted and not yet fully ordered, stock (or special stock) lines of a material, except
+    sourcing requirements (``excluded`` purpose codes, rule MRP-SUPPLY)."""
+    query = (select(*columns).join(Requisition, Requisition.id == PrLine.requisition_id)
+             .where(Requisition.status.in_(OPEN_PR_STATUSES), PrLine.purchase_type.in_(STOCK_PR_TYPES), PrLine.material_id.is_not(None),
+                    PrLine.qty > PrLine.ordered_qty))
+    if excluded:
+        query = query.where(or_(Requisition.purpose_code.is_(None), Requisition.purpose_code.not_in(list(excluded))))
+    return query
+
+
+def _erp_planned(query):
+    """Unfirmed planned orders imported from the ERP (source_system other than PLATFORM)."""
+    return query.where(PlannedOrder.status == "CREATED", PlannedOrder.source_system != PLATFORM)
 
 
 # Stock that planning counts as supply on hand: own unrestricted stock plus supplier-owned consignment stock (available to withdraw;
@@ -90,12 +166,16 @@ def _supply(session: Session, material: Material, plant: str) -> dict:
     on_hand = session.execute(select(func.coalesce(func.sum(Stock.qty), 0)).where(
         Stock.material_id == material.id, Stock.plant == plant, Stock.stock_type.in_(AVAILABLE_STOCK_TYPES))).scalar()
     po_rows = session.execute(select(*_PO_COLUMNS).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
-        PoLine.material_id == material.id, PoLine.plant == plant, PurchaseOrder.status.in_(OPEN_PO_STATUSES))).all()
+        PoLine.material_id == material.id, PoLine.plant == plant, PurchaseOrder.status.in_(SUPPLY_PO_STATUSES))).all()
     asn_rows = session.execute(select(*_ASN_COLUMNS).join(Asn, Asn.id == AsnLine.asn_id).join(PoLine, PoLine.id == AsnLine.po_line_id)
                                .where(PoLine.material_id == material.id, PoLine.plant == plant, Asn.status == "IN_TRANSIT")).all()
     firmed = session.execute(select(PlannedOrder).where(PlannedOrder.material_id == material.id, PlannedOrder.plant == plant,
                                                         PlannedOrder.status == "FIRMED")).scalars().all()
-    return _assemble_supply(on_hand, po_rows, asn_rows, firmed)
+    pr_rows = session.execute(_open_pr_query(*_PR_COLUMNS, excluded=requisitions_not_supply(session)).where(
+        PrLine.material_id == material.id, PrLine.plant == plant)).all()
+    erp_orders = session.execute(_erp_planned(select(PlannedOrder).where(PlannedOrder.material_id == material.id,
+                                                                         PlannedOrder.plant == plant))).scalars().all()
+    return _assemble_supply(on_hand, po_rows, asn_rows, firmed, pr_rows, erp_orders)
 
 
 def bucket_of(day: date, bucket: str) -> tuple[date, date]:
@@ -179,7 +259,7 @@ class _BulkReads(_Reads):
             .group_by(Stock.material_id), Stock.material_id)}
         self._po = defaultdict(list)
         for row in scoped(select(PoLine.material_id, *_PO_COLUMNS).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
-                PoLine.plant == plant, PurchaseOrder.status.in_(OPEN_PO_STATUSES)), PoLine.material_id):
+                PoLine.plant == plant, PurchaseOrder.status.in_(SUPPLY_PO_STATUSES)), PoLine.material_id):
             self._po[row[0]].append(tuple(row[1:]))
         self._asn = defaultdict(list)
         for row in scoped(select(PoLine.material_id, *_ASN_COLUMNS).join(Asn, Asn.id == AsnLine.asn_id)
@@ -190,6 +270,13 @@ class _BulkReads(_Reads):
         for (order,) in scoped(select(PlannedOrder).where(PlannedOrder.plant == plant, PlannedOrder.status == "FIRMED"),
                                PlannedOrder.material_id):
             self._firmed[order.material_id].append(order)
+        self._pr = defaultdict(list)
+        for row in scoped(_open_pr_query(PrLine.material_id, *_PR_COLUMNS, excluded=requisitions_not_supply(session)).where(PrLine.plant == plant),
+                          PrLine.material_id):
+            self._pr[row[0]].append(tuple(row[1:]))
+        self._erp = defaultdict(list)
+        for (order,) in scoped(_erp_planned(select(PlannedOrder).where(PlannedOrder.plant == plant)), PlannedOrder.material_id):
+            self._erp[order.material_id].append(order)
         self._parameters = {material_id: (reorder_point, max_stock) for material_id, reorder_point, max_stock in scoped(
             select(PlanningParameter.material_id, PlanningParameter.reorder_point, PlanningParameter.max_stock)
             .where(PlanningParameter.plant == plant), PlanningParameter.material_id)}
@@ -207,7 +294,7 @@ class _BulkReads(_Reads):
         if not self._covers(material):
             return super().supply(material)
         return _assemble_supply(self._on_hand.get(material.id, 0), self._po.get(material.id, ()), self._asn.get(material.id, ()),
-                                self._firmed.get(material.id, []))
+                                self._firmed.get(material.id, []), self._pr.get(material.id, ()), self._erp.get(material.id, ()))
 
 
 def _needed_on(on_hand: Decimal, gross_by_day: dict, receipt_by_day: dict, order: PlannedOrder, safety: Decimal,
@@ -246,12 +333,25 @@ def net_material(session: Session, material: Material, plant: str, run_date: dat
     if projected < safety:
         exceptions.append({"code": "BELOW_SAFETY", "message": f"On-hand {projected} is below safety stock {safety}",
                            "action": "Expedite open supply or firm a planned order"})
-    for day in sorted(set(gross_by_day) | set(receipt_by_day)):
+    days = sorted(set(gross_by_day) | set(receipt_by_day))
+    period = lot_period(material) if material.lot_size_policy == "PERIOD" else None
+    for index, day in enumerate(days):
         projected += receipt_by_day.get(day, Decimal(0))
         projected -= gross_by_day.get(day, Decimal(0))
         if projected < safety:
             net = safety - projected
-            qty = lot_size(material, net, projected=projected)
+            period_net = None
+            if period is not None:
+                # PERIOD lot size: one order covers the net requirements of the rest of the lot-size period (week / month) of this bucket.
+                # The largest cumulative shortfall after this bucket within the period, so projected stock stays at safety stock to its end.
+                period_end, running, deepest = bucket_of(day, period)[1], Decimal(0), Decimal(0)
+                for later in days[index + 1:]:
+                    if later > period_end:
+                        break
+                    running += gross_by_day.get(later, Decimal(0)) - receipt_by_day.get(later, Decimal(0))
+                    deepest = max(deepest, running)
+                period_net = net + deepest
+            qty = lot_size(material, net, period_net=period_net, projected=projected)
             lead = material.planned_delivery_days + material.gr_processing_days
             if bucket != "DAY":  # the current bucket is needed from today, not from a Monday / 1st that has passed
                 start, end = bucket_of(day, bucket)
@@ -279,11 +379,13 @@ def net_material(session: Session, material: Material, plant: str, run_date: dat
             exceptions.append({"code": "RESCHEDULE_OUT", "message": f"{order.number} not needed until {needed_on} (firmed for {order.need_date})",
                                "action": f"Reschedule {order.number} out", "planned_order": order.number})
     gross_total = sum(gross_by_day.values(), Decimal(0))
+    open_req = supply.get("open_req", Decimal(0))
     return {
         "material": material.number, "plant": plant, "gross": gross_total, "on_hand": supply["on_hand"],
         "open_po": supply["open_po"], "in_transit": supply["in_transit"], "firm_receipts": supply["firm_receipts"],
-        "safety_stock": safety,
-        "net": max(Decimal(0), gross_total - (supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"]) + safety),
+        "open_req": open_req, "safety_stock": safety,
+        "net": max(Decimal(0), gross_total - (supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"] + open_req)
+                   + safety),
         "proposals": proposals, "exceptions": exceptions,
     }
 
@@ -307,7 +409,7 @@ def _net_reorder_point(material: Material, plant: str, run_date: date, reads: _R
     arrival = _add_working_days(run_date, lead, working_days, holidays)
     gross_total = sum((qty for _, qty in demand), Decimal(0))
     due = sum((qty for req_date, qty in demand if req_date <= arrival), Decimal(0))
-    available = supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"]
+    available = supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"] + supply.get("open_req", Decimal(0))
     projected = available - due
     parameters = reads.parameters(material)
     proposals, exceptions = [], []
@@ -324,8 +426,8 @@ def _net_reorder_point(material: Material, plant: str, run_date: date, reads: _R
         qty = lot_size(material, net, projected=projected)
         proposals.append({"need_date": arrival, "release_date": run_date, "qty": qty, "net": net})
     return {"material": material.number, "plant": plant, "gross": gross_total, "on_hand": supply["on_hand"], "open_po": supply["open_po"],
-            "in_transit": supply["in_transit"], "firm_receipts": supply["firm_receipts"], "safety_stock": safety, "net": net,
-            "proposals": proposals, "exceptions": exceptions}
+            "in_transit": supply["in_transit"], "firm_receipts": supply["firm_receipts"], "open_req": supply.get("open_req", Decimal(0)),
+            "safety_stock": safety, "net": net, "proposals": proposals, "exceptions": exceptions}
 
 
 # ---------------------------------------------------------------- run
@@ -340,14 +442,59 @@ def _batches(rows: list) -> list:
 
 
 def _replace_unfirmed(session: Session, plant: str, material_ids: set) -> None:
-    """Unfirmed planned orders from earlier runs are replaced by this run (status DELETED, version bumped as the ORM does)."""
+    """Unfirmed planned orders from earlier runs of this engine are replaced by this run (status DELETED, version bumped as the ORM
+    does). Planned orders imported from the ERP (source_system other than PLATFORM) are the ERP's: a platform run never deletes them
+    (it counts them as supply instead); only the next import of the ERP replaces them."""
     ids = [order_id for order_id, material_id in session.execute(select(PlannedOrder.id, PlannedOrder.material_id).where(
-        PlannedOrder.plant == plant, PlannedOrder.status == "CREATED")) if material_id in material_ids]
+        PlannedOrder.plant == plant, PlannedOrder.status == "CREATED", PlannedOrder.source_system == PLATFORM)) if material_id in material_ids]
     now = clock.now()
     for part in _batches(ids):
         session.execute(update(PlannedOrder).where(PlannedOrder.id.in_(part))
                         .values(status="DELETED", row_version=PlannedOrder.row_version + 1, updated_at=now)
                         .execution_options(synchronize_session="fetch"))
+
+
+def changed_since(session: Session, plant: str, since) -> set:
+    """Materials of a plant whose demand or supply changed after ``since`` (net-change scope, TD 9.1 "changed since last run"): demand
+    elements, stock movements, purchase-order lines (and their orders' status), ASNs, firmed and ERP-imported planned orders, and open
+    requisition lines (and their requisitions' status). Each read is a range scan on a changed-since index (migration 0023)."""
+    def touched(model):
+        return func.coalesce(model.updated_at, model.created_at) > since
+
+    queries = [
+        select(DemandElement.material_id).where(DemandElement.plant == plant, DemandElement.changed_at > since),
+        select(StockMovement.material_id).where(StockMovement.plant == plant, StockMovement.created_at > since),
+        select(PoLine.material_id).where(PoLine.plant == plant, touched(PoLine)),
+        select(PoLine.material_id).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(touched(PurchaseOrder), PoLine.plant == plant),
+        select(PoLine.material_id).join(AsnLine, AsnLine.po_line_id == PoLine.id).join(Asn, Asn.id == AsnLine.asn_id).where(
+            touched(Asn), PoLine.plant == plant),
+        select(PlannedOrder.material_id).where(PlannedOrder.plant == plant, touched(PlannedOrder),
+                                               or_(PlannedOrder.status.in_(("FIRMED", "CONVERTED", "CANCELLED")), PlannedOrder.source_system != PLATFORM)),
+        select(PrLine.material_id).where(PrLine.plant == plant, touched(PrLine), PrLine.purchase_type.in_(STOCK_PR_TYPES)),
+        select(PrLine.material_id).join(Requisition, Requisition.id == PrLine.requisition_id).where(
+            touched(Requisition), PrLine.plant == plant, PrLine.purchase_type.in_(STOCK_PR_TYPES)),
+    ]
+    changed: set = set()
+    for query in queries:
+        changed.update(m for m in session.execute(query.distinct()).scalars() if m is not None)
+    return changed
+
+
+def _supersede_exceptions(session: Session, mrp_run: MrpRun, material_ids: list) -> int:
+    """The open exceptions of earlier runs for the materials this live run planned are replaced by this run's own (status SUPERSEDED,
+    with the superseding run): the exception backlog is what the latest plan says, not the history of every run."""
+    if not material_ids:
+        return 0
+    now, closed = clock.now(), 0
+    for start in range(0, len(material_ids), source.IN_CHUNK):
+        result = session.execute(update(MrpException).where(
+            MrpException.material_id.in_(material_ids[start:start + source.IN_CHUNK]), MrpException.status == "OPEN",
+            MrpException.mrp_run_id != mrp_run.id, or_(MrpException.plant == mrp_run.plant, MrpException.plant.is_(None)))
+            .values(status="SUPERSEDED", superseded_by_run_id=mrp_run.id, closed_at=now,
+                    close_reason=f"superseded by {mrp_run.number}", row_version=MrpException.row_version + 1, updated_at=now)
+            .execution_options(synchronize_session=False))
+        closed += result.rowcount or 0
+    return closed
 
 
 def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Optional[list[str]] = None,
@@ -356,6 +503,7 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
     mode = mode.upper()
     if mode not in ("NET_CHANGE", "REGENERATIVE", "SIMULATION"):
         raise Problem(422, "INVALID_MODE", "mode must be NET_CHANGE, REGENERATIVE or SIMULATION")
+    abac.guard(session, "MRP_RUN", None, plant=plant)  # SEC-AZ: a controller plans only the plants in their attributes
     run_date = run_date or clock.today()
     tenant_id = current_tenant(session)
     mrp_run = MrpRun(tenant_id=tenant_id, number=next_number(session, "MRP_RUN"), mode=mode, plant=plant,
@@ -374,8 +522,7 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
         last = session.execute(select(func.max(MrpRun.created_at)).where(MrpRun.plant == plant, MrpRun.id != mrp_run.id,
                                                                          MrpRun.mode.not_in(("SIMULATION", "ERP_IMPORT")))).scalar()
         if last is not None:
-            changed = {row for row in session.execute(select(DemandElement.material_id).where(
-                DemandElement.plant == plant, DemandElement.changed_at > last)).scalars()}
+            changed = changed_since(session, plant, last)
             candidates = [m for m in candidates if m.id in changed]
     workflow.step(session, instance, "F1-03", outcome=f"{len(candidates)} material(s) in scope")
 
@@ -403,13 +550,22 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
         value = int(Decimal(material.standard_price_minor or 0) * result["net"])
         for exc in result["exceptions"]:
             exceptions.append({"id": uuid.uuid7(), "tenant_id": tenant_id, "mrp_run_id": mrp_run.id, "material_id": material.id,
-                               "code": exc["code"], "message": exc["message"], "value_at_risk_minor": value,
+                               "plant": plant, "planned_order_id": None, "planned_order": exc.get("planned_order"), "code": exc["code"], "message": exc["message"], "value_at_risk_minor": value,
                                "recommended_action": exc["action"], "status": "OPEN", "created_by": p.user_id})
 
     if mode != "SIMULATION" and candidates:
         # Writes in bulk: one UPDATE per batch of replaced orders, one number-range update, array INSERTs.
         session.flush()
         _replace_unfirmed(session, plant, {m.id for m in candidates})
+        _supersede_exceptions(session, mrp_run, [m.id for m in candidates])
+        # Reschedule / cancel messages name a firmed order: keep its id on the exception, so acting on the order closes the message.
+        referenced = sorted({e["planned_order"] for e in exceptions if e.get("planned_order")})
+        ids = {}
+        for start in range(0, len(referenced), source.IN_CHUNK):
+            ids.update(session.execute(select(PlannedOrder.number, PlannedOrder.id).where(
+                PlannedOrder.number.in_(referenced[start:start + source.IN_CHUNK]))).all())
+        for e in exceptions:
+            e["planned_order_id"] = ids.get(e.pop("planned_order", None))
         for order, number in zip(orders, next_numbers(session, "PLANNED_ORDER", len(orders))):
             order["number"] = number
         insert_rows(session, PlannedOrder.__table__, orders)
@@ -423,7 +579,8 @@ def run(session: Session, *, plant: str, mode: str = "NET_CHANGE", materials: Op
 
     if len(results) <= 20:
         step_outcome = "; ".join(
-            f"{r['material']}: {r['gross']} − ({r['on_hand']} + {r['open_po']} + {r['in_transit']} + {r['firm_receipts']}) + {r['safety_stock']} = {r['net']}"
+            f"{r['material']}: {r['gross']} − ({r['on_hand']} + {r['open_po']} + {r['in_transit']} + {r['firm_receipts']}"
+            + (f" + {r['open_req']} open PR" if Decimal(r.get("open_req") or 0) else "") + f") + {r['safety_stock']} = {r['net']}"
             for r in results) or "nothing to plan"
     else:
         sample = f"{results[0]['material']}..{results[-1]['material']}" if results else "none"
@@ -473,7 +630,94 @@ def _ensure_run_link(session: Session, order: PlannedOrder) -> None:
         link(session, "MRP_RUN", run.id, run.number, "PLANNED_ORDER", order.id, order.number, "planned_by")
 
 
+def readable_plants(session: Session) -> Optional[list]:
+    """The plants the caller may read planning documents of (None: unrestricted), from the same ABAC attributes as the commands."""
+    return abac.read_scope(session).get("plant")
+
+
+def ensure_readable(session: Session, plant: str, kind: str, ref: str) -> None:
+    """404 (not 403: the document's existence is not disclosed) when ``plant`` is outside the caller's plants."""
+    plants = readable_plants(session)
+    if plants is not None and plant not in plants:
+        from app.pic.platform.errors import not_found
+        raise not_found(kind, ref)
+
+
+def _reason(reason: Optional[str], rule: str = "M02") -> str:
+    text = (reason or "").strip()
+    if len(text) < 3:
+        raise rule_violation("Give the reason (at least 3 characters)", rule)
+    return text[:1000]
+
+
+def _close_order_exceptions(session: Session, order: PlannedOrder, reason: str) -> int:
+    """Close the open exceptions about one planned order (its RESCHEDULE / CANCEL messages) once the controller has acted on it."""
+    p = principal(session)
+    closed = 0
+    for exc in session.execute(select(MrpException).where(MrpException.planned_order_id == order.id, MrpException.status == "OPEN")).scalars():
+        exc.status, exc.closed_at, exc.closed_by, exc.close_reason = "CLOSED", clock.now(), p.user_id, reason
+        closed += 1
+    return closed
+
+
+def _maybe_end_run(session: Session, order: PlannedOrder, outcome: str) -> None:
+    instance = _run_instance(session, order)
+    if instance and instance.status == "RUNNING":
+        remaining = session.execute(select(func.count()).select_from(PlannedOrder).where(
+            PlannedOrder.mrp_run_id == order.mrp_run_id, PlannedOrder.status.in_(("CREATED", "FIRMED")))).scalar()
+        if remaining == 0:
+            workflow.end(session, instance, "F1-10", outcome=outcome)
+
+
+def cancel(session: Session, order: PlannedOrder, reason: str) -> PlannedOrder:
+    """Cancel a planned order the controller no longer needs (CREATED or FIRMED, e.g. on a CANCEL message): the receipt leaves the
+    plan, its open exceptions are closed with the reason, the next net-change run replans the material."""
+    abac.guard(session, "MRP_PLAN", order)
+    reason = _reason(reason)
+    if order.status not in ("CREATED", "FIRMED"):
+        raise illegal_transition("Planned order", order.number, order.status, "cancel")
+    before = order.status
+    order.status = "CANCELLED"
+    closed = _close_order_exceptions(session, order, f"planned order cancelled: {reason}")
+    audit.record(session, "PLANNED_ORDER", order.id, "CANCELLED", object_ref=order.number, before={"status": before},
+                 after={"status": "CANCELLED", "exceptionsClosed": closed}, reason=reason)
+    outbox.emit(session, "planned_order.cancelled", "PLANNED_ORDER", order.id, order.number,
+                {"qty": str(order.qty), "needDate": order.need_date.isoformat(), "previousStatus": before, "reason": reason})
+    _maybe_end_run(session, order, "remaining planned orders converted or cancelled")
+    return order
+
+
+def unfirm(session: Session, order: PlannedOrder, reason: str) -> PlannedOrder:
+    """Take the firming off a planned order (FIRMED → CREATED): the next run may change or replace it again."""
+    abac.guard(session, "MRP_PLAN", order)
+    reason = _reason(reason)
+    if order.status != "FIRMED":
+        raise illegal_transition("Planned order", order.number, order.status, "unfirm")
+    order.status = "CREATED"
+    closed = _close_order_exceptions(session, order, f"planned order unfirmed: {reason}")
+    audit.record(session, "PLANNED_ORDER", order.id, "UNFIRMED", object_ref=order.number, before={"status": "FIRMED"},
+                 after={"status": "CREATED", "exceptionsClosed": closed}, reason=reason)
+    outbox.emit(session, "planned_order.unfirmed", "PLANNED_ORDER", order.id, order.number,
+                {"qty": str(order.qty), "needDate": order.need_date.isoformat(), "reason": reason})
+    return order
+
+
+def close_exception(session: Session, exc: MrpException, reason: str) -> MrpException:
+    """The MRP controller resolves an exception message (expedited, accepted as buffer, handled outside the system) with a reason."""
+    abac.guard(session, "MRP_PLAN", None, plant=exc.plant or session.get(MrpRun, exc.mrp_run_id).plant)
+    reason = _reason(reason)
+    if exc.status != "OPEN":
+        raise illegal_transition("MRP exception", f"{exc.code} {exc.id}", exc.status, "close")
+    p = principal(session)
+    exc.status, exc.closed_at, exc.closed_by, exc.close_reason = "CLOSED", clock.now(), p.user_id, reason
+    run = session.get(MrpRun, exc.mrp_run_id)
+    audit.record(session, "MRP_EXCEPTION", exc.id, "CLOSED", object_ref=f"{run.number if run else ''}/{exc.code}",
+                 before={"status": "OPEN"}, after={"status": "CLOSED", "code": exc.code}, reason=reason)
+    return exc
+
+
 def firm(session: Session, order: PlannedOrder) -> PlannedOrder:
+    abac.guard(session, "MRP_PLAN", order)  # SEC-AZ: plant scope of the MRP controller
     if order.status != "CREATED":
         raise illegal_transition("Planned order", order.number, order.status, "firm")
     order.status = "FIRMED"
@@ -492,6 +736,7 @@ def convert(session: Session, order: PlannedOrder, purpose_code: str = "MRP_REPL
     """Convert to a purchase requisition (origin MRP). It follows the same approval controls as manual PRs."""
     from app.pic.services import requisition  # local import: requisition imports planning for F1 callbacks
 
+    abac.guard(session, "MRP_PLAN", order)  # SEC-AZ: plant scope of the MRP controller
     if order.status not in ("CREATED", "FIRMED"):
         raise illegal_transition("Planned order", order.number, order.status, "convert")
     material = session.get(Material, order.material_id)
@@ -510,6 +755,7 @@ def convert(session: Session, order: PlannedOrder, purpose_code: str = "MRP_REPL
     order.requisition_id = pr.id
     _ensure_run_link(session, order)
     link(session, "PLANNED_ORDER", order.id, order.number, "REQUISITION", pr.id, pr.number, "converted_from", to_line=10)
+    _close_order_exceptions(session, order, f"converted to {pr.number}")
     audit.record(session, "PLANNED_ORDER", order.id, "CONVERTED", object_ref=order.number, after={"requisition": pr.number,
                                                                                                    "source": determination.method})
     if instance:
@@ -563,8 +809,8 @@ def requirements_profile(session: Session, material: Material, plant: str, run_d
                         "opening": opening, "projected": projected, "belowSafety": projected < safety, "shortage": projected < 0})
     return {"material": material.number, "plant": plant, "mrpType": material.mrp_type, "bucket": bucket, "asOf": run_date, "horizonTo": horizon,
             "onHand": supply["on_hand"], "openPo": supply["open_po"], "inTransit": supply["in_transit"], "firmPlannedReceipts": supply["firm_receipts"],
-            "demand": sum((qty for _, qty, _, _ in demand), Decimal(0)), "safetyStock": safety,
-            "available": supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"],
+            "openRequisitions": supply["open_req"], "demand": sum((qty for _, qty, _, _ in demand), Decimal(0)), "safetyStock": safety,
+            "available": supply["on_hand"] + supply["open_po"] + supply["in_transit"] + supply["firm_receipts"] + supply["open_req"],
             "receipts": [{"date": d, "qty": q, "kind": k, "ref": r} for d, q, k, r in sorted(supply["receipts"], key=lambda x: x[0])],
             "requirements": [{"date": d, "qty": q, "type": t, "reference": r} for d, q, t, r in demand],
             "buckets": [b for b in buckets if b["from"] <= horizon], "parameters": reads.parameters(material)}

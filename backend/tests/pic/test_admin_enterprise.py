@@ -242,7 +242,7 @@ def test_password_reset_and_session_revocation(client, admin):
 
 def test_invite_refuses_sod_conflicts_and_bad_input(client, admin):
     r = client.post("/v1/admin/users", json={"email": _mail("dup"), "name": "Dup User", "roles": ["BUYER", "RECEIVER"]}, headers=admin)
-    assert r.status_code == 422 and "SOD-03" in r.text
+    assert r.status_code == 409 and r.json()["code"] == "SOD_CONFLICT" and "SOD-03" in r.text  # same answer as role assignment (flow fixes)
     assert client.post("/v1/admin/users", json={"email": "not-an-email", "name": "X", "roles": ["BUYER"]}, headers=admin).status_code == 422
     assert client.post("/v1/admin/users", json={"email": _mail("q"), "name": "Q User", "roles": ["NO_SUCH_ROLE"]}, headers=admin).status_code == 422
     assert client.post("/v1/admin/users", json={"email": _mail("q"), "name": "Q User", "roles": ["BUYER"], "attributes": {"plants": ["ZZZ"]}},

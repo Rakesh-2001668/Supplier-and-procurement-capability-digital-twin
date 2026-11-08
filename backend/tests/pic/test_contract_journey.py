@@ -696,7 +696,9 @@ def test_12_audit_trail_tenant_isolation_and_the_m07_kpis(client, login, env):
     theirs = client.get(f"/v1/contracts/{a}", headers=other)
     assert theirs.status_code in (200, 404) and (theirs.status_code == 404 or theirs.json()["id"] != ours["id"] and theirs.json()["title"] != ours["title"])
     assert not {c["id"] for c in client.get("/v1/contracts", headers=other).json()["items"]} & {ours["id"], _contract(client, login, b)["id"]}
-    assert not [i for i in client.get("/v1/obligations", headers=other).json()["items"] if "forecast" in i["description"].lower() and i["contract"] == b]
+    # compared by id: contract numbers are per tenant and per contract type, so the other tenant may have its own contract with b's number
+    our_obligations = {i["id"] for i in client.get("/v1/obligations", headers=cm).json()["items"] if i["contract"] == b}
+    assert our_obligations and not {i["id"] for i in client.get("/v1/obligations", headers=other).json()["items"]} & our_obligations
     assert client.get(f"/v1/audit/CONTRACT/{ours['id']}", headers=other).status_code == 404
     # the M07 KPIs: cycle time, leakage, expiring in 90 days, obligation on-time %
     items = {i["code"]: i for i in client.get("/v1/kpis?module=M07&trend=false", headers=cm).json()["items"]}

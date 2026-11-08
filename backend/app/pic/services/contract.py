@@ -1,4 +1,20 @@
-"""F4 Contract lifecycle: author → execute → consume → renew (M07)."""
+"""F4 Contract lifecycle: author → execute → consume → renew (M07).
+
+Renewal (TD §6 Active → Expiring → Expired | Terminated | Renewed; flow fixes B5). At the renewal notice date (rule
+CONTRACT-APPROVAL.renewalNoticeDays before the end) the contract becomes EXPIRING, the owner and the contract managers get a
+CONTRACT_EXPIRING notification and a CONTRACT_RENEWAL decision task is opened. There are two ways to renew:
+- EXTENSION of the same contract: the renewal task approved drafts an EXTENSION amendment; once effective the contract is ACTIVE again
+  with a later end date (same number, version + 1);
+- SUCCESSOR contract (``renew_as_successor``, POST /v1/contracts/{ref}/renewals): a new draft with the current lines and prices and its
+  own number, which goes through negotiation, approval and signature like any contract. When the successor is activated and its validity
+  has started, the predecessor becomes RENEWED (terminal: no more prices to source determination, open renewal tasks closed, the
+  workflow instance ended); a successor that starts later turns the predecessor RENEWED on its start date (timer CONTRACT_SUCCESSION).
+
+ERP: an activated or amended call-off contract (scheduling agreement, quantity / value contract, rate card, SOW) is posted to the ERP as an
+OUTLINE_AGREEMENT message (exactly once per contract version, key ``<company>|OA|<number>|v<version>``); a master agreement or NDA carries
+no lines and is not an ERP outline agreement. A target connector that does not map OUTLINE_AGREEMENT leaves the contract active in PIC
+and records ERP_NOT_MAPPED in the audit trail.
+"""
 import hashlib
 import hmac
 import json
@@ -40,6 +56,7 @@ SM = StateMachine("CONTRACT", {
     ("ACTIVE", "terminate"): "TERMINATED",
     ("EXPIRING", "terminate"): "TERMINATED",
     ("EXPIRING", "renew"): "RENEWED",
+    ("ACTIVE", "renew"): "RENEWED",  # a successor contract took over before the renewal notice date
     # An approved EXTENSION amendment (renewal of the same contract) brings an expiring contract back to active.
     ("EXPIRING", "extend"): "ACTIVE",
 })
@@ -242,6 +259,25 @@ def _instance(session: Session, contract: Contract):
     return workflow.find(session, "CONTRACT", contract.id, PROCESS)
 
 
+# Own number range per contract type for new contracts (flow fixes B6): the scheduling agreement keeps the original CONTRACT range
+# (SA-5520 of the signature case); the other types get their own prefix. A tenant without the new range rows keeps numbering from
+# CONTRACT until migration 0024 / reference.ensure_extensions adds them; existing numbers are never renumbered.
+CONTRACT_NUMBER_RANGES = {
+    "SCHEDULING_AGREEMENT": "CONTRACT", "QUANTITY_CONTRACT": "CONTRACT_QC", "VALUE_CONTRACT": "CONTRACT_VC", "RATE_CARD": "CONTRACT_RC",
+    "SOW": "CONTRACT_SOW", "MASTER_AGREEMENT": "CONTRACT_MA", "NDA": "CONTRACT_NDA",
+}
+
+
+def contract_number(session: Session, type: str) -> str:
+    object_type = CONTRACT_NUMBER_RANGES.get((type or "").upper(), "CONTRACT")
+    try:
+        return next_number(session, object_type)
+    except Problem as exc:
+        if exc.code != "NUMBER_RANGE_MISSING" or object_type == "CONTRACT":
+            raise
+        return next_number(session, "CONTRACT")
+
+
 def _lines(session: Session, contract: Contract) -> list[ContractLine]:
     return session.execute(select(ContractLine).where(ContractLine.contract_id == contract.id).order_by(ContractLine.line_no)).scalars().all()
 
@@ -270,7 +306,7 @@ def create_draft(session: Session, *, type: str, title: str, supplier_id: uuid.U
     library = _library(playbook.body, type=type, payment_terms=payment_terms, incoterms=incoterms, supplier_name=supplier.legal_name,
                        index_ref=index_ref, tolerances=tolerances, jurisdiction=jurisdiction, category=category)
     contract = Contract(
-        tenant_id=current_tenant(session), number=next_number(session, "CONTRACT"), type=type, title=title,
+        tenant_id=current_tenant(session), number=contract_number(session, type), type=type, title=title,
         supplier_id=supplier_id, company_code=company_code, status="DRAFT", valid_from=valid_from, valid_to=valid_to,
         payment_terms=payment_terms, incoterms=incoterms, over_tolerance_pct=D(tolerances.get("over_pct", 0)),
         under_tolerance_pct=D(tolerances.get("under_pct", 0)), price_tolerance_pct=D(tolerances.get("price_pct", 0)),
@@ -654,6 +690,7 @@ def activate(session: Session, contract: Contract) -> Contract:
                  "validFrom": contract.valid_from.isoformat(), "validTo": contract.valid_to.isoformat()})
     rule = rules.resolve(session, "CONTRACT-APPROVAL", company_code=contract.company_code)
     notice = int(rule.body["renewalNoticeDays"])
+    _succeed(session, contract)
     workflow.create_timer(session, "CONTRACT_RENEWAL", "CONTRACT", contract.id, clock.at_ist(contract.valid_to - timedelta(days=notice), 9))
     workflow.create_timer(session, "CONTRACT_EXPIRY", "CONTRACT", contract.id, clock.at_ist(contract.valid_to + timedelta(days=1), 0, 5))
     instance = _instance(session, contract)
@@ -852,6 +889,9 @@ def index_reset(session: Session, contract: Contract, index_value: Decimal, effe
     audit.record(session, "CONTRACT", contract.id, "INDEX_RESET", object_ref=contract.number,
                  after={"index": str(index_value), "changePct": str(change_pct.quantize(Decimal("0.01"))),
                         "adjustPct": str(adjust_pct.quantize(Decimal("0.01"))), "effectiveFrom": effective_from.isoformat(), "lines": results})
+    if results:
+        session.flush()
+        post_to_erp(session, contract)  # the new price period reaches the ERP outline agreement (flow fixes B5)
     return {"contract": contract.number, "changePct": str(change_pct.quantize(Decimal("0.01"))), "adjustPct": str(adjust_pct.quantize(Decimal("0.01"))),
             "lines": results}
 
@@ -902,6 +942,9 @@ def _renewal_due(session: Session, timer) -> None:
     contract = session.get(Contract, timer.object_id)
     if contract and contract.status == "ACTIVE":
         SM.apply(session, contract, "expiring", reason="renewal notice period reached")
+        outbox.emit(session, "contract.expiring", "CONTRACT", contract.id, contract.number,
+                    {"validTo": contract.valid_to.isoformat(), "daysToExpiry": (contract.valid_to - clock.today()).days,
+                     "ownerId": str(contract.owner_id), "supplierId": str(contract.supplier_id), "targetValueMinor": contract.target_value_minor})
         workflow.start_approval(session, _instance(session, contract), "CONTRACT_RENEWAL", object_type="CONTRACT",
                                 object_id=contract.id, object_ref=contract.number, chain=["CONTRACT_MANAGER"], step_id=None,
                                 initiator_id=None, evidence={"validTo": contract.valid_to.isoformat()})
@@ -955,6 +998,228 @@ def _expired(session: Session, timer) -> None:
         if instance is not None and instance.status == "RUNNING":
             workflow.step(session, instance, "F4-09", outcome="consumption tracking ended at expiry")
             workflow.end(session, instance, "F4-10", outcome=f"expired on {contract.valid_to.isoformat()}")
+
+
+@outbox.consumer("contract.expiring", "notify-contract-expiring")
+def _notify_expiring(session: Session, event) -> None:
+    """CONTRACT_EXPIRING (rule NOTIFICATIONS): the owner and the contract managers, at the renewal notice date."""
+    from app.pic.services.notifications import _user, link_for, notify, users_with_role
+    contract = session.get(Contract, event.object_id)
+    if contract is None:
+        return
+    internal = _user(session, contract.owner_id) + [u for u in users_with_role(session, "CONTRACT_MANAGER") if u.supplier_id is None]
+    notify(session, internal, kind="CONTRACT_EXPIRING", dedup_key=f"CONTRACT_EXPIRING:{contract.id}:{contract.valid_to.isoformat()}",
+           title=f"Contract {contract.number} expires on {contract.valid_to.strftime('%d %b %Y')}",
+           body=f"{contract.number} ({contract.title}) expires in {event.payload.get('daysToExpiry')} days, on {contract.valid_to.isoformat()}. "
+                "Decide the renewal: extend this contract (renewal task), draft a successor contract, run a new sourcing event or let it expire.",
+           link=link_for("CONTRACT", contract.number), object_type="CONTRACT", object_ref=contract.number)
+
+
+# ---------------------------------------------------------------- renewal by a successor contract (TD §6 Renewed)
+def renew_as_successor(session: Session, contract: Contract, *, reason: str, valid_from: Optional[date] = None,
+                       valid_to: Optional[date] = None, title: Optional[str] = None) -> Contract:
+    """Draft the successor of a live contract: same type, supplier, company code, terms and lines, at the prices valid at the end of
+    the current contract, for the next period (default: the day after the end, for rule CONTRACT-AMENDMENT.renewalExtensionMonths).
+    The predecessor becomes RENEWED when the successor takes effect (``_succeed``)."""
+    from app.pic.services import amendments
+
+    reason = (reason or "").strip()
+    if not reason:
+        raise Problem(422, "REASON_REQUIRED", "Give the reason for the renewal", rule_ref="CLM-RENEW")
+    if contract.status not in FRAMEWORK_LIVE:
+        raise illegal_transition("Contract", contract.number, contract.status, "renew")
+    existing = session.execute(select(Contract.number).where(Contract.renews_contract_id == contract.id,
+                                                             Contract.status.not_in(("TERMINATED", "EXPIRED")))).scalars().first()
+    if existing:
+        raise Problem(409, "SUCCESSOR_EXISTS", f"{existing} already renews {contract.number}", rule_ref="CLM-RENEW", successor=existing)
+    pending = amendments._pending(session, contract)
+    if pending is not None and pending.kind == "EXTENSION":
+        raise Problem(409, "EXTENSION_PENDING", f"Extension {pending.number} of {contract.number} is {pending.status}: decide it or withdraw it first",
+                      rule_ref="CLM-RENEW")
+    valid_from = valid_from or contract.valid_to + timedelta(days=1)
+    if valid_to is None:
+        months = int(rules.resolve(session, "CONTRACT-AMENDMENT", company_code=contract.company_code).body.get("renewalExtensionMonths", 12))
+        valid_to = amendments.add_months(valid_from, months) - timedelta(days=1)
+    if valid_from <= contract.valid_from:
+        raise rule_violation(f"The successor must start after {contract.valid_from.isoformat()}, the start of {contract.number}", "CLM-RENEW")
+    lines = []
+    for line in _lines(session, contract):
+        validity = session.execute(select(PriceValidity).where(PriceValidity.contract_line_id == line.id, PriceValidity.published.is_(True))
+                                   .order_by(PriceValidity.valid_to.desc(), PriceValidity.valid_from.desc(), PriceValidity.created_at.desc())
+                                   .limit(1)).scalar_one_or_none()
+        if validity is None:
+            continue
+        lines.append({"material_id": line.material_id, "description": line.description, "plant": line.plant, "uom": line.uom,
+                      "target_qty": line.target_qty, "unit_price_minor": validity.unit_price_minor})
+    successor = create_draft(
+        session, type=contract.type, title=title or contract.title, supplier_id=contract.supplier_id, company_code=contract.company_code,
+        valid_from=valid_from, valid_to=valid_to, payment_terms=contract.payment_terms, incoterms=contract.incoterms, lines=lines,
+        owner_id=contract.owner_id, tolerances={"over_pct": contract.over_tolerance_pct, "under_pct": contract.under_tolerance_pct,
+                                                "price_pct": contract.price_tolerance_pct},
+        index_ref=contract.index_ref, trigger=f"renewal of {contract.number}", framework_contract_id=contract.framework_contract_id,
+        jurisdiction=contract.jurisdiction, category=contract.category)
+    successor.renews_contract_id = contract.id
+    link(session, "CONTRACT", contract.id, contract.number, "CONTRACT", successor.id, successor.number, "renewed_by")
+    audit.record(session, "CONTRACT", contract.id, "RENEWAL_SUCCESSOR_DRAFTED", object_ref=contract.number, reason=reason,
+                 after={"successor": successor.number, "validFrom": valid_from.isoformat(), "validTo": valid_to.isoformat(), "lines": len(lines)})
+    instance = _instance(session, contract)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.step(session, instance, "F4-09", outcome=f"renewal: successor {successor.number} drafted ({valid_from.isoformat()} to {valid_to.isoformat()})")
+        workflow.wait(session, instance, "F4-09", outcome="tracking consumption & obligations")
+    return successor
+
+
+def _succeed(session: Session, successor: Contract) -> None:
+    """The successor was activated: its predecessor becomes RENEWED now (validity started) or on the successor's start date."""
+    if not successor.renews_contract_id:
+        return
+    predecessor = session.get(Contract, successor.renews_contract_id)
+    if predecessor is None or predecessor.status not in FRAMEWORK_LIVE:
+        return
+    if successor.valid_from <= clock.today():
+        _mark_renewed(session, predecessor, successor)
+    else:
+        workflow.create_timer(session, "CONTRACT_SUCCESSION", "CONTRACT", successor.id, clock.at_ist(successor.valid_from, 0, 5))
+
+
+@workflow.on_timer("CONTRACT_SUCCESSION")
+def _succession_due(session: Session, timer) -> None:
+    successor = session.get(Contract, timer.object_id)
+    if successor is None or successor.status not in FRAMEWORK_LIVE or not successor.renews_contract_id:
+        return
+    predecessor = session.get(Contract, successor.renews_contract_id)
+    if predecessor is not None and predecessor.status in FRAMEWORK_LIVE:
+        _mark_renewed(session, predecessor, successor)
+
+
+def _mark_renewed(session: Session, predecessor: Contract, successor: Contract) -> None:
+    from app.pic.services import amendments
+
+    SM.apply(session, predecessor, "renew", reason=f"renewed by {successor.number}")
+    amendments.close_pending(session, predecessor, f"renewed by {successor.number}")
+    for task in session.execute(select(Task).where(Task.kind == "CONTRACT_RENEWAL", Task.object_id == predecessor.id, Task.status == "OPEN")).scalars():
+        task.status = "CANCELLED"  # decided by the successor contract
+        amendments._cancel_timers(session, "TASK_SLA", task.id)
+    outbox.emit(session, "contract.renewed", "CONTRACT", predecessor.id, predecessor.number,
+                {"successor": successor.number, "successorId": str(successor.id), "validFrom": successor.valid_from.isoformat(),
+                 "validTo": successor.valid_to.isoformat(), "supplierId": str(predecessor.supplier_id), "ownerId": str(predecessor.owner_id)})
+    instance = _instance(session, predecessor)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.step(session, instance, "F4-09", outcome=f"consumption tracking ended: renewed by {successor.number}")
+        workflow.end(session, instance, "F4-10", outcome=f"renewed by {successor.number} from {successor.valid_from.isoformat()}")
+
+
+# ---------------------------------------------------------------- ERP outline agreement (flow fixes B5)
+ERP_MESSAGE = "OUTLINE_AGREEMENT"
+
+
+@outbox.consumer("contract.activated", "erp-contract-posting")
+@outbox.consumer("contract.amended", "erp-contract-posting")
+def _post_contract(session: Session, event) -> Optional[dict]:
+    return post_to_erp(session, session.get(Contract, event.object_id))
+
+
+def post_to_erp(session: Session, contract: Optional[Contract]) -> Optional[dict]:
+    """Queue the contract's current version for the ERP (exactly once per version) and process it."""
+    from app.pic.platform import connectors, integration
+
+    if contract is None or contract.type in FRAMEWORK_TYPES or contract.status not in FRAMEWORK_LIVE:
+        return None
+    target = integration.target_system(session, contract.company_code)
+    if not connectors.maps(target, ERP_MESSAGE):
+        audit.record(session, "CONTRACT", contract.id, "ERP_NOT_MAPPED", object_ref=contract.number,
+                     after={"system": target, "messageType": ERP_MESSAGE, "version": contract.version},
+                     reason=f"The ERP connector does not map {ERP_MESSAGE}; the contract stands in PIC only")
+        return {"status": "NOT_MAPPED", "system": target}
+    supplier = session.get(Supplier, contract.supplier_id)
+    material_numbers = {m.id: m.number for m in session.execute(select(Material).where(Material.id.in_(
+        [l.material_id for l in _lines(session, contract) if l.material_id]))).scalars()} if _lines(session, contract) else {}
+    lines = []
+    for line in _lines(session, contract):
+        validity = session.execute(select(PriceValidity).where(PriceValidity.contract_line_id == line.id, PriceValidity.published.is_(True))
+                                   .order_by(PriceValidity.valid_from.desc(), PriceValidity.created_at.desc()).limit(1)).scalar_one_or_none()
+        lines.append({"line": line.line_no, "material": material_numbers.get(line.material_id), "description": line.description,
+                      "plant": line.plant, "uom": line.uom, "targetQty": str(line.target_qty),
+                      "priceMinor": validity.unit_price_minor if validity else None,
+                      "priceValidFrom": validity.valid_from.isoformat() if validity else None,
+                      "priceValidTo": validity.valid_to.isoformat() if validity else None})
+    payload = {"contract": contract.number, "version": contract.version, "type": contract.type, "supplier": supplier.code,
+               "companyCode": contract.company_code, "currency": contract.currency, "validFrom": contract.valid_from.isoformat(),
+               "validTo": contract.valid_to.isoformat(), "paymentTerms": contract.payment_terms, "incoterms": contract.incoterms,
+               "targetValueMinor": contract.target_value_minor, "lines": lines}
+    # Exactly once per content of a version: an index reset adds a price period without a new contract version, so the key carries a
+    # digest of what is sent (a replay of the same content is the same message; new prices are a new message).
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:12]
+    message = integration.enqueue(
+        session, target_system=target, message_type=ERP_MESSAGE, idempotency_key=f"{contract.company_code}|OA|{contract.number}|v{contract.version}|{digest}",
+        object_type="CONTRACT", object_id=contract.id, object_ref=contract.number, payload=payload)
+    integration.process(session, message)
+    return {"status": message.status, "system": target, "erpDocument": message.erp_doc_no}
+
+
+def _contract_posted(session: Session, message) -> None:
+    contract = session.get(Contract, message.object_id)
+    if contract is not None and (message.payload or {}).get("version") == contract.version:
+        contract.erp_doc_no = message.erp_doc_no
+
+
+def _register_erp_callback() -> None:
+    from app.pic.platform import integration
+    integration.on_posted(ERP_MESSAGE)(_contract_posted)
+
+
+_register_erp_callback()
+
+
+# ---------------------------------------------------------------- consumption re-checked at PO release (flow fixes B3)
+def check_release(session: Session, po: PurchaseOrder, po_lines: list) -> list[dict]:
+    """At release (not only at creation) the contract must still be live and the order must still fit the contract: quantity per line
+    within target + over-delivery tolerance, and for a value contract the released value within the target value + tolerance. What
+    other orders released since this one was created counts. Raises 422 CONTRACT_EXHAUSTED / CONTRACT_NOT_LIVE (rule CLM-PO); returns
+    the checks made (kept in the release audit)."""
+    checks = []
+    by_line: dict = {}
+    for po_line in po_lines:
+        if po_line.contract_line_id:
+            by_line.setdefault(po_line.contract_line_id, []).append(po_line)
+    value_by_contract: dict = {}
+    for contract_line_id, lines in sorted(by_line.items(), key=lambda kv: str(kv[0])):
+        contract_line = session.get(ContractLine, contract_line_id)
+        if contract_line is None:
+            continue
+        contract = session.get(Contract, contract_line.contract_id)
+        if contract.status not in FRAMEWORK_LIVE:
+            raise Problem(422, "CONTRACT_NOT_LIVE", f"{contract.number} is {contract.status}; {po.number} cannot be released against it",
+                          rule_ref="CLM-PO", contract=contract.number)
+        released_qty, released_value = live_consumption(session, contract_line)
+        qty = sum((D(l.qty) for l in lines), Decimal(0))
+        limit = contract_line.target_qty * (1 + D(contract.over_tolerance_pct) / 100)
+        checks.append({"contract": contract.number, "line": contract_line.line_no, "releasedQty": jsonable_str(released_qty),
+                       "orderQty": jsonable_str(qty), "limitQty": jsonable_str(limit)})
+        if released_qty + qty > limit:
+            raise Problem(422, "CONTRACT_EXHAUSTED",
+                          f"{contract.number} line {contract_line.line_no}: {released_qty} of {contract_line.target_qty} {contract_line.uom} already released; "
+                          f"{qty} more on {po.number} exceeds the contract quantity (+{contract.over_tolerance_pct}% tolerance). Reduce the order, "
+                          "amend the contract or order the rest without the contract", rule_ref="CLM-PO", contract=contract.number,
+                          line=contract_line.line_no, releasedQty=str(released_qty), orderQty=str(qty), limitQty=str(limit))
+        entry = value_by_contract.setdefault(contract.id, [contract, 0])
+        entry[1] += sum(l.net_minor for l in lines)
+    for contract, order_value in value_by_contract.values():
+        if contract.type != "VALUE_CONTRACT" or not contract.target_value_minor:
+            continue
+        released = sum(live_consumption(session, l)[1] for l in _lines(session, contract))
+        limit = int(contract.target_value_minor * (1 + D(contract.over_tolerance_pct) / 100))
+        checks.append({"contract": contract.number, "releasedValueMinor": released, "orderValueMinor": order_value, "limitValueMinor": limit})
+        if released + order_value > limit:
+            raise Problem(422, "CONTRACT_EXHAUSTED",
+                          f"{contract.number}: {fmt_inr(released)} of {fmt_inr(contract.target_value_minor)} already released; {po.number} "
+                          f"({fmt_inr(order_value)}) exceeds the contract value (+{contract.over_tolerance_pct}% tolerance)", rule_ref="CLM-PO",
+                          contract=contract.number, releasedValueMinor=released, orderValueMinor=order_value, limitValueMinor=limit)
+    return checks
+
+
+def jsonable_str(value) -> str:
+    return format(D(value).normalize(), "f") if value is not None else "0"
 
 
 # ---------------------------------------------------------------- CLM-04 obligation tracker and CLM-03 renewals calendar

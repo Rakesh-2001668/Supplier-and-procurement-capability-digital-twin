@@ -17,7 +17,7 @@ export default function PostingPage() {
   const person = (u: PostingDetail['createdBy'], at?: string | null) => (u ? `${u.name}${at ? ` · ${dateTime(at)}` : ''}` : '–');
   return (
     <ObjectPage
-      type="STOCK_POSTING" docRef={p?.number ?? ''} eyebrow="INV-03 · Stock posting" loading={isLoading} error={error}
+      type="STOCK_POSTING" docRef={p?.number ?? ''} eyebrow="STK-03 · Stock posting" loading={isLoading} error={error}
       title={<>{p?.number} <span className="text-base font-normal text-slate-500">{p ? label(p.type) : ''} at {p?.plant}</span></>}
       status={p?.status}
       actions={p && <PostingActions posting={p} />}

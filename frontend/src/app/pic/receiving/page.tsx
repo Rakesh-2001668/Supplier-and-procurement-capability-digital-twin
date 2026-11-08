@@ -4,12 +4,13 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { TaskPanel } from '@/components/pic/object';
 import { Button, Card, DataTable, PageHeader, Select, StatusChip, Tabs } from '@/components/pic/ui';
-import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, qty } from '@/lib/pic/format';
-import { useCommand, useList } from '@/lib/pic/hooks';
+import { useList } from '@/lib/pic/hooks';
 import { hasRole, PoRow, useSessionUser } from '../invoices/_components';
 import { SETTLE_ROLES } from '../invoices/_ops';
 import { EwayCell, GoodsReceiptDialog, InspectionLot, UsageDecisionDialog } from './_components';
+import { ReturnsView } from './_returns';
+import { SesActions } from './_ses';
 import { ConsignmentTab, LotSearch, WITHDRAW_ROLES } from './_special';
 import { ToleranceTab } from './_tolerances';
 
@@ -19,7 +20,7 @@ type Gr = { id: string; number: string; po: string; status: string; posting_date
 type Ses = { id: string; number: string; po: string; status: string; method: string; period_from: string; period_to: string; total_minor: number; created_at: string };
 
 const GR_STATUSES = ['', 'POSTED', 'QUALITY_HOLD', 'ACCEPTED', 'PARTIALLY_REJECTED', 'REJECTED', 'REVERSED'];
-const SES_STATUSES = ['', 'SUBMITTED', 'APPROVED', 'REJECTED', 'DRAFT'];
+const SES_STATUSES = ['', 'SUBMITTED', 'APPROVED', 'REJECTED', 'DRAFT', 'REVOKED'];
 const statusOptions = (list: string[]) => list.map((s) => ({ value: s, label: s ? s.replace(/_/g, ' ').toLowerCase() : 'All statuses' }));
 
 export default function Receiving() {
@@ -27,12 +28,15 @@ export default function Receiving() {
   return (
     <div>
       <PageHeader kpis="M09" eyebrow="RCV-01 · Receiving & quality" title="Receiving"
-        subtitle="Post goods receipts against ASNs or confirmed orders, record quality usage decisions, and approve service entry sheets. Every receipt updates stock, GR/IR and the supplier scorecard." />
+        subtitle="Post goods receipts against ASNs or confirmed orders, record quality usage decisions, follow return deliveries until they are credited or replaced, and approve service entry sheets. Every receipt updates stock, GR/IR and the supplier scorecard." />
       <Card>
         <Tabs tabs={[
           { id: 'inbound', label: 'Inbound', content: <Inbound canPost={hasRole(user, 'RECEIVER')} /> },
           { id: 'quality', label: 'Quality', content: <Quality canDecide={hasRole(user, 'QUALITY_INSPECTOR')} /> },
-          { id: 'services', label: 'Service entries', content: <ServiceEntries canApprove={hasRole(user, 'SERVICE_OWNER')} /> },
+          { id: 'returns', label: 'Returns', content: <ReturnsView canReplace={hasRole(user, 'QUALITY_INSPECTOR')}
+            canClose={hasRole(user, 'QUALITY_INSPECTOR', 'AP_CLERK')} /> },
+          { id: 'services', label: 'Service entries', content: <ServiceEntries canApprove={hasRole(user, 'SERVICE_OWNER')}
+            canSubmit={hasRole(user, 'SUPPLIER_USER')} /> },
           { id: 'receipts', label: 'Goods receipts', content: <GoodsReceipts /> },
           { id: 'consignment', label: 'Consignment', content: <ConsignmentTab canWithdraw={hasRole(user, ...WITHDRAW_ROLES)} canSettle={hasRole(user, ...SETTLE_ROLES)} /> },
           { id: 'lots', label: 'Lot trace', content: <LotSearch /> },
@@ -121,12 +125,9 @@ function Quality({ canDecide }: { canDecide: boolean }) {
 }
 
 // ---------------------------------------------------------------- RCV-04 service entries
-function ServiceEntries({ canApprove }: { canApprove: boolean }) {
+function ServiceEntries({ canApprove, canSubmit }: { canApprove: boolean; canSubmit: boolean }) {
   const [status, setStatus] = useState('');
   const list = useList<Ses>(`/service-entries${status ? `?status=${status}` : ''}`);
-  const approve = useCommand((ses: string) => api.post<{ number: string; status: string }>(`/service-entries/${encodeURIComponent(ses)}/approve`), {
-    success: (r) => `${r.number} ${r.status.toLowerCase()}`,
-  });
   const submitted = list.items.filter((s) => s.status === 'SUBMITTED');
   return (
     <div className="space-y-4">
@@ -144,8 +145,7 @@ function ServiceEntries({ canApprove }: { canApprove: boolean }) {
           { key: 'period', header: 'Period', render: (s) => `${date(s.period_from)} – ${date(s.period_to)}` },
           { key: 'total_minor', header: 'Value', align: 'right', render: (s) => inr(s.total_minor) },
           { key: 'status', header: 'Status', render: (s) => <StatusChip status={s.status} /> },
-          { key: 'action', header: '', render: (s) => canApprove && s.status === 'SUBMITTED'
-            ? <Button variant="primary" busy={approve.isPending && approve.variables === s.number} onClick={() => approve.mutate(s.number)}>Approve</Button> : null },
+          { key: 'action', header: '', render: (s) => <SesActions number={s.number} status={s.status} canSubmit={canSubmit} canApprove={canApprove} /> },
         ]}
       />
       {canApprove && submitted.length > 0 && (

@@ -38,6 +38,10 @@ NUMBER_RANGES = {
     "STOCK_POSTING": ("STP-", 1001, 0), "PHYSICAL_INVENTORY": ("PHI-", 1001, 0), "STOCK_RESERVATION": ("RSV-", 1001, 0),
     "MATERIAL_CHANGE": ("MCR-", 101, 0), "REBATE_AGREEMENT": ("RBA-", 101, 0), "REBATE_SETTLEMENT": ("RBS-", 101, 0),
     "CLAUSE_EXTRACTION": ("CLX-", 101, 0), "DEVELOPMENT_PLAN": ("SDP-", 101, 0),
+    # flow fixes B6 (migration 0024): own range per sourcing event type and per contract type (RFQ and scheduling agreements keep theirs)
+    "SOURCING_EVENT_RFI": ("RFI-", 1101, 0), "SOURCING_EVENT_RFP": ("RFP-", 3101, 0), "SOURCING_EVENT_AUC": ("AUC-", 4101, 0),
+    "CONTRACT_QC": ("QC-", 6101, 0), "CONTRACT_VC": ("VC-", 6501, 0), "CONTRACT_RC": ("RC-", 7101, 0), "CONTRACT_SOW": ("SOW-", 7501, 0),
+    "CONTRACT_MA": ("MA-", 8101, 0), "CONTRACT_NDA": ("NDA-", 8501, 0),
 }
 
 L = 100_000 * 100   # one lakh rupees in paise

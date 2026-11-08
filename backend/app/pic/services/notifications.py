@@ -61,13 +61,15 @@ def users_with_role(session: Session, role: str) -> list[AppUser]:
 def task_workers(session: Session, task: Task) -> list[AppUser]:
     """Everyone who could complete the task now (same rules as the task inbox and ``workflow.complete``): the holders of the
     candidate role and the delegates currently acting for them (delegation of authority)."""
-    workers = [u for u in users_with_role(session, task.candidate_role) if workflow.can_work(_principal(u, session), task) is None]
+    from app.pic.platform import abac  # B7: the same ABAC scope as the inbox (abac.task_allowed)
+    workers = [u for u in users_with_role(session, task.candidate_role)
+               if workflow.can_work(_principal(u, session), task) is None and abac.task_allowed(session, _principal(u, session), task)]
     seen = {u.id for u in workers}
     for grant in delegation.all_current(session):
         if grant.delegate_id in seen:
             continue
         delegate = session.get(AppUser, grant.delegate_id)
-        if delegate is not None and delegate.active and workflow.can_work(_principal(delegate, session), task) is None:
+        if delegate is not None and delegate.active and workflow.can_work(_principal(delegate, session), task) is None                 and abac.task_allowed(session, _principal(delegate, session), task):
             workers.append(delegate)
             seen.add(delegate.id)
     return workers

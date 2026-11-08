@@ -18,6 +18,7 @@ export default function PurchaseOrders() {
       <PageHeader kpis="M08" eyebrow="PO-01 · Operational purchasing" title="Purchase orders"
         subtitle="Every PO inherits price and terms from its requisition and contract, is risk-scored, and is released touchless or after approval."
         actions={<>
+          <LinkButton href="/pic/purchase-orders/new" variant="primary">New order</LinkButton>
           <LinkButton href="/pic/purchase-orders/changes">Confirmations & changes</LinkButton>
           <LinkButton href="/pic/purchase-orders/expediting">Expediting cockpit</LinkButton>
         </>} />

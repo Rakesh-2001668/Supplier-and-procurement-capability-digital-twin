@@ -29,6 +29,9 @@ from app.pic.services.common import days_from_terms, principal, require_supplier
 PROCESS = "pic.invoice"
 RETENTION = "RETENTION"  # channel and match type of a retention-release AP document (release_retention)
 ERS = "ERS"  # channel and match type of a consignment self-billing settlement (settle_consignment, P08)
+# Permissions (not built-in role names) of the accounts-payable / finance commands, so tenant-defined roles holding them work (C4).
+AP_OR_FINANCE = frozenset({"invoice:post", "payment:run"})
+
 SM = StateMachine("INVOICE", {
     ("CAPTURED", "check_duplicates"): "DUPLICATE_CHECK",
     ("DUPLICATE_CHECK", "match"): "MATCHING",
@@ -46,6 +49,8 @@ SM = StateMachine("INVOICE", {
     ("PAID", "return_payment"): "POSTED",
     ("EXCEPTION", "reject"): "REJECTED",
     ("CAPTURED", "reject"): "REJECTED",
+    # An approver of the value-band chain (rule INVOICE-APPROVAL) refused it: back to accounts payable as an APPROVAL exception.
+    ("MATCHED", "approval_rejected"): "EXCEPTION",
 })
 
 
@@ -360,6 +365,9 @@ def _duplicate_check(session: Session, invoice: Invoice, instance) -> None:
                                      suggested_action="Hold; confirm with supplier whether this is a duplicate", status="OPEN",
                                      created_by=principal(session).user_id))
         SM.apply(session, invoice, "hold", rule_set_version=rule.ref)
+        # The same event as a match exception (AP's INVOICE_EXCEPTION notification, the stream): a duplicate hold blocks payment too.
+        outbox.emit(session, "invoice.exception.raised", "INVOICE", invoice.id, invoice.number,
+                    {"exceptions": [{"type": "DUPLICATE", "delta": {"similarTo": similar.number, **({"variant": "NUMBER_NORMALISED"} if by_number else {})}}]})
         workflow.step(session, instance, "F7-02", outcome=f"possible duplicate of {similar.number}: held")
         workflow.wait(session, instance, "F7-05", outcome="resolve duplicate hold")
         return
@@ -604,11 +612,12 @@ def match(session: Session, invoice: Invoice) -> dict:
 
 # ---------------------------------------------------------------- exceptions (F7-05)
 def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_note_no: str, note_date: date, reason: str,
-                       lines: list[dict]) -> CreditNote:
+                       lines: list[dict], return_delivery: Optional[str] = None) -> CreditNote:
     """Supplier credit note against an invoice. A line is a quantity credit ({invoice_line, qty}: qty × invoice price,
     reducing the quantity matched) or a value credit ({invoice_line, qty, unit_credit_minor}: qty × price difference,
     netted in the price check). Quantities are positive, at most what is invoiced and not yet credited; the note never
-    exceeds the invoice's gross less earlier credit notes."""
+    exceeds the invoice's gross less earlier credit notes. Quantity lines settle the open return deliveries of their PO lines
+    that await a credit note (C1; ``return_delivery`` names the one return the note is for)."""
     p = principal(session)
     require_supplier_user(session, invoice.supplier_id)
     if invoice.status == "REJECTED":
@@ -679,6 +688,8 @@ def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_no
     session.add(note)
     session.flush()
     link(session, "INVOICE", invoice.id, invoice.number, "CREDIT_NOTE", note.id, note.number, "credited_by")
+    from app.pic.services import receiving
+    returns_closed = receiving.settle_by_credit_note(session, invoice, note, return_delivery)
     memo = None
     if target is not None:
         # The invoice is already in the ERP for its gross amount: the credit note goes there as a vendor credit memo, posted by
@@ -693,6 +704,7 @@ def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_no
     audit.record(session, "INVOICE", invoice.id, "CREDIT_NOTE_RECEIVED", object_ref=invoice.number,
                  after={"creditNote": note.number, "grossMinor": note.gross_minor,
                         **({"valueCredit": True} if any("unitCreditMinor" in e for e in stored) else {}),
+                        **({"returnsCredited": returns_closed} if returns_closed else {}),
                         **({"erpCreditMemo": memo.idempotency_key} if memo is not None else {})}, reason=reason)
     # M01: the spend cube records the credit as negative lines in the period of the note (services/spend_feed.py)
     outbox.emit(session, "credit_note.received", "CREDIT_NOTE", note.id, note.number,
@@ -706,6 +718,9 @@ def submit_credit_note(session: Session, invoice: Invoice, *, supplier_credit_no
 RESOLUTIONS = {
     "DUPLICATE": {"NOT_DUPLICATE", "DISPUTE"},
     "PRICE": {"CREDIT_NOTE_RECEIVED", "PRICE_ACCEPTED", "DISPUTE"},
+    # An approver of the value-band chain refused the invoice: clarified with the approver (back to MATCHED, approve again), a credit note,
+    # or a dispute with the supplier (rejecting the invoice is POST /reject).
+    "APPROVAL": {"CLARIFIED", "CREDIT_NOTE_RECEIVED", "DISPUTE"},
 }
 DEFAULT_RESOLUTIONS = {"CREDIT_NOTE_RECEIVED", "DISPUTE", "GR_POSTED"}
 PRICE_TASK = "PRICE_VARIANCE"
@@ -726,7 +741,7 @@ def resolve_exception(session: Session, invoice: Invoice, exception_id: uuid.UUI
     if exc is None or exc.invoice_id != invoice.id or exc.status != "OPEN":
         raise Problem(404, "NOT_FOUND", "Open exception not found on this invoice")
     resolution = resolution.upper()
-    allowed = {"CREDIT_NOTE_RECEIVED", "PRICE_ACCEPTED", "NOT_DUPLICATE", "DISPUTE", "GR_POSTED"}
+    allowed = {"CREDIT_NOTE_RECEIVED", "PRICE_ACCEPTED", "NOT_DUPLICATE", "DISPUTE", "GR_POSTED", "CLARIFIED"}
     if resolution not in allowed:
         raise Problem(422, "INVALID_RESOLUTION", f"resolution must be one of {sorted(allowed)}")
     fits = RESOLUTIONS.get(exc.type, DEFAULT_RESOLUTIONS)
@@ -862,8 +877,8 @@ def release_payment_block(session: Session, invoice: Invoice, reason: str) -> In
     """Lift the payment block of one posted, unpaid invoice that no exception or duplicate hold explains (for example a block that came with the ERP
     load): finance only, a reason, audited. The supplier must not be blocked; an invoice with open exceptions is released by resolving them."""
     p = principal(session)
-    if "FINANCE_CONTROLLER" not in p.roles:
-        raise Problem(403, "FORBIDDEN", "A payment block is lifted by finance")
+    if "payment:run" not in p.scopes:  # the permission, not the built-in role name: a tenant role holding payment:run may release (C4)
+        raise Problem(403, "FORBIDDEN", "A payment block is lifted by finance (permission payment:run)", rule_ref="F7-05")
     abac.guard(session, "INVOICE_RESOLVE", invoice)
     if len((reason or "").strip()) < 5:
         raise Problem(422, "REASON_REQUIRED", "Give the reason for lifting the payment block", rule_ref="F7-05")
@@ -913,16 +928,184 @@ def over_claimed(session: Session, invoice: Invoice) -> list[str]:
 
 
 def approve(session: Session, invoice: Invoice) -> Invoice:
+    """F7 approval. The accounts-payable approval (this command) is the first level; when rule INVOICE-APPROVAL puts the invoice's value in a
+    band with approver roles, the invoice stays MATCHED and an INVOICE_APPROVAL chain of those roles opens in the task inbox (delegation
+    of authority, SLA escalation, each approver's ABAC value limit, SOD-08 for every approver); it is APPROVED when the last one approves."""
     abac.guard(session, "INVOICE_APPROVE", invoice)
     sod.guard(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
     sod.guard(session, "INVOICE_APPROVE", {"invoice_id": invoice.id})  # SOD-08: whoever captured the invoice cannot approve it
+    if invoice.status == "MATCHED" and open_approval_tasks(session, invoice):
+        raise Problem(409, "APPROVAL_PENDING", f"{invoice.number} is in its approval chain: the approvers decide in their task inbox",
+                      rule_ref=APPROVAL_RULE, approval=approval_state(session, invoice))
     if invoice.status == "MATCHED" and over_claimed(session, invoice):
         match(session, invoice)  # back through the match: the over-claim is raised as an exception (payment block)
         return invoice
+    if invoice.status == "MATCHED":
+        chain, band, rule_ref, value = approval_chain(session, invoice)
+        if chain:
+            _start_approval_chain(session, invoice, chain, band, rule_ref, value)
+            return invoice
     SM.apply(session, invoice, "approve", rule_set_version=invoice.rule_set_version)
     invoice.approved_by = principal(session).user_id
     sod.record(session, "INVOICE_APPROVE", {"invoice_id": invoice.id})  # SOD-09: the approver cannot release its payment
     return invoice
+
+
+# ---------------------------------------------------------------- approval chain by value band (C3, rule INVOICE-APPROVAL)
+APPROVAL_TASK = "INVOICE_APPROVAL"
+APPROVAL_RULE = "INVOICE-APPROVAL"
+# Without bands the accounts-payable approval is the only one (the Blueprint's default matrix has no invoice row; tenants add bands per
+# company code, e.g. {"bands": [{"fromMinor": 1000000000, "approvers": ["FINANCE_CONTROLLER"]}]}).
+APPROVAL_DEFAULT = {"bands": [], "slaBusinessDays": 2}
+
+
+def validate_approval_rule(key: str, body: dict) -> list[str]:
+    """Problems of an INVOICE-APPROVAL rule body (POST /v1/admin/rules)."""
+    if key != APPROVAL_RULE:
+        return []
+    from app.pic.platform.auth import ROLE_SCOPES
+    problems = []
+    bands = body.get("bands")
+    if not isinstance(bands, list):
+        return ["bands must be a list of {fromMinor, approvers}"]
+    seen = set()
+    for i, band in enumerate(bands, start=1):
+        if not isinstance(band, dict) or not isinstance(band.get("fromMinor"), int) or isinstance(band.get("fromMinor"), bool) or band["fromMinor"] < 0:
+            problems.append(f"band {i}: fromMinor must be a non-negative whole number of paise")
+            continue
+        if band["fromMinor"] in seen:
+            problems.append(f"band {i}: fromMinor {band['fromMinor']} is used twice")
+        seen.add(band["fromMinor"])
+        approvers = band.get("approvers")
+        if not isinstance(approvers, list) or not all(isinstance(r, str) and r for r in approvers):
+            problems.append(f"band {i}: approvers must be a list of role codes")
+        elif "SUPPLIER_USER" in approvers:
+            problems.append(f"band {i}: a supplier user cannot approve invoices")
+        elif any(r not in ROLE_SCOPES and not r.isupper() for r in approvers):
+            problems.append(f"band {i}: approvers must be role codes (capital letters)")
+    sla = body.get("slaBusinessDays", 2)
+    if not isinstance(sla, int) or isinstance(sla, bool) or not 1 <= sla <= 30:
+        problems.append("slaBusinessDays must be 1-30")
+    return problems
+
+
+def approval_value(session: Session, invoice: Invoice) -> int:
+    """The value the band is chosen by: the invoice gross in its company code's currency (as the ABAC value limit compares it)."""
+    return abac._in_company_currency(session, invoice, invoice.company_code, int(invoice.gross_minor))
+
+
+def approval_chain(session: Session, invoice: Invoice) -> tuple[list[str], Optional[dict], Optional[str], int]:
+    """(approver roles after accounts payable, the band, the rule reference, the value) for the invoice under rule INVOICE-APPROVAL of its
+    company code: the band with the highest fromMinor at or below the value."""
+    value = approval_value(session, invoice)
+    try:
+        rule = rules.resolve(session, APPROVAL_RULE, company_code=invoice.company_code)
+        body, ref = {**APPROVAL_DEFAULT, **(rule.body or {})}, rule.ref
+    except Problem:
+        body, ref = dict(APPROVAL_DEFAULT), None
+    bands = sorted((b for b in body.get("bands") or [] if isinstance(b, dict) and isinstance(b.get("fromMinor"), int)), key=lambda b: b["fromMinor"])
+    band = None
+    for candidate in bands:
+        if value >= candidate["fromMinor"]:
+            band = candidate
+    chain = [r for r in (band or {}).get("approvers") or [] if r]
+    return chain, band, ref, value
+
+
+def open_approval_tasks(session: Session, invoice: Invoice) -> list[Task]:
+    return session.execute(select(Task).where(Task.kind == APPROVAL_TASK, Task.object_id == invoice.id, Task.status == "OPEN")
+                           .order_by(Task.sequence)).scalars().all()
+
+
+def _start_approval_chain(session: Session, invoice: Invoice, chain: list[str], band: dict, rule_ref: Optional[str], value: int) -> None:
+    p = principal(session)
+    try:
+        body = rules.resolve(session, APPROVAL_RULE, company_code=invoice.company_code).body or {}
+    except Problem:
+        body = {}
+    supplier = session.get(Supplier, invoice.supplier_id)
+    sod.record(session, "INVOICE_APPROVE", {"invoice_id": invoice.id})  # SOD-09 for the accounts-payable approver as well
+    workflow.start_approval(
+        session, None, APPROVAL_TASK, object_type="INVOICE", object_id=invoice.id, object_ref=invoice.number, chain=chain, step_id=None,
+        initiator_id=invoice.created_by, exclude=[p.user_id], sla_business_days=int(body.get("slaBusinessDays", 2)), rule_set_version=rule_ref,
+        evidence={"valueMinor": value, "grossMinor": invoice.gross_minor, "currency": invoice.currency, "companyCode": invoice.company_code,
+                  "supplier": supplier.code if supplier else None, "band": band, "apApprover": p.email, "chain": chain})
+    audit.record(session, "INVOICE", invoice.id, "APPROVAL_CHAIN_STARTED", object_ref=invoice.number, rule_set_version=rule_ref,
+                 after={"chain": chain, "fromMinor": band.get("fromMinor"), "valueMinor": value, "apApprover": p.email})
+    instance = _instance(session, invoice)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.wait(session, instance, "F7-05", outcome=f"approval by {' → '.join(chain)} (value band from {fmt_inr(band.get('fromMinor', 0))})")
+
+
+def approval_state(session: Session, invoice: Invoice) -> dict:
+    """The invoice's approval chain for the invoice screen: every INVOICE_APPROVAL task (latest chain first), who decided and the open step."""
+    tasks = session.execute(select(Task).where(Task.kind == APPROVAL_TASK, Task.object_id == invoice.id)
+                            .order_by(Task.created_at.desc(), Task.sequence.desc())).scalars().all()
+    if not tasks:
+        chain, band, ref, value = approval_chain(session, invoice)
+        return {"status": "APPROVED" if invoice.status in ("APPROVED", "POSTED", "PAID") and invoice.approved_by else "NONE",
+                "requiredChain": chain, "band": band, "rule": ref, "valueMinor": value, "steps": []}
+    latest = tasks[0].group_key
+    group = sorted((t for t in tasks if t.group_key == latest), key=lambda t: t.sequence)
+    names = {}
+    from app.pic.models import AppUser
+    ids = {t.completed_by for t in group if t.completed_by}
+    if ids:
+        names = {u.id: u.full_name for u in session.execute(select(AppUser).where(AppUser.id.in_(ids))).scalars()}
+    chain = (group[0].evidence or {}).get("chain") or [t.candidate_role for t in group]
+    status = "PENDING" if any(t.status == "OPEN" for t in group) else (
+        "REJECTED" if any(t.decision in ("REJECT", "RETURN") for t in group) else "APPROVED")
+    return {"status": status, "requiredChain": chain, "band": (group[0].evidence or {}).get("band"), "rule": group[0].rule_set_version,
+            "valueMinor": (group[0].evidence or {}).get("valueMinor"), "apApprover": (group[0].evidence or {}).get("apApprover"),
+            "steps": [{"taskId": str(t.id), "sequence": t.sequence, "role": t.candidate_role, "status": t.status, "decision": t.decision,
+                       "decidedBy": names.get(t.completed_by), "decidedAt": t.completed_at.isoformat() if t.completed_at else None,
+                       "comment": t.comment, "due": t.due_at.isoformat() if t.due_at else None,
+                       "delegatedBy": (t.evidence or {}).get(workflow.DELEGATED_KEY)} for t in group]}
+
+
+@workflow.guard_task(APPROVAL_TASK)
+def _approval_guard(session: Session, task: Task, decision: str) -> None:
+    """Before a chain approver decides: SOD-08 (the capturer never approves) and the supplier-level posting SoD, for the approver (and, under
+    a delegation, for the delegator as well: workflow.complete runs this guard for both). ABAC (company code, value limit) runs in
+    workflow.complete through abac.TASK_ACTIONS."""
+    invoice = session.get(Invoice, task.object_id)
+    if invoice is None or invoice.status != "MATCHED":
+        raise Problem(409, "ILLEGAL_TRANSITION", f"Invoice {task.object_ref} is no longer waiting for approval", rule_ref=APPROVAL_RULE)
+    if decision.upper() == "APPROVE":
+        sod.guard(session, "INVOICE_APPROVE", {"invoice_id": invoice.id})
+        sod.guard(session, "INVOICE_POST", {"supplier_id": invoice.supplier_id})
+
+
+@workflow.on_task(APPROVAL_TASK)
+def _approval_decided(session: Session, task: Task, outcome: str) -> None:
+    invoice = session.get(Invoice, task.object_id, with_for_update=True)
+    approvers = session.execute(select(Task.completed_by).where(Task.group_key == task.group_key, Task.decision == "APPROVE",
+                                                                Task.completed_by.is_not(None))).scalars().all()
+    for user_id in set(approvers):  # SOD-09: nobody who approved the invoice can release its payment
+        sod.record(session, "INVOICE_APPROVE", {"invoice_id": invoice.id}, actor_id=user_id)
+    instance = _instance(session, invoice)
+    if outcome != "APPROVED":
+        invoice.payment_block = True
+        session.add(InvoiceException(tenant_id=invoice.tenant_id, invoice_id=invoice.id, type="APPROVAL",
+                                     delta={"role": task.candidate_role, "decision": task.decision, "task": str(task.id)},
+                                     detail=f"{task.candidate_role.replace('_', ' ').title()} {outcome.lower()} the invoice: {task.comment}",
+                                     suggested_action="Clarify with the approver and resubmit (CLARIFIED), dispute it with the supplier, or reject the invoice",
+                                     status="OPEN", created_by=principal(session).user_id))
+        SM.apply(session, invoice, "approval_rejected", reason=task.comment, rule_set_version=task.rule_set_version,
+                 extra_after={"role": task.candidate_role})
+        outbox.emit(session, "invoice.exception.raised", "INVOICE", invoice.id, invoice.number,
+                    {"exceptions": [{"type": "APPROVAL", "delta": {"role": task.candidate_role, "decision": task.decision}}]})
+        if instance is not None and instance.status == "RUNNING":
+            workflow.wait(session, instance, "F7-05", outcome=f"approval {outcome.lower()} by {task.candidate_role}: {task.comment}")
+        return
+    if over_claimed(session, invoice):  # the receipt was used up while the chain ran: back through the match
+        match(session, invoice)
+        return
+    SM.apply(session, invoice, "approve", rule_set_version=task.rule_set_version,
+             extra_after={"chain": (task.evidence or {}).get("chain"), "finalApprover": str(task.completed_by)})
+    invoice.approved_by = task.completed_by
+    if instance is not None and instance.status == "RUNNING":
+        workflow.step(session, instance, "F7-05", outcome=f"approved by accounts payable → {' → '.join((task.evidence or {}).get('chain') or [])}")
 
 
 # ---------------------------------------------------------------- post (F7-06)
@@ -1574,8 +1757,8 @@ def release_retention(session: Session, po: PurchaseOrder, *, reference: str, re
     for the released amount, allocated oldest invoice first, due on the release date. The next payment run pays it and the
     PAYMENT message clears the retention items of the source ERP documents. No GST: tax was charged on the full invoices."""
     p = principal(session)
-    if not set(p.roles) & {"AP_CLERK", "FINANCE_CONTROLLER"}:
-        raise Problem(403, "FORBIDDEN", "Retention is released by accounts payable or finance")
+    if not p.scopes & AP_OR_FINANCE:
+        raise Problem(403, "FORBIDDEN", "Retention is released by accounts payable or finance (permission invoice:post or payment:run)")
     if not po.retention_pct:
         raise rule_violation(f"{po.number} carries no retention", RETENTION)
     ind_construction.require_valid_guarantee(session, po, "RETENTION_RELEASE")  # performance guarantee rule (construction template)
@@ -1643,8 +1826,8 @@ def settle_consignment(session: Session, *, supplier: str, period_to: date, comp
     ``reference`` records the supplier's GST tax invoice for the withdrawn quantity where the supplier issues one."""
     from app.pic.services.receiving import consignment_withdrawn
     p = principal(session)
-    if not set(p.roles) & {"AP_CLERK", "FINANCE_CONTROLLER"}:
-        raise Problem(403, "FORBIDDEN", "Consignment settlement runs in accounts payable or finance")
+    if not p.scopes & AP_OR_FINANCE:
+        raise Problem(403, "FORBIDDEN", "Consignment settlement runs in accounts payable or finance (permission invoice:post or payment:run)")
     abac.guard(session, "INVOICE_CAPTURE", None, company_code=company_code)
     supplier_row = supplier_ref(session, supplier)
     candidates = session.execute(select(PoLine, PurchaseOrder).join(PurchaseOrder, PurchaseOrder.id == PoLine.po_id).where(
@@ -1855,8 +2038,8 @@ def reconciliation_view(session: Session, run) -> dict:
 
 def resolve_reconciliation_item(session: Session, item, resolution: str):
     p = principal(session)
-    if not set(p.roles) & {"AP_CLERK", "FINANCE_CONTROLLER"}:
-        raise Problem(403, "FORBIDDEN", "Reconciliation items are resolved by accounts payable or finance")
+    if not p.scopes & AP_OR_FINANCE:
+        raise Problem(403, "FORBIDDEN", "Reconciliation items are resolved by accounts payable or finance (permission invoice:post or payment:run)")
     if item.status != "OPEN":
         raise Problem(409, "ILLEGAL_TRANSITION", "Item already resolved")
     item.status, item.resolution, item.resolved_by = "RESOLVED", resolution, p.user_id

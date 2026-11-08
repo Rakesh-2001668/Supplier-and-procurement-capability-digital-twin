@@ -158,14 +158,40 @@ def set_parameters(session: Session, *, material: str, plant: str, reorder_point
     return row
 
 
-def set_mrp_type(session: Session, material: str, mrp_type: str) -> Material:
-    """Planning mode of a material: PD daily MRP, PW weekly, PM monthly, VB reorder point, KB Kanban (not netted), ND no planning."""
+MRP_TYPES = ("PD", "PW", "PM", "VB", "KB", "ND")
+
+
+def _mrp_type(mrp_type: str) -> str:
     mrp_type = (mrp_type or "").upper()
-    if mrp_type not in ("PD", "PW", "PM", "VB", "KB", "ND"):
+    if mrp_type not in MRP_TYPES:
         raise Problem(422, "INVALID_MRP_TYPE", "mrp_type must be PD, PW, PM, VB, KB or ND")
+    return mrp_type
+
+
+def request_mrp_type(session: Session, material: str, mrp_type: str, reason: Optional[str] = None):
+    """The MRP controller asks for another planning mode (MDM governance, flow fixes A7): a material change request for ``mrp_type``,
+    approved by the PLANT data steward; on approval the master is versioned and the ERP material master is updated (MAT|n|version)."""
+    from app.pic.services import material_changes
+
+    mrp_type = _mrp_type(mrp_type)
+    mat = session.execute(select(Material).where(Material.id == material_by_number(session, material).id).with_for_update()).scalar_one()
+    text = (reason or "").strip() or f"Planning mode {mrp_type} requested by MRP planning"
+    return material_changes.request_change(session, mat, {"mrp_type": mrp_type}, text)
+
+
+def set_mrp_type(session: Session, material: str, mrp_type: str, reason: Optional[str] = None) -> Material:
+    """Planning mode of a material set by a data load (dataset packs, onboarding): PD daily MRP, PW weekly, PM monthly, VB reorder point,
+    KB Kanban (not netted), ND no planning. It is a governed change all the same (material_changes.apply_loaded): validated like a change
+    request, recorded as an applied change request with a new master version, audited and sent to the ERP. Users go through
+    ``request_mrp_type`` (steward approval)."""
+    from app.pic.services import material_changes
+
+    mrp_type = _mrp_type(mrp_type)
     mat = material_by_number(session, material)
+    if mat.mrp_type == mrp_type:
+        return mat
     before = mat.mrp_type
-    mat.mrp_type = mrp_type
+    material_changes.apply_loaded(session, mat, {"mrp_type": mrp_type}, reason or f"MRP type {mrp_type} set by data load")
     audit.record(session, "MATERIAL", mat.id, "MRP_TYPE_SET", object_ref=mat.number, before={"mrpType": before}, after={"mrpType": mrp_type})
     return mat
 
@@ -189,10 +215,20 @@ def create_card(session: Session, *, material: str, plant: str, bin_qty, storage
     return card
 
 
+DEFAULT_KANBAN_PURPOSE = "KANBAN_REPLENISHMENT"
+
+
+def _auto_requisition(rule) -> bool:
+    """Rule KANBAN ``autoRequisition`` (default true): an empty card raises its replenishment requisition by itself; false = the MRP
+    controller raises it (``POST /v1/kanban/cards/{n}/replenish``)."""
+    return rule.body.get("autoRequisition", True) is not False
+
+
 def signal_empty(session: Session, card: KanbanCard) -> KanbanCard:
-    """The bin is empty: the card signals replenishment. The requisition is raised at once when the caller is an MRP controller,
-    otherwise by the consumer of the ``kanban.signalled`` event (an agent principal, which may create MRP-origin requisitions)."""
-    ind_common.require_rule(session, "KANBAN", "Kanban replenishment")
+    """The bin is empty: the card signals replenishment. With rule KANBAN ``autoRequisition`` the requisition is raised at once when the
+    caller is an MRP controller, otherwise by the consumer of the ``kanban.signalled`` event (an agent principal, which may create
+    MRP-origin requisitions); without it the card waits EMPTY for the controller's replenish command."""
+    rule = ind_common.require_rule(session, "KANBAN", "Kanban replenishment")
     if card.status != "FULL":
         raise illegal_transition("Kanban card", card.number, card.status, "signal")
     card.status, card.signalled_at = "EMPTY", clock.now()
@@ -201,17 +237,20 @@ def signal_empty(session: Session, card: KanbanCard) -> KanbanCard:
                  rule_set_version="KANBAN")
     outbox.emit(session, "kanban.signalled", "KANBAN_CARD", card.id, card.number, {"material": mat.number, "plant": card.plant, "binQty": str(card.bin_qty)})
     p = principal(session)
-    if "MRP_CONTROLLER" in p.roles or p.is_agent:
+    if _auto_requisition(rule) and ("MRP_CONTROLLER" in p.roles or p.is_agent):
         replenish(session, card)
     return card
 
 
 def replenish(session: Session, card: KanbanCard) -> Requisition:
-    """Replenishment requisition for one bin of a signalled card (origin MRP, reference the card); it follows the normal approval route."""
+    """Replenishment requisition for one bin of a signalled card (origin MRP, reference the card, purpose code from rule KANBAN
+    ``purposeCode``); it follows the normal approval route."""
     from app.pic.services import requisition, source
 
+    rule = ind_common.require_rule(session, "KANBAN", "Kanban replenishment")
     if card.status != "EMPTY":
         raise illegal_transition("Kanban card", card.number, card.status, "replenish")
+    purpose_code = str(rule.body.get("purposeCode") or DEFAULT_KANBAN_PURPOSE)[:30]
     material = session.get(Material, card.material_id)
     need = clock.today() + timedelta(days=max(int(material.planned_delivery_days or 0) + int(material.gr_processing_days or 0), 2))
     determination = source.determine(session, material, card.plant, need, card.bin_qty)
@@ -220,13 +259,14 @@ def replenish(session: Session, card: KanbanCard) -> Requisition:
             "price_est_minor": price, "need_date": need, "storage_location": card.storage_location, "source_determination": determination.as_dict()}
     if card.supplier_id:
         line["preferred_supplier_id"] = card.supplier_id
-    pr = requisition.create(session, origin="MRP", origin_ref=card.number, purpose_code="KANBAN_REPLENISHMENT",
+    pr = requisition.create(session, origin="MRP", origin_ref=card.number, purpose_code=purpose_code,
                             purpose_text=f"Kanban {card.number}: {card.bin_qty} {material.base_uom} {material.number} (empty bin)", plant=card.plant,
                             lines=[line])
     card.status, card.requisition_id = "REPLENISHING", pr.id
     link(session, "KANBAN_CARD", card.id, card.number, "REQUISITION", pr.id, pr.number, "replenished_by")
     audit.record(session, "KANBAN_CARD", card.id, "REPLENISHMENT_REQUESTED", object_ref=card.number, before={"status": "EMPTY"},
-                 after={"status": "REPLENISHING", "requisition": pr.number, "source": determination.method}, rule_set_version="KANBAN")
+                 after={"status": "REPLENISHING", "requisition": pr.number, "source": determination.method, "purposeCode": purpose_code},
+                 rule_set_version=rule.ref)
     requisition.submit(session, pr)
     return pr
 
@@ -257,22 +297,38 @@ def set_suspended(session: Session, card: KanbanCard, suspended: bool, reason: s
 @outbox.consumer("kanban.signalled", "kanban-replenishment")
 def _signalled(session: Session, event) -> None:
     card = session.get(KanbanCard, event.object_id)
-    if card is not None and card.status == "EMPTY":
+    if card is None or card.status != "EMPTY":
+        return
+    rule = ind_common.rule_or_none(session, "KANBAN")
+    if rule is not None and rule.body.get("enabled") is not False and _auto_requisition(rule):
         replenish(session, card)
 
 
 @outbox.consumer("goods_receipt.posted", "kanban-refill")
 def _received(session: Session, event) -> None:
-    """A goods receipt of a card's material refills as many replenishing bins as the quantity received covers (oldest signal first)."""
+    """A goods receipt refills the replenishing cards it delivers: first the card whose replenishment requisition the received order
+    lines came from, once everything received against that requisition covers its bin (partial deliveries add up); then, for receipts
+    of a card's material that are not tied to a card's requisition, as many replenishing bins as the quantity covers (oldest signal first)."""
     gr = session.get(GoodsReceipt, uuid.UUID(event.payload["grId"]))
     if gr is None:
         return
     received: dict = {}
-    for line in session.execute(select(GrLine, PoLine).join(PoLine, PoLine.id == GrLine.po_line_id).where(GrLine.gr_id == gr.id)).all():
-        gr_line, po_line = line
-        if gr_line.material_id:
-            key = (gr_line.material_id, po_line.plant)
-            received[key] = received.get(key, Decimal(0)) + D(gr_line.qty)
+    requisitions: set = set()
+    for gr_line, po_line in session.execute(select(GrLine, PoLine).join(PoLine, PoLine.id == GrLine.po_line_id).where(GrLine.gr_id == gr.id)).all():
+        if not gr_line.material_id:
+            continue
+        cards = session.execute(select(KanbanCard).where(KanbanCard.requisition_id == po_line.requisition_id, KanbanCard.status == "REPLENISHING")
+                                ).scalars().all() if po_line.requisition_id else []
+        if cards:
+            requisitions.add(po_line.requisition_id)
+            continue
+        key = (gr_line.material_id, po_line.plant)
+        received[key] = received.get(key, Decimal(0)) + D(gr_line.qty)
+    for requisition_id in requisitions:
+        total = D(session.execute(select(func.coalesce(func.sum(PoLine.received_qty), 0)).where(PoLine.requisition_id == requisition_id)).scalar())
+        for card in session.execute(select(KanbanCard).where(KanbanCard.requisition_id == requisition_id, KanbanCard.status == "REPLENISHING")).scalars():
+            if total >= card.bin_qty:
+                refill(session, card, note=f"goods receipt {gr.number} of its replenishment")
     for (material_id, plant), qty in received.items():
         for card in session.execute(select(KanbanCard).where(KanbanCard.material_id == material_id, KanbanCard.plant == plant,
                                                              KanbanCard.status == "REPLENISHING").order_by(KanbanCard.signalled_at)).scalars():

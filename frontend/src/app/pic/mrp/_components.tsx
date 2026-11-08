@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { Button } from '@/components/pic/ui';
+import { useState } from 'react';
+import { Button, Dialog, Field, ProblemBox, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { inr, qty } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
@@ -37,8 +38,28 @@ export function SourceSummary({ source }: { source: SourceDetermination }) {
   );
 }
 
-/** Firm / convert actions for a planned order (MRP-03). Only CREATED and FIRMED orders can change. */
+/** A reason for an MRP command (cancel / unfirm a planned order, close an exception); audited with the command. */
+export function ReasonDialog({ title, hint, action, danger, onSubmit, onClose }: {
+  title: string; hint: string; action: string; danger?: boolean; onSubmit: (reason: string) => Promise<unknown>; onClose: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const run = useCommand(() => onSubmit(reason.trim()), { success: `${action}: done`, onSuccess: onClose });
+  return (
+    <Dialog open title={title} onClose={onClose}>
+      <p className="text-sm text-slate-700">{hint}</p>
+      <div className="mt-3"><Field label="Reason *">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} />}</Field></div>
+      <div className="mt-3"><ProblemBox error={run.error} /></div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Back</Button>
+        <Button variant={danger ? 'danger' : 'primary'} busy={run.isPending} disabled={reason.trim().length < 3} onClick={() => run.mutate()}>{action}</Button>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Firm / unfirm / cancel / convert actions for a planned order (MRP-03). Only CREATED and FIRMED orders can change. */
 export function PlannedOrderActions({ order, canPlan }: { order: PlannedOrder; canPlan: boolean }) {
+  const [dialog, setDialog] = useState<'cancel' | 'unfirm' | null>(null);
   const firm = useCommand(() => api.post(`/planned-orders/${order.number}/firm`), { success: `${order.number} firmed` });
   const convert = useCommand(() => api.post<{ number: string }>(`/planned-orders/${order.number}/convert`),
     { success: (pr) => `${order.number} converted to requisition ${pr.number}` });
@@ -50,6 +71,18 @@ export function PlannedOrderActions({ order, canPlan }: { order: PlannedOrder; c
       )}
       {canPlan && open && (
         <Button variant="primary" busy={convert.isPending} disabled={firm.isPending} onClick={() => convert.mutate()}>Convert to PR</Button>
+      )}
+      {canPlan && order.status === 'FIRMED' && <Button onClick={() => setDialog('unfirm')}>Unfirm</Button>}
+      {canPlan && open && <Button variant="danger" onClick={() => setDialog('cancel')}>Cancel</Button>}
+      {dialog === 'cancel' && (
+        <ReasonDialog title={`Cancel ${order.number}`} action="Cancel planned order" danger onClose={() => setDialog(null)}
+          hint="The receipt leaves the plan and the open exception messages about this order are closed with the reason; the next net-change run replans the material."
+          onSubmit={(reason) => api.post(`/planned-orders/${order.number}/cancel`, { reason })} />
+      )}
+      {dialog === 'unfirm' && (
+        <ReasonDialog title={`Unfirm ${order.number}`} action="Unfirm" onClose={() => setDialog(null)}
+          hint="The order goes back to CREATED: the next MRP run may change or replace it."
+          onSubmit={(reason) => api.post(`/planned-orders/${order.number}/unfirm`, { reason })} />
       )}
       {convert.data?.number && (
         <Link href={`/pic/requisitions/${convert.data.number}`} className="text-xs font-medium text-[#1A56DB] hover:underline">{convert.data.number} →</Link>

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:contract.renewed",
+  "title": "contract.renewed",
+  "description": "Payload (outbox_event.payload) of contract.renewed on CONTRACT. Produced by services/contract.py. The contract was renewed by a successor contract that took effect (TD 6 Renewed).",
+  "type": "object",
+  "properties": {
+    "successor": {
+      "type": "string"
+    },
+    "successorId": {
+      "type": "string"
+    },
+    "validFrom": {
+      "type": "string"
+    },
+    "validTo": {
+      "type": "string"
+    },
+    "supplierId": {
+      "type": "string"
+    },
+    "ownerId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "successor",
+    "successorId",
+    "validFrom",
+    "validTo",
+    "supplierId",
+    "ownerId"
+  ],
+  "additionalProperties": true
+}

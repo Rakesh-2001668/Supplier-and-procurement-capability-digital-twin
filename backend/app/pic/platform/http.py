@@ -396,6 +396,8 @@ async def _idempotency_finish(reservation, response):
     ok = 200 <= response.status_code < 300 and "json" in (response.headers.get("content-type") or "").lower()
     if reservation.state.get("handled") or not ok:
         await run_in_threadpool(idempotency.release, reservation)
+        if ok and reservation.state.get("replayed"):
+            response.headers["Idempotent-Replayed"] = "true"  # a route that replays itself (Idempotent in platform/core.py), as the generic replay
         return response
     chunks = [chunk async for chunk in response.body_iterator]
     body = b"".join(c if isinstance(c, bytes) else c.encode() for c in chunks)

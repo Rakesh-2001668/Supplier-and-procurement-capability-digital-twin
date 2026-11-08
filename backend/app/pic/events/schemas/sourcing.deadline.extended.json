@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.deadline.extended",
+  "title": "sourcing.deadline.extended",
+  "description": "Payload (outbox_event.payload) of sourcing.deadline.extended on SOURCING_EVENT. Produced by services/sourcing.py. The bid deadline of a published or open event moved later (reason given); every invited supplier is notified.",
+  "type": "object",
+  "properties": {
+    "round": {
+      "type": "integer"
+    },
+    "previousCloseAt": {
+      "type": "string"
+    },
+    "closeAt": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "inviteeSupplierIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "round",
+    "previousCloseAt",
+    "closeAt",
+    "reason",
+    "inviteeSupplierIds"
+  ],
+  "additionalProperties": true
+}

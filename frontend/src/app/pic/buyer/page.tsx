@@ -6,11 +6,13 @@ import { Button, Card, DataTable, Dialog, Field, Input, PageHeader, ProblemBox, 
 import { api, ApiError, Paged } from '@/lib/pic/api';
 import { date, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
+import { LineSow, SowDetails } from '../requisitions/_components';
 
 type Allocation = { qty: string; share: string | number | null; supplier: string; contractId: string | null; priceSource: string; unitPriceMinor: number | null };
 type WorkItem = {
   requisition: string; line: number; origin: string; description: string; qty: string; uom: string; needDate: string; plant: string;
   sourcingStatus: string | null; source: { method?: string; allocations?: Allocation[]; excluded?: unknown[] } | null;
+  sow?: LineSow | null; freeText?: boolean; materialRequestId?: string | null;
 };
 type Reference = { suppliers: { code: string; name: string; status: string }[] };
 type Contract = { number: string; status: string; supplier_code: string; title: string | null; valid_to: string | null };
@@ -35,7 +37,8 @@ export default function BuyerWorkbench() {
   return (
     <div>
       <PageHeader eyebrow="REQ-04 · Buyer workbench" title="Buyer workbench"
-        subtitle="Approved requisition lines from MRP and manual demand waiting for a purchase order. Source determination runs contract → quota → source list → info record." />
+        subtitle="Approved requisition lines from MRP and manual demand waiting for a purchase order. Source determination runs contract → quota → source list → info record."
+        actions={<Link href="/pic/buyer/catalogue" className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50">Hosted catalogue</Link>} />
       <Card title={`Open lines (${rows.length})`} actions={
         <Select aria-label="Filter by origin" value={origin} onChange={(e) => setOrigin(e.target.value)}
           options={ORIGINS.map((o) => ({ value: o, label: o ? label(o) : 'All origins' }))} />
@@ -46,7 +49,13 @@ export default function BuyerWorkbench() {
           columns={[
             { key: 'requisition', header: 'Requisition', render: (r) => `${r.requisition} / ${r.line}` },
             { key: 'origin', header: 'Origin', render: (r) => label(r.origin) },
-            { key: 'description', header: 'Item' },
+            { key: 'description', header: 'Item', render: (r) => (
+              <div onClick={(e) => e.stopPropagation()}>
+                <p>{r.description}</p>
+                {r.freeText && !r.materialRequestId && <p className="text-xs text-slate-500">Free text · the requester can promote it to a material on the requisition</p>}
+                <SowDetails sow={r.sow} />
+              </div>
+            ) },
             { key: 'qty', header: 'Open qty', align: 'right', render: (r) => qty(r.qty, r.uom) },
             { key: 'needDate', header: 'Need', render: (r) => date(r.needDate) },
             { key: 'plant', header: 'Plant' },

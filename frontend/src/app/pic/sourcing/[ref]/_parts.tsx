@@ -341,6 +341,31 @@ export function RoundDialog({ event, onClose }: { event: SourcingEvent; onClose:
   );
 }
 
+/** Move the bid deadline of a published / open event later; every invited supplier is notified (flow fixes F3). */
+export function ExtendDialog({ event, onClose }: { event: SourcingEvent; onClose: () => void }) {
+  const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
+  const [closeAt, setCloseAt] = useState(() => toLocalInput(new Date(new Date(event.close_at).getTime() + 2 * 864e5)));
+  const [reason, setReason] = useState('');
+  const when = new Date(closeAt);
+  const later = !Number.isNaN(when.getTime()) && when.getTime() > new Date(event.close_at).getTime();
+  const go = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/extend`, { close_at: when.toISOString(), reason: reason.trim() }, ifMatchOptions(ifMatch)),
+    { success: 'Deadline extended – the invited suppliers were notified', onSuccess: onClose });
+  return (
+    <Dialog open title={`Extend the bid deadline of ${event.number}`} onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="New close date-time">{(id) => <Input id={id} type="datetime-local" value={closeAt} onChange={(e) => setCloseAt(e.target.value)} />}</Field>
+        <div className="md:col-span-2"><Field label="Reason (sent to the suppliers) *">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Suppliers asked for time to submit samples" />}</Field></div>
+      </div>
+      {!later && <p role="alert" className="mt-2 text-sm text-red-700">A deadline can only move later than the current one.</p>}
+      <p className="mt-3 text-xs text-slate-500">Bids already submitted stay sealed and valid; suppliers may replace them until the new deadline.</p>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={!later || reason.trim().length < 3} busy={go.isPending} onClick={() => go.mutate()}>Extend deadline</Button>
+      </div>
+    </Dialog>
+  );
+}
+
 /** What the server will flag for this scenario, worked out from the comparison so the buyer sees it before proposing. */
 export function previewExceptions(event: SourcingEvent, scenario: Scenario | undefined, comparison: Comparison | undefined): { code: string; detail: string; needsRationale: boolean }[] {
   if (!scenario || !comparison) return [];

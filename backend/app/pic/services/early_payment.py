@@ -28,7 +28,8 @@ from app.pic.services.common import principal, require_supplier_user
 
 KEY = "EARLY-PAYMENT"
 LIVE = ("OFFERED", "ACCEPTED")
-BUYER_ROLES = ("AP_CLERK", "FINANCE_CONTROLLER")
+BUYER_ROLES = ("AP_CLERK", "FINANCE_CONTROLLER")  # kept for callers; the check below is by permission
+BUYER_SCOPES = frozenset({"invoice:post", "payment:run"})
 
 
 def _is_supplier(session: Session) -> bool:
@@ -36,8 +37,8 @@ def _is_supplier(session: Session) -> bool:
 
 
 def _require_buyer_side(session: Session) -> None:
-    if not set(principal(session).roles) & set(BUYER_ROLES):
-        raise Problem(403, "FORBIDDEN", "Early-payment offers are handled by accounts payable or finance")
+    if not principal(session).scopes & BUYER_SCOPES:
+        raise Problem(403, "FORBIDDEN", "Early-payment offers are handled by accounts payable or finance (permission invoice:post or payment:run)")
 
 
 def offers_of(session: Session, invoice: Invoice) -> list[EarlyPaymentOffer]:

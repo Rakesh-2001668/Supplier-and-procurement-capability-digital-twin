@@ -11,7 +11,7 @@ from app.pic.models import (
     SourcingEvent,
     SpendLine, Supplier,
 )
-from app.pic.platform import agents, audit, clock, outbox, sod, workflow
+from app.pic.platform import abac, agents, audit, clock, outbox, sod, workflow
 from app.pic.platform.core import StateMachine, link, next_number
 from app.pic.platform.errors import Problem, illegal_transition
 from app.pic.platform.money import D, crore, fmt_inr, line_amount
@@ -172,8 +172,8 @@ def _realised(session: Session, event) -> None:
 
 def validate(session: Session, initiative: SavingsInitiative) -> SavingsInitiative:
     p = principal(session)
-    if "FINANCE_CONTROLLER" not in p.roles:
-        raise Problem(403, "FORBIDDEN", "Savings are validated by finance", rule_ref="P12")
+    if "savings:validate" not in p.scopes:  # the permission, not the built-in role name: a tenant role holding savings:validate may validate (C4)
+        raise Problem(403, "FORBIDDEN", "Savings are validated by finance (permission savings:validate)", rule_ref="P12")
     sod.guard(session, "SAVINGS_VALIDATE", {"initiative_id": initiative.id})
     if initiative.owner_id == p.user_id:
         raise Problem(409, "SOD_CONFLICT", "SOD-07: the initiative owner cannot validate it", rule_ref="SOD-07")
@@ -216,11 +216,129 @@ def waterfall(session: Session, initiative: SavingsInitiative) -> dict:
                 leakage.append({"po": po.number, "kind": "OFF_CONTRACT", "amountMinor": line_amount(line.invoiced_qty, line.unit_price_minor - (initiative.new_price_minor or 0))})
             elif line.unit_price_minor > agreed:
                 leakage.append({"po": po.number, "kind": "PRICE_DRIFT", "amountMinor": line_amount(line.invoiced_qty, line.unit_price_minor - agreed)})
+    volume = volume_shortfall(session, initiative)
+    for item in volume["lines"]:
+        if item["shortfallMinor"] > 0:
+            leakage.append({"kind": "VOLUME_SHORTFALL", "amountMinor": item["shortfallMinor"], "contract": item.get("contract"),
+                            "contractLine": item.get("line"), "po": None, "shortfallQty": item["shortfallQty"], "asOf": volume["asOf"]})
     return {"initiative": initiative.number, "stage": initiative.stage, "negotiatedMinor": negotiated, "contractedMinor": contracted,
-            "realisedMinor": realised, "avoidanceMinor": avoidance, "leakage": leakage,
+            "realisedMinor": realised, "avoidanceMinor": avoidance, "leakage": leakage, "volume": volume,
             "budgetImpactMinor": sum(e.amount_minor for e in entries if e.counts_toward_budget) if initiative.stage == "VALIDATED" else 0,
             "entries": [{"type": e.type, "amountMinor": e.amount_minor, "countsTowardBudget": e.counts_toward_budget,
                          "formula": e.formula, "source": e.source_ref, "date": e.posting_date.isoformat()} for e in entries]}
+
+
+def _months(start, end) -> list[tuple]:
+    """(period 'YYYY-MM', first day, last day) of every month from ``start`` to ``end`` (clipped to them)."""
+    from datetime import date, timedelta
+    out, cursor = [], date(start.year, start.month, 1)
+    while cursor <= end:
+        nxt = date(cursor.year + cursor.month // 12, cursor.month % 12 + 1, 1)
+        out.append((cursor.strftime("%Y-%m"), max(cursor, start), min(nxt - timedelta(days=1), end)))
+        cursor = nxt
+    return out
+
+
+def _invoiced_by_month(session: Session, po_line_filter, start, end) -> tuple[dict, Decimal, Decimal]:
+    """Quantity invoiced on posted / paid invoices (net of quantity credit notes) per posting month, the total, and the quantity accepted
+    at receipt, for the PO lines selected by ``po_line_filter``."""
+    from app.pic.services import payables
+    by_month: dict = {}
+    total = Decimal(0)
+    credits: dict = {}
+    rows = session.execute(select(InvoiceLine, Invoice).join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+                           .join(PoLine, PoLine.id == InvoiceLine.po_line_id)
+                           .where(po_line_filter, Invoice.status.in_(("POSTED", "PAID")))).all()
+    for line, invoice in rows:
+        when = invoice.posting_date or (invoice.posted_at.date() if invoice.posted_at else invoice.invoice_date)
+        if when < start or when > end:
+            continue
+        if invoice.id not in credits:
+            credits[invoice.id] = payables._credited_qty(session, invoice)
+        qty = D(line.qty) - credits[invoice.id].get(line.line_no, Decimal(0))
+        by_month[when.strftime("%Y-%m")] = by_month.get(when.strftime("%Y-%m"), Decimal(0)) + qty
+        total += qty
+    accepted = session.execute(select(func.coalesce(func.sum(PoLine.accepted_qty), 0)).where(po_line_filter)).scalar_one()
+    return by_month, total, D(accepted)
+
+
+def volume_shortfall(session: Session, initiative: SavingsInitiative, as_of=None) -> dict:
+    """BP M11 leakage "volume shortfall": savings negotiated on a volume that is not being bought. Per contract line of the initiative (the
+    contracts of its sourcing event, else the live contract lines of its material from the suppliers it priced): the contracted target
+    quantity spread evenly over the contract period, against the quantity invoiced on posted invoices (net of credit notes) and accepted at
+    receipt, month by month up to ``as_of`` (today, at most the contract end). The leakage is the shortfall to date times the unit saving
+    (baseline - agreed price). Without a contract line the initiative's annual volume from its negotiation date is the commitment."""
+    from datetime import timedelta
+    today = as_of or clock.today()
+    saving_of = lambda agreed: max(int(initiative.baseline_price_minor or 0) - int(agreed or 0), 0)  # noqa: E731
+    lines_out = []
+    query = select(ContractLine, Contract).join(Contract, Contract.id == ContractLine.contract_id).where(
+        Contract.status.in_(("ACTIVE", "EXPIRING", "EXPIRED", "RENEWED")))
+    if initiative.source_event_id is not None:
+        query = query.where(Contract.source_event_id == initiative.source_event_id)
+        if initiative.material_id:
+            query = query.where(ContractLine.material_id == initiative.material_id)
+    elif initiative.material_id and initiative.supplier_prices:
+        query = query.where(ContractLine.material_id == initiative.material_id,
+                            Contract.supplier_id.in_([uuid.UUID(k) for k in initiative.supplier_prices]))
+    else:
+        query = None
+    contract_lines = session.execute(query.order_by(Contract.number, ContractLine.line_no)).all() if query is not None else []
+    for cl, contract in contract_lines:
+        start, end = contract.valid_from, contract.valid_to
+        if today < start or not cl.target_qty:
+            continue
+        upto = min(today, end)
+        total_days = (end - start).days + 1
+        by_month, invoiced, accepted = _invoiced_by_month(session, PoLine.contract_line_id == cl.id, start, upto)
+        agreed = (initiative.supplier_prices or {}).get(str(contract.supplier_id))
+        if agreed is None:
+            from app.pic.services import source
+            validity = source.contract_price(session, cl.id, upto)
+            agreed = validity.unit_price_minor if validity else initiative.new_price_minor
+        unit_saving = saving_of(agreed)
+        periods, expected_total, cumulative_gap = [], Decimal(0), Decimal(0)
+        for period, first, last in _months(start, upto):
+            expected = (D(cl.target_qty) * Decimal((last - first).days + 1) / Decimal(total_days)).quantize(Decimal("0.001"))
+            got = by_month.get(period, Decimal(0))
+            expected_total += expected
+            cumulative_gap = expected_total - sum((by_month.get(p, Decimal(0)) for p, _, _ in _months(start, last)), Decimal(0))
+            periods.append({"period": period, "expectedQty": str(expected), "invoicedQty": str(got),
+                            "cumulativeShortfallQty": str(max(cumulative_gap, Decimal(0)).quantize(Decimal("0.001")))})
+        shortfall = max(expected_total - invoiced, Decimal(0)).quantize(Decimal("0.001"))
+        lines_out.append({"contract": contract.number, "line": cl.line_no, "supplierId": str(contract.supplier_id), "validFrom": start.isoformat(),
+                          "validTo": end.isoformat(), "contractedQty": str(cl.target_qty), "expectedToDateQty": str(expected_total.quantize(Decimal("0.001"))),
+                          "invoicedQty": str(invoiced), "acceptedQty": str(accepted), "shortfallQty": str(shortfall), "unitSavingMinor": unit_saving,
+                          "shortfallMinor": int((shortfall * unit_saving).quantize(Decimal("1"), ROUND_HALF_UP)), "periods": periods,
+                          "basis": "CONTRACT_LINE"})
+    if not lines_out and initiative.material_id and initiative.supplier_prices and initiative.annual_volume and initiative.stage != "LOST":
+        negotiated_on = session.execute(select(func.min(SavingsLedgerEntry.posting_date)).where(
+            SavingsLedgerEntry.initiative_id == initiative.id, SavingsLedgerEntry.type == "NEGOTIATED")).scalar()
+        if negotiated_on is not None and today >= negotiated_on:
+            end = negotiated_on + timedelta(days=364)
+            upto = min(today, end)
+            supplier_ids = [uuid.UUID(k) for k in initiative.supplier_prices]
+            po_filter = PoLine.po_id.in_(select(PurchaseOrder.id).where(PurchaseOrder.supplier_id.in_(supplier_ids))) & (
+                PoLine.material_id == initiative.material_id)
+            by_month, invoiced, accepted = _invoiced_by_month(session, po_filter, negotiated_on, upto)
+            expected = (D(initiative.annual_volume) * Decimal((upto - negotiated_on).days + 1) / Decimal(365)).quantize(Decimal("0.001"))
+            unit_saving = saving_of(initiative.new_price_minor)
+            shortfall = max(expected - invoiced, Decimal(0)).quantize(Decimal("0.001"))
+            periods, running_expected = [], Decimal(0)
+            for period, first, last in _months(negotiated_on, upto):
+                part = (D(initiative.annual_volume) * Decimal((last - first).days + 1) / Decimal(365)).quantize(Decimal("0.001"))
+                running_expected += part
+                got_to_date = sum((by_month.get(p, Decimal(0)) for p, _, _ in _months(negotiated_on, last)), Decimal(0))
+                periods.append({"period": period, "expectedQty": str(part), "invoicedQty": str(by_month.get(period, Decimal(0))),
+                                "cumulativeShortfallQty": str(max(running_expected - got_to_date, Decimal(0)).quantize(Decimal("0.001")))})
+            lines_out.append({"contract": None, "line": None, "validFrom": negotiated_on.isoformat(), "validTo": end.isoformat(),
+                              "contractedQty": str(initiative.annual_volume), "expectedToDateQty": str(expected), "invoicedQty": str(invoiced),
+                              "acceptedQty": str(accepted), "shortfallQty": str(shortfall), "unitSavingMinor": unit_saving,
+                              "shortfallMinor": int((shortfall * unit_saving).quantize(Decimal("1"), ROUND_HALF_UP)), "periods": periods,
+                              "basis": "INITIATIVE_VOLUME"})
+    return {"asOf": today.isoformat(), "lines": lines_out, "shortfallMinor": sum(l["shortfallMinor"] for l in lines_out),
+            "method": "contracted quantity spread evenly over the contract period vs quantity invoiced on posted invoices (net of credit notes); "
+                      "leakage = shortfall to date x (baseline - agreed price)"}
 
 
 # ---------------------------------------------------------------- spend (M01)
@@ -296,9 +414,18 @@ def create_initiative(session: Session, *, title: str, category: str, baseline_m
 
 
 def negotiate(session: Session, initiative: SavingsInitiative, new_price_minor: int, supplier_code: str, evidence: str) -> SavingsInitiative:
-    """Record a negotiated price outside a sourcing event (e.g. a renegotiation); negotiated savings never count toward budget."""
-    if initiative.owner_id != principal(session).user_id:
-        raise Problem(403, "FORBIDDEN", "Only the initiative owner records the negotiated price")
+    """Record a negotiated price outside a sourcing event (e.g. a renegotiation); negotiated savings never count toward budget.
+
+    The owner records it, or another holder of ``savings:manage`` assigned to the initiative's category (BP M11: the category team
+    negotiates; ABAC action SAVINGS_MANAGE checks the user's ``categories``). A non-owner who records the price is a co-initiator for
+    SOD-07: he can no longer validate the initiative."""
+    p = principal(session)
+    co_initiator = initiative.owner_id != p.user_id
+    if co_initiator:
+        if "savings:manage" not in p.scopes:
+            raise Problem(403, "FORBIDDEN", "Only the initiative owner or a category manager of its category (permission savings:manage) records "
+                          "the negotiated price", rule_ref="P12")
+        abac.guard(session, "SAVINGS_MANAGE", initiative, category=initiative.category)
     supplier = session.execute(select(Supplier).where(Supplier.code == supplier_code)).scalar_one_or_none()
     if supplier is None:
         raise Problem(404, "NOT_FOUND", f"Supplier {supplier_code} not found")
@@ -307,7 +434,10 @@ def negotiate(session: Session, initiative: SavingsInitiative, new_price_minor: 
     initiative.supplier_prices = {**(initiative.supplier_prices or {}), str(supplier.id): new_price_minor}
     _ledger(session, initiative, "NEGOTIATED", amount, False,
             f"({initiative.baseline_price_minor/100:.2f} − {new_price_minor/100:.2f}) × {initiative.annual_volume} /yr", "NEGOTIATION", evidence[:60])
-    SM.apply(session, initiative, "negotiate", extra_after={"negotiatedMinor": amount, "supplier": supplier.code, "evidence": evidence})
+    SM.apply(session, initiative, "negotiate", extra_after={"negotiatedMinor": amount, "supplier": supplier.code, "evidence": evidence,
+                                                            **({"recordedBy": "CATEGORY_TEAM"} if co_initiator else {})})
+    if co_initiator:
+        sod.record(session, "SAVINGS_INITIATE", {"initiative_id": initiative.id})  # SOD-07 applies to whoever set the negotiated price
     return initiative
 
 

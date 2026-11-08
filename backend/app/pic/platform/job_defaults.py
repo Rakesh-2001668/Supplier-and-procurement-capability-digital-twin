@@ -6,6 +6,8 @@ MRP-SCHEDULE   scheduled MRP: plants (codes or {plant, mode, materials}), mode, 
 PRIVACY-RETENTION  categories.<key>.days, purge.dryRun (the purge and archive jobs only report until it is false), audit_archive
 DELEGATION     maxDays of one delegation of authority
 AI-CONTROL     automatic agent suspension: minFeedback (default 20), window (most recent feedback events considered)
+ERP-SYNC       scheduled inbound ERP sync (enabled, system, kinds, retryFailed); off by default
+AI-RETRAIN     model drift check and retraining (driftCheck, retrain, retrainAfterDays, retrainOnDrift, autoActivate, models)
 """
 
 BODIES = {
@@ -21,6 +23,16 @@ BODIES = {
                           "Data retention (DPDP, TD §15): the purge and audit-archive jobs only report until purge.dryRun is set to false; "
                           "add user_profile.days to pseudonymise users deactivated that long"),
     "DELEGATION": ({"maxDays": 90}, "Delegation of authority (out of office): longest period of one delegation"),
+    # Flow fixes (A14): scheduled inbound ERP sync. Off until the tenant switches it on; then each kind runs on its job's schedule from the
+    # connector (live OData pull), the file drop or SFTP, whichever services/erp_sync.py finds configured. system null = the ERP-TARGET.
+    "ERP-SYNC": ({"enabled": False, "system": None,
+                  "kinds": {"MASTERS": True, "STOCK": True, "OPEN_POS": True, "PAYMENT_STATUS": True, "PLANNED_ORDERS": False}, "retryFailed": True},
+                 "Scheduled inbound ERP sync (TD §12.1): masters, stock, open POs, payment status, planned orders; off until enabled"),
+    # Flow fixes (C6): scheduled model drift check and retraining. A retrained version is registered as CANDIDATE unless autoActivate is true and
+    # it passes its evaluation gate (the train functions' gate); a drift alert suspends the active version (ml_registry.check_drift).
+    "AI-RETRAIN": ({"driftCheck": True, "retrain": True, "retrainAfterDays": 30, "retrainOnDrift": True, "autoActivate": False,
+                    "models": ["demand_forecast", "late_delivery", "invoice_exception_cause"]},
+                   "Model drift check (daily) and retraining (weekly) of the M12 models; retrained versions wait as candidates unless autoActivate"),
     "AI-CONTROL": ({"minFeedback": 20, "window": 100},
                    "AI agents: an agent is suspended automatically when its acceptance rate over the latest window feedback events falls "
                    "below its minimum (70% by default) with at least minFeedback events"),

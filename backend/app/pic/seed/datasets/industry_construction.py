@@ -139,7 +139,7 @@ def apply(tenant_code: str, password: str) -> dict:
                           holidays=HOLIDAYS, domain=DOMAIN, role_user=ROLE_USER)
     notes, counts = [], {}
     kit.create_users(sc, USERS, password)
-    kit.number_range(sc, "CONTRACT", "SC-", 118)
+    kit.number_range(sc, "CONTRACT_VC", "SC-", 118)  # value contracts have their own range (flow fixes B6)
     kit.rule_version(sc, "SUPPLIER-QUAL", "2026.1-CON", date(2026, 10, 1),
                      {"mandatoryCertificates": {"CIVIL-SUBCONTRACT": ["ISO45001"]}, "minQuestionnaireScore": 70, "minAuditScore": 75,
                       "sampleApprovalRequired": [], "bankApprovers": 2, "coolingOffHours": 72},

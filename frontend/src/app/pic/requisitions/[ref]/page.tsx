@@ -3,15 +3,18 @@
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { ObjectPage } from '@/components/pic/object';
-import { Button, DataTable, Dialog, Facts, Field, Input, StatusChip, Textarea } from '@/components/pic/ui';
+import Link from 'next/link';
+import { Button, DataTable, Dialog, Facts, Field, Input, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
 import { date, dateTime, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
-import { AccountAssignment, isUnstructured, NEEDS_ACCOUNT, PolicyProblem, PrLine, Requisition, SubmitPanel, useReference } from '../_components';
+import { AccountAssignment, isUnstructured, NEEDS_ACCOUNT, PolicyProblem, PrLine, Requisition, SowDetails, SubmitPanel, useReference } from '../_components';
 
 type Me = { userId: string; roles: string[] };
 /** The requester may withdraw in these states; a buyer only an approved requisition (not yet ordered). */
 const REQUESTER_CANCELS = ['DRAFT', 'RETURNED', 'IN_APPROVAL', 'APPROVED'];
+/** P04: the requester promotes a free-text / free-service line of a live requisition to a material request (POST .../promote-material). */
+const PROMOTABLE = ['DRAFT', 'RETURNED', 'SUBMITTED', 'IN_APPROVAL', 'APPROVED', 'PARTIALLY_ORDERED', 'ORDERED'];
 
 export default function RequisitionPage() {
   const { ref } = useParams<{ ref: string }>();
@@ -23,6 +26,8 @@ export default function RequisitionPage() {
   const isBuyer = !!me.data?.roles.includes('BUYER');
   const [dialog, setDialog] = useState<'submit' | 'cancel' | null>(null);
   const [editing, setEditing] = useState<PrLine | null>(null);
+  const [promoting, setPromoting] = useState<PrLine | null>(null);
+  const canPromote = (l: PrLine) => !!pr && isRequester && PROMOTABLE.includes(pr.status) && isUnstructured(l) && !l.mdm_request_id;
   const canEdit = !!pr && ((submittable && isRequester) || (pr.status === 'APPROVED' && (isRequester || isBuyer)));
   const ordered = (pr?.lines ?? []).some((l) => Number(l.ordered_qty) > 0);
   const canCancel = !!pr && !ordered && ((REQUESTER_CANCELS.includes(pr.status) && isRequester) || (pr.status === 'APPROVED' && isBuyer));
@@ -76,6 +81,8 @@ export default function RequisitionPage() {
               <div>
                 <p className="font-medium">{l.description}</p>
                 <p className="text-xs text-slate-500">{label(l.item_type)} · {l.material_group ?? '–'}{l.reusable ? ' · reusable (MDM request started)' : ''}</p>
+                {l.mdm_request_id && <p className="text-xs"><Link className="text-[#1A56DB] hover:underline" href="/pic/materials">Material request raised (F9) →</Link></p>}
+                <SowDetails sow={l.sow} />
               </div>
             ) },
             { key: 'purchase_type', header: 'Type', render: (l) => label(l.purchase_type) },
@@ -92,6 +99,8 @@ export default function RequisitionPage() {
             { key: 'ordered_qty', header: 'Ordered', align: 'right', render: (l) => qty(l.ordered_qty) },
             { key: 'sourcing_status', header: 'Sourcing', render: (l) => l.sourcing_status ? <StatusChip status={l.sourcing_status} /> : '–' },
             ...(canEdit ? [{ key: 'edit', header: '', render: (l: PrLine) => <Button onClick={() => setEditing(l)}>Edit line</Button> }] : []),
+            ...((pr.lines ?? []).some(canPromote) ? [{ key: 'promote', header: '', render: (l: PrLine) => canPromote(l)
+              ? <Button onClick={() => setPromoting(l)}>Promote to material</Button> : null }] : []),
           ]} />
         )}
       />
@@ -102,7 +111,43 @@ export default function RequisitionPage() {
       )}
       {pr && dialog === 'cancel' && <CancelDialog pr={pr} onClose={() => setDialog(null)} />}
       {pr && editing && <EditLineDialog pr={pr} line={editing} onClose={() => setEditing(null)} />}
+      {pr && promoting && <PromoteDialog pr={pr} line={promoting} onClose={() => setPromoting(null)} />}
     </>
+  );
+}
+
+function PromoteDialog({ pr, line, onClose }: { pr: Requisition; line: PrLine; onClose: () => void }) {
+  const [description, setDescription] = useState(line.description);
+  const [type, setType] = useState(line.purchase_type === 'STOCK' ? 'STOCK' : 'NON_STOCK');
+  const [group, setGroup] = useState(line.material_group ?? '');
+  const [category, setCategory] = useState(line.category ?? line.material_group ?? '');
+  const [uom, setUom] = useState(line.uom);
+  const [hsn, setHsn] = useState('');
+  const [mpn, setMpn] = useState('');
+  const promote = useCommand(() => api.post<{ number: string; status: string }>(`/requisitions/${pr.number}/lines/${line.line_no}/promote-material`, {
+    description: description.trim(), type, material_group: group.trim(), category: category.trim(), base_uom: uom.trim(),
+    hsn_code: hsn.trim() || undefined, mpn: mpn.trim() || undefined,
+  }), { success: (r) => `${r.number} raised (${label(r.status)}) — the line stays free text and is linked once the material is live`, onSuccess: onClose });
+  const invalid = !description.trim() || !group.trim() || !category.trim() || !uom.trim();
+  return (
+    <Dialog open title={`Promote ${pr.number} line ${line.line_no} to a material request`} onClose={onClose}>
+      <p className="text-sm text-slate-700">The item becomes a material master record through the duplicate check and the data stewards (F9). The requisition does not wait and the line stays free text (P04).</p>
+      <div className="mt-3 grid gap-3 md:grid-cols-2">
+        <div className="md:col-span-2"><Field label="Description *">{(id) => <Input id={id} maxLength={200} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field></div>
+        <Field label="Material type">{(id) => <Select id={id} value={type} onChange={(e) => setType(e.target.value)}
+          options={['STOCK', 'NON_STOCK', 'SERVICE'].map((t) => ({ value: t, label: label(t) }))} />}</Field>
+        <Field label="Base unit of measure *">{(id) => <Input id={id} maxLength={5} value={uom} onChange={(e) => setUom(e.target.value.toUpperCase())} />}</Field>
+        <Field label="Material group *">{(id) => <Input id={id} value={group} onChange={(e) => setGroup(e.target.value)} />}</Field>
+        <Field label="Category *">{(id) => <Input id={id} value={category} onChange={(e) => setCategory(e.target.value)} />}</Field>
+        <Field label="HSN / SAC">{(id) => <Input id={id} value={hsn} onChange={(e) => setHsn(e.target.value)} />}</Field>
+        <Field label="Manufacturer part number">{(id) => <Input id={id} value={mpn} onChange={(e) => setMpn(e.target.value)} />}</Field>
+      </div>
+      <div className="mt-3"><PolicyProblem error={promote.error} /></div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" busy={promote.isPending} disabled={invalid} onClick={() => promote.mutate()}>Raise material request</Button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -159,7 +204,7 @@ function EditLineDialog({ pr, line, onClose }: { pr: Requisition; line: PrLine; 
   return (
     <Dialog open title={`Edit ${pr.number} line ${line.line_no}`} onClose={onClose}>
       <div className="grid gap-3 md:grid-cols-2">
-        <div className="md:col-span-2"><Field label="Description">{(id) => <Input id={id} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field></div>
+        <div className="md:col-span-2"><Field label="Description" hint="Short text, at most 200 characters">{(id) => <Input id={id} maxLength={200} value={description} onChange={(e) => setDescription(e.target.value)} />}</Field></div>
         <Field label={`Quantity (${line.uom})`}>{(id) => <Input id={id} type="number" min="0" step="any" value={qtyValue} onChange={(e) => setQty(e.target.value)} />}</Field>
         <Field label="Estimated unit price (₹)">{(id) => <Input id={id} type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} />}</Field>
         <AccountAssignment type={aat} code={aac} costObjects={ref.data?.costObjects ?? []} required={NEEDS_ACCOUNT.includes(line.purchase_type)}

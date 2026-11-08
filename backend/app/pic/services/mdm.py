@@ -17,6 +17,38 @@ from app.pic.services.common import principal
 
 PROCESS = "pic.material-request"
 IN_FLIGHT = ("DUPLICATE_CHECK", "IN_STEWARDSHIP", "APPROVED")  # open requests the duplicate check also scores
+WITHDRAWABLE = ("DRAFT", "DUPLICATE_CHECK", "DUPLICATE_BLOCKED", "IN_STEWARDSHIP")
+MRP_TYPES = ("PD", "PW", "PM", "VB", "KB", "ND")
+DEFAULTS_RULE = "MATERIAL-DEFAULTS"
+# Built-in defaults when the tenant has no MATERIAL-DEFAULTS rule: a new stock material is planned by MRP (PD, daily buckets), anything
+# else is not planned (ND). A tenant rule (scoped by category like every rule) can set other types or require the requester to choose.
+DEFAULT_MATERIAL_RULE = {"mrpTypeByMaterialType": {"STOCK": "PD", "NON_STOCK": "ND", "SERVICE": "ND"}, "requireMrpTypeFor": []}
+
+
+def material_defaults(session: Session, category: Optional[str] = None) -> tuple[str, dict]:
+    try:
+        rule = rules.resolve(session, DEFAULTS_RULE, category=category)
+        return rule.ref, {**DEFAULT_MATERIAL_RULE, **rule.body}
+    except Problem as exc:
+        if exc.code != "RULE_SET_MISSING":
+            raise
+        return f"{DEFAULTS_RULE}@default", DEFAULT_MATERIAL_RULE
+
+
+def initial_mrp_type(session: Session, material_type: str, category: Optional[str], requested: Optional[str]) -> str:
+    """The MRP type a new material is created with: the requested one, else the tenant default for its material type (flow fixes A7:
+    a new stock material is plannable at once instead of ND)."""
+    ref, body = material_defaults(session, category)
+    if requested:
+        mrp_type = requested.strip().upper()
+        if mrp_type not in MRP_TYPES:
+            raise Problem(422, "INVALID_MRP_TYPE", f"mrp_type must be one of {', '.join(MRP_TYPES)}", rule_ref=ref)
+        if material_type != "STOCK" and mrp_type != "ND":
+            raise rule_violation(f"{material_type.lower().replace('_', ' ')} materials are not planned by MRP; use ND", ref)
+        return mrp_type
+    if material_type in (body.get("requireMrpTypeFor") or []):
+        raise rule_violation(f"Choose the MRP type of the new {material_type.lower()} material (rule {DEFAULTS_RULE})", ref)
+    return str((body.get("mrpTypeByMaterialType") or {}).get(material_type) or "ND").upper()
 
 
 def _candidate_ref(candidate: dict) -> str:
@@ -45,12 +77,13 @@ def duplicate_score(weights: dict, request: MaterialRequest, material: Material)
 
 def create_request(session: Session, *, description: str, type: str, material_group: str, category: str, base_uom: str,
                    valuation_class: Optional[str] = None, hsn_code: Optional[str] = None, mpn: Optional[str] = None,
-                   attributes: Optional[dict] = None, source_pr: Optional[PrLine] = None) -> MaterialRequest:
+                   attributes: Optional[dict] = None, source_pr: Optional[PrLine] = None, mrp_type: Optional[str] = None) -> MaterialRequest:
     p = principal(session)
+    planning_type = initial_mrp_type(session, type, category, mrp_type)  # validated now, applied when the material is created
     request = MaterialRequest(
         tenant_id=current_tenant(session), number=next_number(session, "MATERIAL_REQUEST"), status="DRAFT",
         description=description, type=type, material_group=material_group, category=category, base_uom=base_uom,
-        valuation_class=valuation_class, hsn_code=hsn_code, mpn=mpn, attributes=attributes or {},
+        valuation_class=valuation_class, hsn_code=hsn_code, mpn=mpn, attributes=attributes or {}, mrp_type=planning_type,
         requested_by=p.user_id, source_pr_id=source_pr.requisition_id if source_pr else None,
         source_pr_line=source_pr.line_no if source_pr else None, created_by=p.user_id,
     )
@@ -205,6 +238,38 @@ def merge_into_existing(session: Session, request: MaterialRequest, material: Ma
     return request
 
 
+def withdraw(session: Session, request: MaterialRequest, reason: str) -> MaterialRequest:
+    """The requester withdraws a request nobody needs any more (flow fixes A8), including one blocked as a duplicate: status WITHDRAWN,
+    the open steward tasks are cancelled, the process ends; a request already decided (approved, rejected, merged) cannot be withdrawn."""
+    p = principal(session)
+    if p.user_id != request.requested_by:
+        raise Problem(403, "FORBIDDEN", "Only the requester can withdraw this material request", rule_ref="MDM-DUP")
+    if request.status not in WITHDRAWABLE:
+        raise illegal_transition("Material request", request.number, request.status, "withdraw")
+    reason = (reason or "").strip()
+    if len(reason) < 3:
+        raise rule_violation("Give the reason for withdrawing the request", "MDM-DUP")
+    before = request.status
+    request.status, request.withdrawal_reason = "WITHDRAWN", reason[:1000]
+    cancelled = 0
+    for task in session.execute(select(Task).where(Task.object_id == request.id, Task.status == "OPEN")).scalars():
+        task.status = "CANCELLED"
+        cancelled += 1
+    if request.source_pr_id is not None:  # the requisition line can be promoted again later
+        line = session.execute(select(PrLine).where(PrLine.requisition_id == request.source_pr_id, PrLine.line_no == request.source_pr_line)
+                               ).scalar_one_or_none()
+        if line is not None and line.mdm_request_id == request.id:
+            line.mdm_request_id = None
+    instance = workflow.find(session, "MATERIAL_REQUEST", request.id, PROCESS)
+    if instance is not None and instance.status == "RUNNING":
+        workflow.end(session, instance, "F9-08", outcome=f"withdrawn by the requester: {reason}", status="CANCELLED")
+    audit.record(session, "MATERIAL_REQUEST", request.id, "WITHDRAWN", object_ref=request.number, reason=reason,
+                 before={"status": before}, after={"status": "WITHDRAWN", "tasksCancelled": cancelled}, rule_set_version=request.rule_set_version)
+    outbox.emit(session, "material_request.withdrawn", "MATERIAL_REQUEST", request.id, request.number,
+                {"previousStatus": before, "reason": reason})
+    return request
+
+
 @workflow.on_task("MDM_STEWARD")
 def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
     request = session.get(MaterialRequest, task.object_id)
@@ -224,6 +289,7 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
         tenant_id=current_tenant(session), number=next_number(session, "MATERIAL"), description=request.description,
         type=request.type, material_group=request.material_group, category=request.category, base_uom=request.base_uom,
         valuation_class=request.valuation_class, hsn_code=request.hsn_code, mpn=request.mpn, attributes=request.attributes,
+        mrp_type=request.mrp_type or initial_mrp_type(session, request.type, request.category, None),
         status="ACTIVE", erp_synced=False, created_by=principal(session).user_id,
     )
     session.add(material)
@@ -231,7 +297,8 @@ def _stewards_decided(session: Session, task: Task, outcome: str) -> None:
     request.material_id = material.id
     audit.record(session, "MATERIAL", material.id, "CREATED", object_ref=material.number,
                  after={"description": material.description, "group": material.material_group, "category": material.category,
-                        "uom": material.base_uom, "fromRequest": request.number}, rule_set_version=request.rule_set_version)
+                        "uom": material.base_uom, "mrpType": material.mrp_type, "fromRequest": request.number},
+                 rule_set_version=request.rule_set_version)
     link(session, "MATERIAL_REQUEST", request.id, request.number, "MATERIAL", material.id, material.number, "created_material")
     from app.pic.services import material_changes  # version 1 of the material's history
 

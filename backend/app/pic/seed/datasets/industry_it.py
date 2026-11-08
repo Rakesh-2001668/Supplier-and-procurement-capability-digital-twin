@@ -174,7 +174,7 @@ def apply(tenant_code: str, password: str) -> dict:
     notes.append(f"F9 masters: {len(RC22)} RC-22 roles (SAC 998313) and the subscription {masters['licence']} (SAC 997331)")
 
     # ------------------------------------------------------------ F4 licence contract LIC-2601 (renewal case)
-    kit.number_range(sc, "CONTRACT", "LIC-", 2601)
+    kit.number_range(sc, "CONTRACT_VC", "LIC-", 2601)  # value contracts have their own range (flow fixes B6)
     lic_id, lic_no = _contract(sc, contract_svc, msd, at(date(2026, 10, 8), 10), title="LIC-2601 Observability platform – 150 named users",
                                valid=(date(2026, 10, 15), date(2027, 3, 31)),
                                lines=[{"material_id": mat["licence"], "description": LICENCE["description"], "plant": CAMPUS, "uom": "EA",
@@ -215,7 +215,7 @@ def apply(tenant_code: str, password: str) -> dict:
     _pay(sc, payables, at(date(2026, 11, 16), 10), notes)
 
     # ------------------------------------------------------------ F4 SOW-4410 with rate card RC-22
-    kit.number_range(sc, "CONTRACT", "SOW-", 4410)
+    kit.number_range(sc, "CONTRACT_VC", "SOW-", 4410)
     sow_id, sow_no = _contract(
         sc, contract_svc, pcc, at(date(2026, 10, 20), 10), title="SOW-4410 Cloud migration – time & material, rate card RC-22",
         valid=(date(2026, 11, 1), date(2027, 4, 30)),

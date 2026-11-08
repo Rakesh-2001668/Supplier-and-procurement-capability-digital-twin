@@ -92,7 +92,7 @@ def _html_error(exc: Problem) -> HTMLResponse:
 
 # ---------------------------------------------------------------- MDM-04 supplier master changes
 class MasterChangeIn(CamelModel):
-    field_group: str = Field(pattern="^(TAX|ADDRESS|CONTACT)$")
+    field_group: str = Field(pattern="^(TAX|ADDRESS|CONTACT|LEGAL_NAME|COMMERCIAL)$")  # LEGAL_NAME, COMMERCIAL: flow fixes B8 (services/master_changes.py)
     values: dict
     reason: str = Field(min_length=3, max_length=2000)
 

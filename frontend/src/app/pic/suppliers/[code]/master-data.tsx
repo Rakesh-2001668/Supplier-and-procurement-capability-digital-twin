@@ -13,13 +13,17 @@ import { emailValid, gstinProblems, panValid, phoneValid, pinValid, STATES } fro
 export type Address = { line1?: string; line2?: string | null; city?: string; state_code?: string; pin?: string; country?: string; phone?: string };
 export type PunchoutConfig = { protocol?: string; url?: string; identity?: string; configuredAt?: string; configuredBy?: string };
 export type SupplierLite = { code: string; legal_name: string; gstin_masked: string | null; state_code: string | null; contact_email: string | null;
-  address: Address | null; punchout: PunchoutConfig | null; status: string };
+  address: Address | null; punchout: PunchoutConfig | null; status: string; payment_terms?: string | null; incoterms?: string | null };
 type ChangeTask = { id: string; role: string; status: string; decision: string | null; completedAt: string | null; comment: string | null };
-type MasterChange = { id: string; number: string; field_group: 'TAX' | 'ADDRESS' | 'CONTACT'; status: string; reason: string;
+type MasterChange = { id: string; number: string; field_group: Group; status: string; reason: string;
   before_masked: Record<string, unknown>; after_masked: Record<string, unknown>; created_at: string; applied_at: string | null; tasks: ChangeTask[] };
 
-const GROUPS = { TAX: 'Tax IDs (GSTIN / PAN)', ADDRESS: 'Registered address', CONTACT: 'Contact e-mail / phone' } as const;
+const GROUPS = { TAX: 'Tax IDs (GSTIN / PAN)', ADDRESS: 'Registered address', CONTACT: 'Contact e-mail / phone', LEGAL_NAME: 'Legal name',
+  COMMERCIAL: 'Payment terms / incoterms' } as const;
 type Group = keyof typeof GROUPS;
+const BUTTON: Record<Group, string> = { TAX: 'tax IDs', ADDRESS: 'address', CONTACT: 'contact', LEGAL_NAME: 'legal name', COMMERCIAL: 'terms' };
+// Commercial terms are agreed with the buyer: the supplier's own portal users do not request them.
+const PORTAL_GROUPS: Group[] = ['TAX', 'ADDRESS', 'CONTACT', 'LEGAL_NAME'];
 
 function flatten(values: Record<string, unknown> | null | undefined): [string, string][] {
   const out: [string, string][] = [];
@@ -56,9 +60,9 @@ export function MasterDataCard({ supplier, manager, portal = false }: { supplier
 
   return (
     <Card title="Master data changes (MDM-04)" actions={manager && supplier.status !== 'BLOCKED' ? (
-      <>{(Object.keys(GROUPS) as Group[]).map((g) => (
+      <>{(portal ? PORTAL_GROUPS : (Object.keys(GROUPS) as Group[])).map((g) => (
         <Button key={g} disabled={pending(g)} title={pending(g) ? 'A change for this data is already in approval' : undefined} onClick={() => setGroup(g)}>
-          Change {g === 'TAX' ? 'tax IDs' : g.toLowerCase()}
+          Change {BUTTON[g]}
         </Button>
       ))}</>
     ) : undefined}>
@@ -67,6 +71,8 @@ export function MasterDataCard({ supplier, manager, portal = false }: { supplier
         ['State code', supplier.state_code ?? '–'],
         ['Registered address', addressText(supplier.address)],
         ['Contact', [supplier.contact_email, supplier.address?.phone].filter(Boolean).join(' · ') || '–'],
+        ['Legal name', supplier.legal_name],
+        ...(portal ? [] : [['Payment terms / incoterms', [supplier.payment_terms, supplier.incoterms].filter(Boolean).join(' · ') || '–'] as [string, string]]),
       ]} />
       <p className="mt-3 text-xs text-slate-500">Changes need approval by finance and the supplier manager – never by the requester – before they apply.
         New values are stored encrypted; only masked values are shown and audited. Tax-ID changes re-run duplicate and sanctions screening; the ERP supplier master is updated after approval.</p>
@@ -109,6 +115,9 @@ function MasterChangeDialog({ supplier, group, onClose }: { supplier: SupplierLi
   const [pin, setPin] = useState(current.pin ?? '');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [legalName, setLegalName] = useState(supplier.legal_name);
+  const [terms, setTerms] = useState('');
+  const [incoterms, setIncoterms] = useState('');
   const [reason, setReason] = useState('');
   const [problems, setProblems] = useState<string[]>([]);
 
@@ -118,7 +127,9 @@ function MasterChangeDialog({ supplier, group, onClose }: { supplier: SupplierLi
   const values = group === 'TAX'
     ? { gstin: g, pan: effectivePan, ...(moveAddress ? { address: { ...address, state_code: g.slice(0, 2) } } : {}) }
     : group === 'ADDRESS' ? address
-      : { ...(email.trim() ? { email: email.trim() } : {}), ...(phone.trim() ? { phone: phone.trim() } : {}) };
+      : group === 'LEGAL_NAME' ? { legalName: legalName.trim() }
+        : group === 'COMMERCIAL' ? { ...(terms.trim() ? { paymentTerms: terms.trim().toUpperCase() } : {}), ...(incoterms.trim() ? { incoterms: incoterms.trim() } : {}) }
+          : { ...(email.trim() ? { email: email.trim() } : {}), ...(phone.trim() ? { phone: phone.trim() } : {}) };
   const submit = useCommand(() => api.post<MasterChange>(`/suppliers/${encodeURIComponent(supplier.code)}/master-changes`, {
     fieldGroup: group, values, reason: reason.trim(),
   }), { success: (c) => `${c.number} sent for dual approval`, onSuccess: onClose });
@@ -139,6 +150,12 @@ function MasterChangeDialog({ supplier, group, onClose }: { supplier: SupplierLi
       if (supplier.state_code && stateCode !== supplier.state_code) {
         out.push(`The GSTIN is registered in state ${supplier.state_code}. A move to another state needs a tax-ID change with the new GSTIN and address.`);
       }
+    } else if (group === 'LEGAL_NAME') {
+      if (legalName.trim().length < 3) out.push('The legal name needs at least 3 characters.');
+      else if (legalName.trim() === supplier.legal_name) out.push('The legal name is unchanged.');
+    } else if (group === 'COMMERCIAL') {
+      if (!terms.trim() && !incoterms.trim()) out.push('Give new payment terms and/or incoterms.');
+      if (terms.trim() && !/^(\d{1,2}(\.\d{1,2})?\/\d{1,3} )?N?\d{1,3}$/i.test(terms.trim())) out.push('Payment terms: net days (N60) or discount + net days (2/10 N45).');
     } else {
       if (!email.trim() && !phone.trim()) out.push('Give a new e-mail and/or phone number.');
       if (email.trim() && !emailValid(email)) out.push('E-mail address is not valid.');
@@ -188,6 +205,18 @@ function MasterChangeDialog({ supplier, group, onClose }: { supplier: SupplierLi
           <div className="grid gap-3 md:grid-cols-2">
             <Field label="New contact e-mail" hint={supplier.contact_email ? `Now ${supplier.contact_email}` : undefined}>{(id) => <Input id={id} type="email" value={email} onChange={(e) => setEmail(e.target.value)} />}</Field>
             <Field label="New phone" hint={current.phone ? `Now ${current.phone}` : undefined}>{(id) => <Input id={id} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 …" />}</Field>
+          </div>
+        )}
+        {group === 'LEGAL_NAME' && (
+          <Field label="New legal name *" hint="As registered (certificate of incorporation / GST registration). Re-runs duplicate and sanctions screening.">
+            {(id) => <Input id={id} value={legalName} maxLength={200} onChange={(e) => setLegalName(e.target.value)} />}
+          </Field>
+        )}
+        {group === 'COMMERCIAL' && (
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="New payment terms" hint={`Now ${supplier.payment_terms ?? '–'}; e.g. N45 or 2/10 N45`}>{(id) => <Input id={id} value={terms} onChange={(e) => setTerms(e.target.value)} />}</Field>
+            <Field label="New incoterms" hint={`Now ${supplier.incoterms ?? '–'}; e.g. FCA Hosur`}>{(id) => <Input id={id} value={incoterms} maxLength={40} onChange={(e) => setIncoterms(e.target.value)} />}</Field>
+            <p className="text-xs text-slate-500 md:col-span-2">New orders and contracts default to these terms; existing orders and contracts keep the terms they were agreed on.</p>
           </div>
         )}
         <Field label="Reason and evidence *">{(id) => <Textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. GST registration amended on 12 Oct; certificate received by e-mail" />}</Field>

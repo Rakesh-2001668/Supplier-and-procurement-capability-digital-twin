@@ -22,6 +22,8 @@ export type CategorySowLineData = {
   aac: string;
   need_date: string;
   attributes: Record<string, unknown>;
+  /** Set by CategorySowModal: the structured SOW the requisition line stores (template, title, full text, attributes). */
+  sow?: { template: string; title: string; text: string; attributes: Record<string, unknown> };
 };
 
 function inDays(days: number): string {
@@ -42,19 +44,38 @@ export function CategorySowModal({
   onClose: () => void;
   onApply: (line: CategorySowLineData) => void;
 }) {
+  // Every form builds the full statement of work as text plus its structured attributes; the line keeps the short text (first line,
+  // at most SOW_DESCRIPTION_LIMIT characters) and the SOW travels as ``sow`` (stored on the requisition line, carried to sourcing / PO).
+  const apply = (line: CategorySowLineData) => onApply(withSow(line));
   if (code === 'SVC-PROFESSIONAL') {
-    return <ProfessionalServicesModal onClose={onClose} onApply={onApply} />;
+    return <ProfessionalServicesModal onClose={onClose} onApply={apply} />;
   }
   if (code === 'MKT-CAMPAIGN-EVENT') {
-    return <MarketingSowModal onClose={onClose} onApply={onApply} />;
+    return <MarketingSowModal onClose={onClose} onApply={apply} />;
   }
   if (code === 'IT-HARDWARE-SOFTWARE') {
-    return <ItCategoryModal onClose={onClose} onApply={onApply} />;
+    return <ItCategoryModal onClose={onClose} onApply={apply} />;
   }
   if (code === 'FAC-MAINTENANCE') {
-    return <FacilitiesSowModal onClose={onClose} onApply={onApply} />;
+    return <FacilitiesSowModal onClose={onClose} onApply={apply} />;
   }
   return null;
+}
+
+/** pr_line.description is the 200-character short text; the API refuses a longer one (422). */
+export const SOW_DESCRIPTION_LIMIT = 200;
+/** pr_line.sow.text limit (services/requisition.py SOW_TEXT_LIMIT). */
+export const SOW_TEXT_LIMIT = 20000;
+
+function withSow(line: CategorySowLineData): CategorySowLineData {
+  const text = line.description.slice(0, SOW_TEXT_LIMIT);
+  const firstLine = text.split('\n')[0].trim();
+  const title = String(line.attributes.title ?? line.attributes.productName ?? firstLine);
+  return {
+    ...line,
+    description: firstLine.slice(0, SOW_DESCRIPTION_LIMIT),
+    sow: { template: line.template, title: title.slice(0, SOW_DESCRIPTION_LIMIT), text, attributes: line.attributes },
+  };
 }
 
 // ---------------------------------------------------------------- 1. Professional Services SOW Modal

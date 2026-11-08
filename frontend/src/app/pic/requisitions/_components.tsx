@@ -45,7 +45,27 @@ export type PrLine = {
   quotes_attached: number; reusable: boolean; mdm_request_id: string | null; ordered_qty: string; sourcing_status: string | null;
   source_determination: { method?: string; allocations?: Allocation[]; quotes?: { supplier: string; reference: string; date: string }[] } | null;
   planned_order_id: string | null;
+  /** Category SOW form: the structured statement of work kept with the line (carried to sourcing and the PO line). */
+  sow?: LineSow | null;
 };
+export type LineSow = { template?: string | null; title?: string | null; text?: string | null; attributes?: Record<string, unknown> };
+
+/** The statement of work of a line, collapsed (requisition and buyer screens). */
+export function SowDetails({ sow }: { sow?: LineSow | null }) {
+  if (!sow) return null;
+  const attributes = Object.entries(sow.attributes ?? {}).filter(([, v]) => v !== null && typeof v !== 'object');
+  return (
+    <details className="mt-1 rounded border border-blue-200 bg-blue-50/40 px-2 py-1 text-xs">
+      <summary className="cursor-pointer font-semibold text-blue-900">SOW{sow.template ? ` · ${sow.template}` : ''}{sow.title ? ` · ${sow.title}` : ''}</summary>
+      {sow.text && <pre className="mt-1 whitespace-pre-wrap font-mono text-[11px] text-slate-700">{sow.text}</pre>}
+      {attributes.length > 0 && (
+        <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+          {attributes.map(([k, v]) => <div key={k} className="contents"><dt className="text-slate-500">{k}</dt><dd className="font-medium">{String(v)}</dd></div>)}
+        </dl>
+      )}
+    </details>
+  );
+}
 
 /** Free-text and free-service lines (no material, catalogue item or contract line): the quote policy applies. */
 export const isUnstructured = (l: Pick<PrLine, 'material_id' | 'catalogue_item_id' | 'contract_line_id'>) =>

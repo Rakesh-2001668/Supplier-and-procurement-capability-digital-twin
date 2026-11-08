@@ -54,6 +54,7 @@ PACKS = (
     "ai_eval",               # D9  AI evaluation sets (labelled spend, forecast actuals, duplicate pairs, Copilot questions)
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
     "org_masters",            # D19 Legal Entity, Purchasing Org and Purchasing Group Masters (TD-4a, every tenant)
+    "material_changes",       # D20 AXN material master governance: change requests applied / in approval, a withdrawn duplicate request (August 2027)
 )
 
 
