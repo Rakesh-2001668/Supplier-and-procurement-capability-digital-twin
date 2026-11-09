@@ -1,0 +1,10 @@
+{
+  "status": 201,
+  "body": {
+    "d": {
+      "AccountingDocument": "1700000101",
+      "FiscalYear": "2027",
+      "CompanyCode": "1000"
+    }
+  }
+}

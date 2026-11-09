@@ -49,16 +49,19 @@ DOC_TYPES = {
     # Vendor debit memo for a supplier debit note (upward price correction / additional charge) received after its invoice was posted
     # (live SAP S/4HANA: sap_mapping.supplier_debit_memo, OData only).
     "SUPPLIER_DEBIT_MEMO": ("KD", 5106000001),
-    # Reversal of the clearing document of a payment the bank returned (simulator only; live connectors report it unmapped: sap_mapping.UNMAPPED_LIVE).
+    # Reversal of the clearing document of a payment the bank returned (live SAP: sap_mapping.payment_reversal on the customer's payment service,
+    # rule SAP-PAYMENT-REVERSAL; the simulator validates the same body against the mock customizing, platform/sap_customizing.py).
     "PAYMENT_REVERSAL": ("ZR", 1500009000),
-    # Supply-chain-finance election on a posted invoice (payment assigned to the financing programme; no external provider).
+    # Supply-chain-finance election on a posted invoice: journal entry moving the payable to the financier (live SAP: sap_mapping.scf_journal_entry,
+    # rule SAP-SCF-FINANCING; no external provider is called).
     "SCF_FINANCING": ("ZF", 5200000001),
     # Material document of an inventory document (stock posting, physical-inventory difference, reservation issue). The simulator and the live SAP
     # connector (platform/sap_mapping.py, API_MATERIAL_DOCUMENT_SRV / MBGMCR03) map it; any other connector leaves the document posted in PIC and
     # records ERP_NOT_MAPPED (services/stock_ledger.py).
     "STOCK_POSTING": ("MB", 4900000001),
-    # Outline agreement (contract / scheduling agreement) of an activated or amended PIC contract (services/contract.py, flow fixes B5).
-    # Simulator only: the live SAP connector does not map it yet, so the contract stays in PIC and the audit trail records ERP_NOT_MAPPED.
+    # Outline agreement (contract / scheduling agreement) of an activated, amended, terminated or renewed PIC contract (services/contract.py,
+    # flow fixes B5). Live SAP: sap_mapping.outline_agreement (MK / WK / LP by rule SAP-OUTLINE-AGREEMENT); a change keeps the agreement's
+    # number in the simulator as in SAP. Other connectors leave the contract in PIC and the audit trail records ERP_NOT_MAPPED.
     "OUTLINE_AGREEMENT": ("K", 4600000001),
     # Purchase requisition of an approved PIC requisition (services/requisition.py, flow fixes A10; rule ERP-TARGET
     # sendPurchaseRequisitions turns it off). The live SAP connector maps it too (sap_mapping.purchase_requisition, API_PURCHASEREQ_PROCESS_SRV).
@@ -109,19 +112,23 @@ class SapS4Connector:
         return session.execute(select(ErpDocument).where(ErpDocument.system == self.system,
                                                          ErpDocument.external_ref == external_ref)).scalar_one_or_none()
 
-    def post(self, session: Session, message: IntegrationMessage) -> str:
+    def post(self, session: Session, message: IntegrationMessage, doc_no: Optional[str] = None, request=None) -> str:
+        """Record the document. ``doc_no`` is given for a change of an existing document (an outline agreement keeps its number);
+        ``request`` is the SAP request the live mapping built (connectors.SapS4 validates it first), kept as ``sapRequest``."""
         if FAULTS["fail"] > 0:
             FAULTS["fail"] -= 1
             raise ConnectorTimeout("ERP did not answer (simulated)")
         doc_type, start = DOC_TYPES[message.message_type]
-        session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"erp:{current_tenant(session)}:{doc_type}"})
-        last = session.execute(select(func.max(ErpDocument.doc_no)).where(ErpDocument.system == self.system,
-                                                                         ErpDocument.doc_type == doc_type)).scalar()
-        doc_no = str(int(last) + 1) if last else str(start)
+        if doc_no is None:
+            session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"erp:{current_tenant(session)}:{doc_type}"})
+            last = session.execute(select(func.max(ErpDocument.doc_no)).where(ErpDocument.system == self.system,
+                                                                             ErpDocument.doc_type == doc_type)).scalar()
+            doc_no = str(int(last) + 1) if last else str(start)
         session.add(ErpDocument(
             tenant_id=current_tenant(session), system=self.system, doc_type=doc_type, doc_no=doc_no,
             external_ref=message.idempotency_key, company_code=message.payload.get("companyCode", "1000"),
-            amount_minor=message.payload.get("grossMinor"), payload=message.payload,
+            amount_minor=message.payload.get("grossMinor"),
+            payload=message.payload if request is None else {**message.payload, "sapRequest": request},
         ))
         session.flush()
         return doc_no

@@ -113,7 +113,8 @@ function ReopenDialog({ period, onClose }: { period: Period; onClose: () => void
 }
 
 const QUARTERS = [{ value: 'Q1', label: 'Q1 April–June' }, { value: 'Q2', label: 'Q2 July–September' }, { value: 'Q3', label: 'Q3 October–December' }, { value: 'Q4', label: 'Q4 January–March' }];
-const FORMS = [{ value: '26Q', label: '26Q · one line per payment' }, { value: '16A', label: '16A · totals per deductee and section' }];
+const FORMS = [{ value: '26Q', label: '26Q · residents, one line per payment' }, { value: '27Q', label: '27Q · non-residents (s.195), one line per payment' },
+  { value: '16A', label: '16A · totals per deductee and section' }];
 
 /** The fiscal year (April to March) of today as YYYY-YY. */
 function currentFiscalYear(): string {

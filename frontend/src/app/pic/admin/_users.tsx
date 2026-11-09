@@ -14,7 +14,7 @@ type AppUserRow = { id: string; email: string; name: string; roles: string[]; ac
 // The role catalogue comes from the backend (GET /admin/roles): built-in roles and the tenant's own; assignment re-validates SoD pairs and MFA.
 type RoleRow = { role: string; name: string; kind: 'BUILT_IN' | 'CUSTOM'; scopes: string[] };
 type Issued = { email: string; activationUrl?: string; resetUrl?: string; expiresAt: string; emailStatus: string };
-const SENSITIVE = ['TENANT_ADMIN', 'FINANCE_CONTROLLER', 'CPO'];
+const SENSITIVE = ['TENANT_ADMIN', 'FINANCE_CONTROLLER', 'CFO', 'CPO'];
 
 function csvList(v: string): string[] {
   return v.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);

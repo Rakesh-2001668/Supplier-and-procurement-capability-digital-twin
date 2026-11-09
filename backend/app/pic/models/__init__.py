@@ -17,6 +17,7 @@ from app.pic.models.industry import *  # noqa: F401,F403
 from app.pic.models.admin_enterprise import *  # noqa: F401,F403
 from app.pic.models.finance_close import *  # noqa: F401,F403
 from app.pic.models.inventory import *  # noqa: F401,F403
+from app.pic.models.tax_nonresident import *  # noqa: F401,F403
 
 # Tables without tenant_id or with their own isolation handling.
 NON_RLS_TABLES = {"tenant", "process_definition"}

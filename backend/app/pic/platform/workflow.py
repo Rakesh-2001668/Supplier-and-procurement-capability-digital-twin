@@ -219,12 +219,17 @@ def start_approval(session: Session, instance: Optional[ProcessInstance], kind: 
     return created
 
 
+def role_title(role: str) -> str:
+    """A role code as people read it in a task name: 'FINANCE_CONTROLLER' -> 'Finance Controller'; the acronyms stay ('CFO', 'CPO')."""
+    return role if role in ("CFO", "CPO") else role.replace("_", " ").title()
+
+
 def _open_task(session, instance, kind, object_type, object_id, object_ref, role, scope, excluded, group_key, sequence,
                sla_days, rule_set_version, evidence) -> Task:
     due = clock.add_business_days(clock.now(), sla_days)
     task = Task(
         tenant_id=current_tenant(session), instance_id=instance.id if instance else None, kind=kind,
-        name=f"{kind.replace('_', ' ').title()} · {object_ref} · {role.replace('_', ' ').title()}",
+        name=f"{kind.replace('_', ' ').title()} · {object_ref} · {role_title(role)}",
         object_type=object_type, object_id=object_id, object_ref=object_ref, candidate_role=role,
         candidate_scope=scope, excluded_user_ids=excluded, group_key=group_key, sequence=sequence, status="OPEN",
         due_at=due, rule_set_version=rule_set_version, evidence=evidence, created_by=current_user(session),
@@ -551,8 +556,8 @@ def _escalate(session: Session, task: Task) -> dict:
         history = list(scope.get(REASSIGNED_KEY) or []) + [{
             "from": previous, "to": target, "level": task.escalation_level, "at": clock.now().isoformat(),
             "scope": {k: v for k, v in (task.candidate_scope or {}).items() if k not in (ESCALATION_KEY, REASSIGNED_KEY)}}]
-        old_label = task.candidate_role.replace("_", " ").title()
-        task.name = (task.name[: -len(old_label)] if task.name.endswith(old_label) else task.name + " · ") + target.replace("_", " ").title()
+        old_label = role_title(task.candidate_role)
+        task.name = (task.name[: -len(old_label)] if task.name.endswith(old_label) else task.name + " · ") + role_title(target)
         task.candidate_role = target
         task.candidate_scope = {**new_scope, REASSIGNED_KEY: history}
         return {"target": target, "ref": rule.ref, "mode": "REASSIGN", "from": previous, "note": None}

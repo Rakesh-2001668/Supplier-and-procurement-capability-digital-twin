@@ -21,6 +21,7 @@ class Invoice(TenantScoped, Base):
         # Internal document number (payables._internal_number) is the key every screen, payment run and lookup uses.
         UniqueConstraint("tenant_id", "number", name="uq_invoice_tenant_number"),
         CheckConstraint("payment_option IN ('STANDARD','EARLY_DISCOUNT','SCF')", name="payment_option"),
+        CheckConstraint("paid_minor >= 0", name="paid_minor"),
         # Copilot / search by the supplier's own invoice number across suppliers and company codes (flow fixes C6).
         Index("ix_invoice_tenant_supplier_invoice_no", "tenant_id", "supplier_invoice_no"),
     )
@@ -79,6 +80,12 @@ class Invoice(TenantScoped, Base):
     tcs_section: Mapped[Optional[str]] = mapped_column(String(20))
     tcs_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(6, 3))
     tcs_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # Migration 0028. Partial payments: cash paid to the supplier by the live (not cancelled) payments of the invoice; payment_status is
+    # PARTIALLY_PAID while it is below the amount payable. Section 195: the nature of the payment to a non-resident (ROYALTY | FTS | INTEREST |
+    # OTHER, rule TDS-195) and the s.195A gross-up of this invoice (NULL: the contract's, else the supplier's setting).
+    paid_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    tax_nature: Mapped[Optional[str]] = mapped_column(String(20))
+    tax_gross_up: Mapped[Optional[bool]] = mapped_column(Boolean)
 
 
 class InvoiceLine(TenantScoped, Base):
@@ -160,11 +167,26 @@ class Payment(TenantScoped, Base):
     fx_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 8))
     amount_group_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
     fx_gain_loss_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # Migration 0028. Partial payments: the sequence number of the payment on its invoice (returned payments keep theirs), whether it settles the
+    # invoice (the last or only payment), the reason given for a partial amount and the gross of the debit notes netted into it.
+    installment_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    settles_invoice: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    partial_reason: Mapped[Optional[str]] = mapped_column(Text)
+    debit_memo_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    # Section 195 (non-resident): the tax in INR (what the 27Q return and the challan carry) and the INR base, the tax the company bears under a
+    # s.195A gross-up (not deducted from the remittance) and the determination (basis DTAA / ACT / NO_PAN_206AA, rates, surcharge, cess, FX, 15CA).
+    tds_inr_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    tds_base_inr_minor: Mapped[Optional[int]] = mapped_column(BigInteger)
+    tax_borne_minor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    tax_detail: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default="{}")
     __table_args__ = (
         CheckConstraint("bank_status IN ('NOT_SENT','SENT','CREDITED','RETURNED')", name="bank_status"),
-        # One live payment per invoice: blocks double payment at the database level.
+        # One live settling payment per invoice: blocks double payment at the database level. Partial payments (settles_invoice false) are
+        # numbered per invoice instead; the payment run holds the invoice row lock while it adds one, and never pays more than is open.
         Index("uq_payment_invoice_live", "tenant_id", "invoice_id", unique=True,
-              postgresql_where=text("status <> 'CANCELLED' AND debit_note_id IS NULL")),
+              postgresql_where=text("status <> 'CANCELLED' AND debit_note_id IS NULL AND settles_invoice")),
+        Index("uq_payment_invoice_installment", "tenant_id", "invoice_id", "installment_no", unique=True,
+              postgresql_where=text("debit_note_id IS NULL")),
         Index("uq_payment_debit_note_live", "tenant_id", "debit_note_id", unique=True,
               postgresql_where=text("status <> 'CANCELLED' AND debit_note_id IS NOT NULL")),
     )

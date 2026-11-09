@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { Button, Dialog, Empty, Field, Input, Loading, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
-import { api, ApiError } from '@/lib/pic/api';
+import { api, ApiError, readSessionUser } from '@/lib/pic/api';
 import { inr, label, qty } from '@/lib/pic/format';
 import { useApi } from '@/lib/pic/hooks';
 import { CompareRow, Comparison, ifMatchOptions, useEventCommand } from '../_lib';
@@ -22,7 +22,10 @@ export type Allocation = { supplier: string; supplierId: string; share: string; 
 export type Scenario = { id: string; kind: string; feasible: boolean; allocations: Allocation[]; weightedPriceMinor: number | null;
   weightedTcoMinor: number | null; annualSavingsMinor: number | null; riskScore: number | null; superseded: string | null; explanation: Record<string, unknown> | null };
 export type AwardAuthority = { valueMinor: number; chain: string[]; bandChain: string[]; approvalAboveMinor: number; rule: string };
-export type AwardException = { code: string; detail: string };
+/** An expired offer the award was proposed on anyway (D5): the written override recorded on the decision (exception BID_OFFER_EXPIRED). */
+export type ExpiredOverride = { by?: string; byEmail?: string; byName?: string; at?: string; reason: string; bids: ExpiredBid[] };
+export type ExpiredBid = { supplier: string; supplierName?: string | null; validUntil: string; round?: number; daysExpired?: number };
+export type AwardException = { code: string; detail: string; override?: ExpiredOverride };
 export type AwardDecision = { id: string; scenario_id: string; status: string; rationale: string | null; conflict_declarations: { user: string; declaration: string }[];
   annual_value_minor: number; rule_set_version: string; created_at: string; authority?: AwardAuthority | null; exceptions?: AwardException[]; regret_sent_at?: string | null };
 export type ShouldCost = { model: string; material: string; conversion: string; tooling: string; packaging: string; subtotal: string;
@@ -395,25 +398,40 @@ export function previewExceptions(event: SourcingEvent, scenario: Scenario | und
   return out;
 }
 
-export function AwardDialog({ event, scenarios, comparison, initial, onClose }: { event: SourcingEvent; scenarios: Scenario[]; comparison?: Comparison; initial: string | null; onClose: () => void }) {
+/** Default minimum length of the override reason (SOURCING-POLICY.expiredOfferOverride.minReasonChars); the server's 409 carries the tenant's value. */
+const OVERRIDE_MIN_CHARS = 20;
+
+export function AwardDialog({ event, scenarios, comparison, initial, onClose, onNewRound }: { event: SourcingEvent; scenarios: Scenario[]; comparison?: Comparison; initial: string | null; onClose: () => void; onNewRound?: () => void }) {
   const path = `/sourcing/events/${encodeURIComponent(event.number)}`;
   const feasible = scenarios.filter((s) => s.feasible && !s.superseded);
   const [scenarioId, setScenarioId] = useState(initial ?? feasible[0]?.id ?? '');
   const [rationale, setRationale] = useState('');
   const [declaration, setDeclaration] = useState('');
+  const [override, setOverride] = useState('');
   const [error, setError] = useState<ApiError | null>(null);
   const scenario = feasible.find((s) => s.id === scenarioId);
   const exceptions = previewExceptions(event, scenario, comparison);
   const needs = exceptions.some((e) => e.needsRationale);
-  const ready = !!scenario && !!declaration.trim() && (!needs || !!rationale.trim());
   const rows = comparison?.bids ?? [];
-  const blocked = (scenario?.allocations ?? []).map((a) => rows.find((r) => r.supplier === a.supplier)).filter((r): r is CompareRow => !!r).flatMap((r) => [
+  const awardedRows = (scenario?.allocations ?? []).map((a) => rows.find((r) => r.supplier === a.supplier)).filter((r): r is CompareRow => !!r);
+  const blocked = awardedRows.flatMap((r) => [
     ...(r.technicalGate && (!r.technicalGate.passed || r.technicalGate.pending.length) ? [`${r.supplier} has not passed the technical gate (${[...r.technicalGate.failed, ...r.technicalGate.pending].join(', ')})`] : []),
     ...((r.unscored?.length ?? 0) > 0 ? [`${r.supplier} is not scored on ${r.unscored!.join(', ')}`] : []),
-    ...(r.validUntil && new Date(r.validUntil) < new Date() ? [`${r.supplier}'s offer expired on ${r.validUntil}`] : []),
   ]);
-  const award = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/award`, { scenario_id: scenarioId, rationale: rationale.trim() || undefined, conflict_declaration: declaration.trim() }, ifMatchOptions(ifMatch)),
-    { success: 'Award proposed – routed for approval where required', onSuccess: onClose, onError: setError, quiet: true });
+  // D5: an awarded offer whose validity has ended blocks the award (409 BID_OFFER_EXPIRED) unless a category manager of the event's category overrides it
+  // with a written reason. The server's answer is authoritative: its list, minimum length and whether this user may override replace the preview.
+  const serverExpired = error?.problem?.code === 'BID_OFFER_EXPIRED' ? (error.problem.expiredBids as ExpiredBid[] | undefined) ?? [] : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const expired: ExpiredBid[] = serverExpired ?? awardedRows.filter((r) => r.validUntil && r.validUntil < today).map((r) => ({ supplier: r.supplier, validUntil: r.validUntil! }));
+  const minChars = Number(error?.problem?.minReasonChars ?? OVERRIDE_MIN_CHARS);
+  const roles = readSessionUser()?.roles ?? [];
+  const mayOverride = error?.problem?.code === 'BID_OFFER_EXPIRED' ? error.problem.overrideAllowed === true : roles.includes('CATEGORY_MANAGER');
+  const overrideOk = !expired.length || override.trim().length >= minChars;
+  const ready = !!scenario && !!declaration.trim() && (!needs || !!rationale.trim()) && overrideOk;
+  const award = useEventCommand(path, (_: void, ifMatch) => api.post(`${path}/award`, {
+    scenario_id: scenarioId, rationale: rationale.trim() || undefined, conflict_declaration: declaration.trim(),
+    expired_offer_override: expired.length && override.trim() ? override.trim() : undefined,
+  }, ifMatchOptions(ifMatch)), { success: 'Award proposed – routed for approval where required', onSuccess: onClose, onError: setError, quiet: true });
   const serverExceptions = (error?.problem?.exceptions as AwardException[] | undefined) ?? [];
   return (
     <Dialog open title={`Propose award – ${event.number}`} onClose={onClose} wide>
@@ -433,6 +451,21 @@ export function AwardDialog({ event, scenarios, comparison, initial, onClose }: 
             <div role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-900">
               <p className="font-semibold">The server will refuse this award</p>
               <ul className="mt-1 list-disc pl-5">{blocked.map((b) => <li key={b}>{b}</li>)}</ul>
+            </div>
+          )}
+          {expired.length > 0 && (
+            <div role="alert" aria-label="Expired offers" className="space-y-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">
+              <p className="font-semibold">Award blocked: an offer in this award has expired</p>
+              <ul className="list-disc pl-5">{expired.map((b) => (
+                <li key={b.supplier}>{b.supplierName ? `${b.supplierName} (${b.supplier})` : b.supplier}: offer valid until {b.validUntil}{b.daysExpired ? ` – expired ${b.daysExpired} day(s) ago` : ''}</li>
+              ))}</ul>
+              <p>The safe way: start a new round so the supplier confirms or extends its offer, then award on the new bid.</p>
+              {onNewRound && <Button onClick={onNewRound}>Start a new round instead</Button>}
+              {mayOverride ? (
+                <Field label={`Override reason (at least ${minChars} characters)`} hint="Only a category manager of this category may override. The reason is recorded on the award decision and in the audit trail, and the award goes to the approvers.">{(id) => (
+                  <Textarea id={id} value={override} maxLength={2000} onChange={(e) => setOverride(e.target.value)} placeholder="e.g. The supplier confirmed the price in writing (letter reference, date) until …" />
+                )}</Field>
+              ) : <p className="text-xs">You cannot override this block: ask a category manager of {event.category}, or start a new round.</p>}
             </div>
           )}
           <Field label={`Rationale${needs ? ' (required)' : ' (optional)'}`} hint="At least the minimum length set by SOURCING-POLICY (default 15 characters). Say why: capacity, risk, quality, TCO.">{(id) => <Textarea id={id} value={rationale} onChange={(e) => setRationale(e.target.value)} placeholder="Why this allocation – capacity, risk, quality, TCO…" />}</Field>

@@ -4,6 +4,11 @@ generated and signed in TRACES from the return; this is the data the tax team fi
 
 Figures come from completed payments dated in the quarter (the tax is deducted when the supplier is paid); the deductor's TAN and PAN are tenant data
 (rule set TDS, ``deductor``) because the platform does not hold them: a missing mandatory field is listed in ``missingMandatory`` instead of being invented.
+
+Payments to non-residents (section 195, rule TDS-195) belong to the Form 27Q return, residents to 26Q: every reconciliation row and certificate says
+which (``returnForm``). Amounts are INR: a foreign-currency payment carries its tax and base converted on the rule's rate date (``tds_inr_minor``).
+``certificate_pdf`` renders an INFORMATION COPY of the certificate data per deductee and quarter (services/form16a_pdf.py); the statutory Form 16A is
+downloaded from TRACES.
 """
 import csv
 import io
@@ -19,7 +24,7 @@ from app.pic.db import current_tenant
 from app.pic.models import CompanyCode, Invoice, Payment, Supplier, TdsChallan
 from app.pic.platform import audit, clock, crypto, outbox
 from app.pic.platform.errors import Problem, not_found
-from app.pic.services import finance_controls
+from app.pic.services import finance_controls, nonresident_tax
 from app.pic.services.common import principal
 
 BSR = re.compile(r"^[0-9]{7}$")
@@ -32,7 +37,13 @@ def assessment_year(fiscal_year: str) -> str:
 
 
 def _sections(session: Session, company_code: str) -> dict:
-    return finance_controls.rule_body(session, "TDS", finance_controls.TDS_DEFAULT, company_code=company_code).get("sections") or {}
+    """The resident sections of rule set TDS and the s.195 section keys of rule set TDS-195 (195-ROYALTY, 195-FTS, ...)."""
+    resident = finance_controls.rule_body(session, "TDS", finance_controls.TDS_DEFAULT, company_code=company_code).get("sections") or {}
+    return {**resident, **nonresident_tax.section_labels(nonresident_tax.rule(session, company_code)[0])}
+
+
+# Tax and base in INR: the converted figures of a foreign-currency (s.195) payment, the payment's own otherwise.
+TDS_INR = func.coalesce(Payment.tds_inr_minor, Payment.tds_minor)
 
 
 def record_challan(session: Session, *, company_code: str, fiscal_year: str, quarter: str, section: str, challan_no: str, bsr_code: str,
@@ -105,7 +116,7 @@ def challans(session: Session, fiscal_year: Optional[str] = None, quarter: Optio
 def deducted(session: Session, fiscal_year: str, quarter: str, company_codes: Optional[list[str]] = None) -> dict[tuple[str, str], int]:
     """TDS deducted by completed payments dated in the quarter, per company code and section."""
     first, last = finance_controls.quarter_range(fiscal_year, quarter)
-    query = (select(Invoice.company_code, Invoice.tds_section, func.sum(Payment.tds_minor)).join(Invoice, Invoice.id == Payment.invoice_id)
+    query = (select(Invoice.company_code, Invoice.tds_section, func.sum(TDS_INR)).join(Invoice, Invoice.id == Payment.invoice_id)
              .where(Payment.status == "COMPLETED", Payment.tds_minor > 0, Payment.value_date >= first, Payment.value_date <= last)
              .group_by(Invoice.company_code, Invoice.tds_section))
     if company_codes is not None:
@@ -128,9 +139,12 @@ def reconciliation(session: Session, fiscal_year: str, quarter: str, company_cod
     for key in sorted(set(taken) | set(deposited)):
         out, (dep, count) = taken.get(key, 0), deposited.get(key, (0, 0))
         diff = out - dep
-        rows.append({"companyCode": key[0], "section": key[1], "deductedMinor": out, "depositedMinor": dep, "challans": count, "differenceMinor": diff,
+        rows.append({"companyCode": key[0], "section": key[1], "returnForm": nonresident_tax.return_form(key[1]), "deductedMinor": out,
+                     "depositedMinor": dep, "challans": count, "differenceMinor": diff,
                      "status": "RECONCILED" if diff == 0 else "SHORT_DEPOSITED" if diff > 0 else "EXCESS_DEPOSITED"})
-    return {"fiscalYear": fiscal_year, "quarter": quarter, "from": first.isoformat(), "to": last.isoformat(), "rows": rows,
+    by_form = {form: {"deductedMinor": sum(r["deductedMinor"] for r in rows if r["returnForm"] == form),
+                      "depositedMinor": sum(r["depositedMinor"] for r in rows if r["returnForm"] == form)} for form in ("26Q", "27Q")}
+    return {"fiscalYear": fiscal_year, "quarter": quarter, "from": first.isoformat(), "to": last.isoformat(), "rows": rows, "byReturnForm": by_form,
             "deductedMinor": sum(r["deductedMinor"] for r in rows), "depositedMinor": sum(r["depositedMinor"] for r in rows),
             "differenceMinor": sum(r["differenceMinor"] for r in rows), "reconciled": all(r["differenceMinor"] == 0 for r in rows)}
 
@@ -161,7 +175,7 @@ def certificate_data(session: Session, fiscal_year: str, quarter: str, supplier_
         chal.setdefault((row.company_code, row.section), []).append(row)
     section_total: dict[tuple[str, str], int] = {}
     for (company, _, section), group in groups.items():
-        section_total[(company, section)] = section_total.get((company, section), 0) + sum(p.tds_minor for p, _ in group["payments"])
+        section_total[(company, section)] = section_total.get((company, section), 0) + sum(_tds_inr(p) for p, _ in group["payments"])
     certificates = []
     for (company, code, section), group in sorted(groups.items()):
         supplier = group["supplier"]
@@ -169,10 +183,12 @@ def certificate_data(session: Session, fiscal_year: str, quarter: str, supplier_
         deductor = {**{"tan": None, "pan": None, "name": None, "address": None}, **(rule.get("deductor") or {})}
         company_row = session.execute(select(CompanyCode).where(CompanyCode.code == company)).scalar_one_or_none()
         deductor["name"] = deductor["name"] or (company_row.name if company_row else None)
-        gstin = finance_controls.supplier_gstin(session, supplier)
-        pan = gstin[2:12] if len(gstin) == 15 else None
-        paid = sum(p.tds_base_minor for p, _ in group["payments"])
-        tds = sum(p.tds_minor for p, _ in group["payments"])
+        form = nonresident_tax.return_form(section)
+        residency = nonresident_tax.residency_of(session, supplier.id)
+        gstin = finance_controls.supplier_gstin(session, supplier) if form == "26Q" else ""
+        pan = (gstin[2:12] if len(gstin) == 15 else None) or nonresident_tax.pan_of(residency)
+        paid = sum(_base_inr(p) for p, _ in group["payments"])
+        tds = sum(_tds_inr(p) for p, _ in group["payments"])
         challan_rows = chal.get((company, section), [])
         pool = sum(c.amount_minor for c in challan_rows)
         share = int(pool * tds / section_total[(company, section)]) if section_total.get((company, section)) else 0
@@ -180,16 +196,40 @@ def certificate_data(session: Session, fiscal_year: str, quarter: str, supplier_
         certificates.append({
             "form": "16A", "financialYear": fiscal_year, "assessmentYear": assessment_year(fiscal_year), "quarter": quarter, "periodFrom": first.isoformat(),
             "periodTo": last.isoformat(), "companyCode": company, "certificateNo": None,
-            "deductor": deductor, "deductee": {"supplier": code, "name": supplier.legal_name, "pan": pan or "PANNOTAVBL"},
+            "returnForm": form,
+            "deductor": deductor, "deductee": {"supplier": code, "name": supplier.legal_name, "pan": pan or "PANNOTAVBL",
+                                               "residency": residency.residency if residency is not None else "RESIDENT",
+                                               "country": residency.country if residency is not None else (supplier.country or "IN"),
+                                               "address": supplier.address or {}},
             "section": section, "sectionLabel": (_sections(session, company).get(section) or {}).get("label"),
-            "payments": [{"payment": p.number, "invoice": i.number, "dateOfPaymentCredit": p.value_date.isoformat(), "amountPaidCreditedMinor": int(p.tds_base_minor),
-                          "ratePct": str(p.tds_rate) if p.tds_rate is not None else None, "taxDeductedMinor": int(p.tds_minor),
-                          "dateOfDeduction": p.value_date.isoformat(), "certificate197": p.tds_certificate} for p, i in group["payments"]],
+            "payments": [{"payment": p.number, "invoice": i.number, "dateOfPaymentCredit": p.value_date.isoformat(), "amountPaidCreditedMinor": _base_inr(p),
+                          "ratePct": str(p.tds_rate) if p.tds_rate is not None else None, "taxDeductedMinor": _tds_inr(p),
+                          "dateOfDeduction": p.value_date.isoformat(), "certificate197": p.tds_certificate,
+                          **({"basis": (p.tax_detail or {}).get("basis"), "dtaaArticle": ((p.tax_detail or {}).get("treaty") or {}).get("article"),
+                              "grossedUp": bool((p.tax_detail or {}).get("grossUp")), "currency": p.currency, "taxInCurrencyMinor": int(p.tds_minor),
+                              "fxRate": (p.tax_detail or {}).get("fxRate")} if form == "27Q" else {})} for p, i in group["payments"]],
             "totals": {"amountPaidCreditedMinor": int(paid), "taxDeductedMinor": int(tds), "taxDepositedMinor": share},
             "challans": [{"bsrCode": c.bsr_code, "challanSerialNo": c.challan_no, "depositDate": c.deposit_date.isoformat(), "challanAmountMinor": c.amount_minor}
                          for c in challan_rows],
             "depositAllocation": "PRO_RATA_BY_TAX_DEDUCTED", "missingMandatory": missing})
     return {"fiscalYear": fiscal_year, "quarter": quarter, "certificates": certificates, "count": len(certificates)}
+
+
+def _tds_inr(payment: Payment) -> int:
+    return int(payment.tds_inr_minor) if payment.tds_inr_minor is not None else int(payment.tds_minor)
+
+
+def _base_inr(payment: Payment) -> int:
+    return int(payment.tds_base_inr_minor) if payment.tds_base_inr_minor is not None else int(payment.tds_base_minor)
+
+
+def certificate_pdf(data: dict, supplier_code: str) -> bytes:
+    """The information copy of the Form 16A data of one deductee and quarter as PDF (one page or more per certificate)."""
+    from app.pic.services import form16a_pdf
+    certificates = [c for c in data["certificates"] if c["deductee"]["supplier"] == supplier_code]
+    if not certificates:
+        raise Problem(404, "NOT_FOUND", f"No TDS was deducted from supplier {supplier_code} in {data['fiscalYear']} {data['quarter']}")
+    return form16a_pdf.render(certificates)
 
 
 def certificate_csv(data: dict) -> str:

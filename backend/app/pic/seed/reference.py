@@ -3,6 +3,7 @@
 This is the manufacturing industry template (blueprint §23) with the default Indian-rupee
 approval pack (§24). All amounts are in paise.
 """
+import copy
 import uuid
 from datetime import date
 from typing import Optional
@@ -15,7 +16,7 @@ from app.pic.models import (
 )
 from app.pic.platform import agents as agent_catalogue
 from app.pic.platform import clock
-from app.pic.platform import finance_defaults, inventory_defaults, job_defaults, p2p_defaults, sourcing_defaults
+from app.pic.platform import finance_defaults, inventory_defaults, job_defaults, p2p_defaults, sap_defaults, sourcing_defaults
 from app.pic.platform.process_defs import baseline
 from app.pic.seed import clause_library, templates
 
@@ -78,6 +79,7 @@ RULE_SETS = {
     **p2p_defaults.BODIES,  # wave 1 P2P completion: ONE-TIME-VENDOR, PO-PRICE-CHECK, DEBIT-NOTE, EARLY-PAYMENT, MANDATORY-FIELDS, ...
     **inventory_defaults.BODIES,  # inventory: INVENTORY-POSTING, INVENTORY-COUNT, INVENTORY-RESERVATION, INVENTORY-ALERTS
     **sourcing_defaults.BODIES,  # strategic sourcing: SOURCING-POLICY, SOURCING-TCO (M05)
+    **sap_defaults.BODIES,  # live SAP mapping: SAP-OUTLINE-AGREEMENT, SAP-PAYMENT-REVERSAL, SAP-SCF-FINANCING
     "DMN-01": ({"bands": [
         {"upTo": 25_000 * 100, "autoChannels": ["CATALOGUE", "CONTRACT"], "chain": ["COST_OBJECT_OWNER"]},
         {"upTo": 2 * L, "chain": ["COST_OBJECT_OWNER"]},
@@ -101,6 +103,10 @@ RULE_SETS = {
                "Invoice tolerances"),
     "MSME": (finance_defaults.MSME_DEFAULT, "MSME payment rule: micro / small suppliers are paid within 45 days of acceptance (MSMED Act s.15-16)"),
     "TDS": (finance_defaults.TDS_DEFAULT, "TDS sections, rates and thresholds withheld when a supplier is paid (illustrative until the tax team confirms)"),
+    "TDS-195": (finance_defaults.TDS_195_DEFAULT, "Section 195 withholding on payments to non-residents: Act rates, surcharge, cess, MOCK DTAA table, "
+                "no-PAN rule, Form 15CA/15CB threshold (MOCK until the client's chartered accountant confirms)"),
+    "PARTIAL-PAYMENT": (finance_defaults.PARTIAL_PAYMENT_DEFAULT, "Partial payments of an invoice across payment runs: minimum amount, "
+                        "number of payments, reason"),
     "RCV-TOLERANCE": ({"over_pct": "0", "under_pct": "0", "price_pct": "0"}, "Default receipt tolerance without contract"),
     "PURCHASE-TYPE-MATRIX": ({
         "STOCK": {"gr": True, "ir": True, "ses": False}, "NON_STOCK": {"gr": True, "ir": True, "ses": False},
@@ -191,7 +197,7 @@ RULE_SETS = {
                                                  "SOURCING_AWARDED", "SOURCING_NOT_AWARDED", "CONTRACT_CONSUMPTION"]},
                       "In-app notifications; e-mail delivery switches on when SMTP is configured"),
     "ERP-TARGET": ({"system": "SAP_S4"}, "ERP every posting goes to (connector registry); add a company-code-scoped version to route one company elsewhere"),
-    "MFA": ({"enforce": False, "requiredRoles": ["TENANT_ADMIN", "FINANCE_CONTROLLER", "CPO", "PROCUREMENT_HEAD", "COST_OBJECT_OWNER", "DEPT_HEAD",
+    "MFA": ({"enforce": False, "requiredRoles": ["TENANT_ADMIN", "FINANCE_CONTROLLER", "CFO", "CPO", "PROCUREMENT_HEAD", "COST_OBJECT_OWNER", "DEPT_HEAD",
                                                  "CAPEX_COMMITTEE", "AP_CLERK", "INVENTORY_CONTROLLER"], "issuer": "AlphaHelion PIC"},
             "MFA (TOTP) for approvers, finance and admins (§14); set enforce=true per tenant once users have enrolled"),
     "ESCALATION": ({"managerAtLevel": 2, "managers": {
@@ -313,15 +319,32 @@ def _with_mfa_default(rules: dict, tenant: Tenant) -> dict:
     return {**rules, "MFA": ({**body, "enforce": True}, description.replace("set enforce=true per tenant once users have enrolled", "enforced from tenant creation"))}
 
 
+def _with_invoice_bands(rules: dict, enabled: bool) -> dict:
+    """The tenant's rule bodies with the default invoice value bands (p2p_defaults.INVOICE_APPROVAL_BANDS: finance controller from 10 lakh,
+    finance controller and CFO from 1 crore) in rule INVOICE-APPROVAL (copy; RULE_SETS is never modified)."""
+    if not enabled or "INVOICE-APPROVAL" not in rules:
+        return rules
+    _, description = rules["INVOICE-APPROVAL"]
+    return {**rules, "INVOICE-APPROVAL": (copy.deepcopy(p2p_defaults.INVOICE_APPROVAL_BANDS),
+                                          description + " (default bands: finance controller from 10 lakh, CFO as well from 1 crore)")}
+
+
 def bootstrap(tenant_id: uuid.UUID, *, company: tuple[str, str, str], plants: list[tuple[str, str, str]],
-              cost_objects: list[tuple[str, str, str]], holidays: Optional[list[date]] = None) -> None:
+              cost_objects: list[tuple[str, str, str]], holidays: Optional[list[date]] = None,
+              invoice_bands: Optional[bool] = None) -> None:
+    """Number ranges, rule sets, currencies, SoD rules, agents, taxonomy and the organisation of a new tenant. ``invoice_bands`` puts the
+    default invoice value bands (docs/PIC_Default_Decisions.md) into rule INVOICE-APPROVAL: unset, a tenant bootstrapped by the bundled demo
+    seeds and tools (app.pic.seed, app.pic.tools) keeps accounts-payable approval only (the signature case and its tests rely on it) and
+    every other new tenant starts with the bands; the onboarding tool (tools/tenant_admin.py) passes True."""
+    bands = (not _is_bundled_seed()) if invoice_bands is None else invoice_bands
     with tenant_tx(tenant_id) as s:
         if s.execute(select(NumberRange.id)).first():
             return
         template = s.get(Tenant, tenant_id).industry_template
         for object_type, (prefix, first, padding) in NUMBER_RANGES.items():
             s.add(NumberRange(tenant_id=tenant_id, object_type=object_type, prefix=prefix, next_value=first, padding=padding))
-        for key, (body, description) in _with_mfa_default(templates.merged_rules(RULE_SETS, template), s.get(Tenant, tenant_id)).items():
+        merged = _with_invoice_bands(templates.merged_rules(RULE_SETS, template), bands)
+        for key, (body, description) in _with_mfa_default(merged, s.get(Tenant, tenant_id)).items():
             s.add(RuleSet(tenant_id=tenant_id, key=key, version=RULES_VERSION, effective_from=RULES_FROM, body=body, description=description))
         for code, name_ in CURRENCIES:
             s.add(Currency(tenant_id=tenant_id, code=code, name=name_, decimals=0 if code == "JPY" else 2))

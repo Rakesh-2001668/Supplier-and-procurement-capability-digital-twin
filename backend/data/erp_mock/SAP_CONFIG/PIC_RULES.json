@@ -1,0 +1,35 @@
+{
+  "_comment": "The SAP mapping rules dataset pack D21 (sap_config) writes for AXN and KAC: one tenant-wide version per key and one company-code version of SAP-OUTLINE-AGREEMENT per company code. Bodies are complete (every key explicit) so an administrator sees and edits the values, not the code defaults.",
+  "effectiveFrom": "2026-04-01",
+  "version": "D21-2026.1",
+  "tenants": {
+    "AXN": [
+      {"key": "SAP-OUTLINE-AGREEMENT", "companyCode": null, "body": {
+        "documentTypes": {"QUANTITY_CONTRACT": "MK", "VALUE_CONTRACT": "WK", "SCHEDULING_AGREEMENT": "LP", "RATE_CARD": "WK", "SOW": "WK"},
+        "contractTypes": ["MK", "WK"], "schedulingAgreementTypes": ["LP", "LPA"], "notSent": ["MASTER_AGREEMENT", "NDA"],
+        "purchasingOrg": null, "purchasingGroup": null, "textItemMaterialGroup": "SERVICES", "textItemAccountAssignment": "U",
+        "serviceItemCategory": null, "serviceItems": ["RATE_CARD", "SOW"], "closeOnTermination": true, "closeOnRenewal": true}},
+      {"key": "SAP-OUTLINE-AGREEMENT", "companyCode": "1000", "body": {"purchasingOrg": "PO10", "purchasingGroup": "G01"}},
+      {"key": "SAP-OUTLINE-AGREEMENT", "companyCode": "1100", "body": {"purchasingOrg": "PO30", "purchasingGroup": "G04"}},
+      {"key": "SAP-PAYMENT-REVERSAL", "companyCode": null, "body": {
+        "reversalReason": "01", "postingDate": "ORIGINAL", "closedPeriodReason": "02", "resetClearing": true}},
+      {"key": "SAP-SCF-FINANCING", "companyCode": null, "body": {
+        "documentType": "KA", "postingKeys": {"supplierDebit": "21", "financierCredit": "31", "glCredit": "50"},
+        "financiers": {"PROGRAMME": {"name": "Coromandel Trade Finance Ltd (MOCK)", "businessPartner": "9800001", "paymentMethod": "R"}}}}
+    ],
+    "KAC": [
+      {"key": "SAP-OUTLINE-AGREEMENT", "companyCode": null, "body": {
+        "documentTypes": {"QUANTITY_CONTRACT": "MK", "VALUE_CONTRACT": "WK", "SCHEDULING_AGREEMENT": "LP", "RATE_CARD": "WK", "SOW": "WK"},
+        "contractTypes": ["MK", "WK"], "schedulingAgreementTypes": ["LP", "LPA"], "notSent": ["MASTER_AGREEMENT", "NDA"],
+        "purchasingOrg": null, "purchasingGroup": null, "textItemMaterialGroup": "SERVICES", "textItemAccountAssignment": "U",
+        "serviceItemCategory": null, "serviceItems": ["RATE_CARD", "SOW"], "closeOnTermination": true, "closeOnRenewal": true}},
+      {"key": "SAP-OUTLINE-AGREEMENT", "companyCode": "1000", "body": {"purchasingOrg": "PO10", "purchasingGroup": "G03"}},
+      {"key": "SAP-OUTLINE-AGREEMENT", "companyCode": "2000", "body": {"purchasingOrg": "PO21", "purchasingGroup": "G01"}},
+      {"key": "SAP-PAYMENT-REVERSAL", "companyCode": null, "body": {
+        "reversalReason": "01", "postingDate": "ORIGINAL", "closedPeriodReason": "02", "resetClearing": true}},
+      {"key": "SAP-SCF-FINANCING", "companyCode": null, "body": {
+        "documentType": "KA", "postingKeys": {"supplierDebit": "21", "financierCredit": "31", "glCredit": "50"},
+        "financiers": {"PROGRAMME": {"name": "Nilgiri Supply Chain Finance Ltd (MOCK)", "businessPartner": "9800011", "paymentMethod": "R"}}}}
+    ]
+  }
+}

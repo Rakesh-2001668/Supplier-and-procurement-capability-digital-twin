@@ -55,6 +55,9 @@ PACKS = (
     "reference_data",         # D11 HSN/SAC + GST rates, holiday calendars, UNSPSC mapping, FX rates (every tenant)
     "org_masters",            # D19 Legal Entity, Purchasing Org and Purchasing Group Masters (TD-4a, every tenant)
     "material_changes",       # D20 AXN material master governance: change requests applied / in approval, a withdrawn duplicate request (August 2027)
+    "sap_config",             # D21 tenants AXN and KAC: SAP mapping rules (outline agreement types, reversal reason, SCF financier) from the MOCK SAP customizing
+    "approval_bands",         # D22 tenants AXN and KAC: invoice value bands with the CFO (every band and state), the expired-offer award block (September 2027)
+    "tax_nonresident",        # D23 tenant AXN: section 195 TDS for non-resident suppliers, partial payments, Form 15CA/15CB, Form 16A copies (October 2027)
 )
 
 

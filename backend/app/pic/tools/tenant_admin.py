@@ -88,12 +88,13 @@ def create(args) -> dict:
         # no users yet: a run that stopped after creating the tenant (or its base data) is continued below
     tenant_id = reference.create_tenant(code, args.name.strip(), args.template, mfa_enforce=True)
     reference.bootstrap(tenant_id, company=(args.company_code, args.company_name or args.name.strip(), args.gstin.upper() if args.gstin else None),
-                        plants=[(args.plant, args.plant_name, args.state_code)], cost_objects=[])
+                        plants=[(args.plant, args.plant_name, args.state_code)], cost_objects=[],
+                        invoice_bands=True)  # the default invoice value bands (FC from 10 lakh, CFO from 1 crore; docs/PIC_Default_Decisions.md)
     result = _issue_link(tenant_id, code, args.admin_email, args.admin_name or args.admin_email.split("@")[0].replace(".", " ").title(),
                          create_user=True)
     with tenant_tx(tenant_id, TOOL_ID, _tool_principal(tenant_id, code)) as s:
         audit.record(s, "TENANT", tenant_id, "PROVISIONED", object_ref=code,
-                     after={"template": args.template, "companyCode": args.company_code, "plant": args.plant, "mfaEnforced": True,
+                     after={"template": args.template, "companyCode": args.company_code, "plant": args.plant, "mfaEnforced": True, "invoiceApprovalBands": True,
                             "firstAdmin": args.admin_email.lower()})
     return {"tenant": code, "tenantId": str(tenant_id), "template": args.template, "admin": args.admin_email.lower(),
             "activationUrl": result["activationUrl"], "expiresAt": result["expiresAt"], "emailStatus": result["emailStatus"]}

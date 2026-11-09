@@ -1,0 +1,6 @@
+STGRD,TXT40,XNEGP,XABWD
+01,Reversal in current period,,
+02,Reversal in closed period,,X
+03,Actual reversal in current period,X,
+04,Actual reversal in closed period,X,X
+05,Accrual/deferral posting,,X

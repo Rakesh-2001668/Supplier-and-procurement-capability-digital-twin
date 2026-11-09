@@ -2092,13 +2092,15 @@ def custom_scenario(session: Session, event: SourcingEvent, allocations: list[di
 
 
 # ---------------------------------------------------------------- award (F3-07/08/09)
-def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, rows: list[dict], pol: dict, rationale: Optional[str]) -> dict:
+def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, rows: list[dict], pol: dict, rationale: Optional[str],
+               expired_override: Optional[str] = None) -> dict:
     """Everything that must hold before an award is proposed, and the exceptions that make a written rationale mandatory.
 
-    Blocks (422): a supplier whose bid is no longer in the evaluation (disqualified, withdrawn), an offer whose validity has ended, a failed or
-    pending technical gate, criteria nobody scored (policy requireAllCriteriaScored), a lead time that cannot meet the need date (policy
-    leadTimeCheck ENFORCE). Exceptions: NOT_LOWEST (a bid that is not the lowest eligible price), LIMITED_COMPETITION (fewer valid bidders than
-    the minimum), INCOMPLETE_TCO (a missing TCO input), UNVERIFIED_CAPACITY (volume to a supplier nobody verified), NEGATIVE_SAVINGS (the award costs
+    Blocks (422): a supplier whose bid is no longer in the evaluation (disqualified, withdrawn), a failed or pending technical gate, criteria nobody
+    scored (policy requireAllCriteriaScored), a lead time that cannot meet the need date (policy leadTimeCheck ENFORCE). Block (409
+    BID_OFFER_EXPIRED, D5): an awarded bid whose offer validity has ended, unless ``expired_override`` gives the written reason of a user the policy
+    (``expiredOfferOverride``) allows to override; the override is then recorded as exception BID_OFFER_EXPIRED. Exceptions: NOT_LOWEST (a bid
+    that is not the lowest eligible price), LIMITED_COMPETITION (fewer valid bidders than the minimum), INCOMPLETE_TCO (a missing TCO input), UNVERIFIED_CAPACITY (volume to a supplier nobody verified), NEGATIVE_SAVINGS (the award costs
     more than the baseline), LEAD_TIME_AFTER_NEED (policy WARN). The first five need the rationale of at least ``minRationaleChars`` characters."""
     by_supplier = {r["supplier"]: r for r in rows}
     awarded = [a["supplier"] for a in scenario.allocations]
@@ -2108,9 +2110,6 @@ def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, 
         if row is None:
             raise Problem(422, "BID_NOT_EVALUATED", f"{code} has no evaluated bid in {event.number} any more (disqualified or withdrawn): rebuild the scenarios",
                           rule_ref="SRC-AWARD")
-        if row.get("validUntil") and date.fromisoformat(row["validUntil"]) < clock.today():
-            raise Problem(422, "OFFER_EXPIRED", f"{code}'s offer was valid until {row['validUntil']}: ask for an extension in a new round before awarding",
-                          rule_ref="SRC-AWARD")
         gate = row["technicalGate"]
         if not gate["passed"] or gate["pending"]:
             raise Problem(422, "TECHNICAL_GATE", f"{code} " + (f"scored below the minimum on {', '.join(gate['failed'])}" if gate["failed"]
@@ -2118,6 +2117,8 @@ def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, 
         if pol.get("requireAllCriteriaScored", True) and row["unscored"]:
             raise Problem(422, "UNSCORED_CRITERIA", f"{code} was not scored on {', '.join(row['unscored'])}: every manual criterion needs a score before the award",
                           rule_ref="SRC-AWARD")
+    expired = expired_offers(session, event, awarded, by_supplier)
+    override = check_expired_override(session, event, expired, pol, expired_override) if expired else None
     # lowest eligible price (the bids the award could have gone to)
     excluded_ids = {e["supplierId"] for e in ((scenario.explanation or {}).get("risk") or {}).get("excluded", [])}
     eligible = [r for r in rows if r["technicalGate"]["passed"] and r["supplierId"] not in excluded_ids] or rows
@@ -2143,6 +2144,9 @@ def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, 
     unverified = sorted(code for code in awarded if not by_supplier[code]["capacityVerified"])
     if unverified:
         exceptions.append({"code": "UNVERIFIED_CAPACITY", "detail": "capacity is not verified (no bid capacity and no twin figure) for " + ", ".join(unverified)})
+    if override:
+        exceptions.append({"code": "BID_OFFER_EXPIRED", "detail": "awarded on an expired offer (override): " + ", ".join(
+            f"{b['supplier']} valid until {b['validUntil']}" for b in expired) + f". Reason: {override['reason']}", "override": override})
     if scenario.annual_savings_minor is not None and scenario.annual_savings_minor < 0:
         exceptions.append({"code": "NEGATIVE_SAVINGS", "detail": f"the award costs {abs(int(scenario.annual_savings_minor)) / 100:,.2f} a year more than the baseline"})
     check = str(pol.get("leadTimeCheck", "WARN")).upper()
@@ -2162,11 +2166,79 @@ def award_gate(session: Session, event: SourcingEvent, scenario: AwardScenario, 
                              f"This award needs a written rationale: {first['detail']}", "SRC-RATIONALE", exceptions=needs)
     if needs and len((rationale or "").strip()) < minimum:
         raise rule_violation(f"The written rationale is at least {minimum} characters (say why: {needs[0]['detail']})", "SRC-RATIONALE", exceptions=needs)
-    return {"exceptions": exceptions, "notLowest": not_lowest, "needsApproval": bool(needs), "bidders": len(rows)}
+    needs_approval = bool(needs) or bool(override and override_policy(pol)["requiresApproval"])
+    return {"exceptions": exceptions, "notLowest": not_lowest, "needsApproval": needs_approval, "bidders": len(rows), "override": override}
+
+
+# ---------------------------------------------------------------- D5: an award on an expired offer is blocked unless overridden
+EXPIRED_OFFER_CODE = "BID_OFFER_EXPIRED"
+
+
+def override_policy(pol: dict) -> dict:
+    """SOURCING-POLICY.expiredOfferOverride with its defaults (sourcing_defaults.POLICY_DEFAULT)."""
+    default = sourcing_defaults.POLICY_DEFAULT["expiredOfferOverride"]
+    value = pol.get("expiredOfferOverride") if isinstance(pol.get("expiredOfferOverride"), dict) else {}
+    return {**default, **value}
+
+
+def expired_offers(session: Session, event: SourcingEvent, awarded: list[str], by_supplier: dict) -> list[dict]:
+    """The awarded bids whose offer validity (``valid_until``, given by the supplier) ended before today: [{supplier, supplierName, validUntil,
+    round, daysExpired}]."""
+    out = []
+    for code in awarded:
+        row = by_supplier.get(code) or {}
+        if row.get("validUntil") and date.fromisoformat(row["validUntil"]) < clock.today():
+            until = date.fromisoformat(row["validUntil"])
+            supplier = session.get(Supplier, uuid.UUID(row["supplierId"]))
+            out.append({"supplier": code, "supplierName": supplier.legal_name if supplier else None, "validUntil": row["validUntil"],
+                        "round": row.get("round", event.round), "daysExpired": (clock.today() - until).days})
+    return out
+
+
+def may_override_expired(principal_, event: SourcingEvent, pol: dict) -> bool:
+    """Whether the user may lift the expired-offer block: holds a role of SOURCING-POLICY.expiredOfferOverride.roles (a category manager only for
+    the event's category, as in auction._require_manager)."""
+    for role in override_policy(pol)["roles"] or []:
+        if role not in principal_.roles:
+            continue
+        if role == "CATEGORY_MANAGER":
+            categories = principal_.attr("categories") or []
+            if "*" not in categories and event.category not in categories:
+                continue
+        return True
+    return False
+
+
+def check_expired_override(session: Session, event: SourcingEvent, expired: list[dict], pol: dict, reason: Optional[str]) -> dict:
+    """Raise 409 BID_OFFER_EXPIRED (the expired bids, who may override, how to get the offers extended) when no override is given; 403 when the user
+    may not override; 422 when the reason is too short. Returns the override record {by, byEmail, byName, at, reason, bids} kept on the award
+    decision."""
+    p = principal(session)
+    policy = override_policy(pol)
+    allowed = may_override_expired(p, event, pol)
+    text_ = (reason or "").strip()
+    if not text_:
+        names = ", ".join(f"{b['supplier']} (valid until {b['validUntil']})" for b in expired)
+        log_refusal(session, event, "AWARD_BLOCKED_OFFER_EXPIRED", f"award refused: offer validity ended for {names}", bids=expired, user=p.email)
+        raise Problem(409, EXPIRED_OFFER_CODE,
+                      f"{event.number}: the offer of {names} has expired. Ask the supplier to confirm or extend its offer in a new round "
+                      f"(POST /v1/sourcing/events/{event.number}/rounds) before awarding, or override with a written reason "
+                      f"(at least {policy['minReasonChars']} characters; {' / '.join(policy['roles']) or 'nobody'} of the category).",
+                      rule_ref="SRC-AWARD", expiredBids=expired, overrideAllowed=allowed, overrideRoles=list(policy["roles"]),
+                      minReasonChars=int(policy["minReasonChars"]),
+                      extendValidity={"action": "NEW_ROUND", "method": "POST", "path": f"/v1/sourcing/events/{event.number}/rounds",
+                                      "hint": "A new round asks the suppliers to resubmit with a new offer validity (valid_until)"})
+    if not allowed:
+        raise Problem(403, "OVERRIDE_NOT_ALLOWED", f"Only a {' / '.join(policy['roles']) or '(nobody)'} of category {event.category} may award on an "
+                      "expired offer (SOURCING-POLICY.expiredOfferOverride)", rule_ref="SRC-AWARD", expiredBids=expired)
+    if len(text_) < int(policy["minReasonChars"]):
+        raise Problem(422, "REASON_REQUIRED", f"The override reason is at least {policy['minReasonChars']} characters: say why the expired price "
+                      "still holds (e.g. the supplier confirmed it in writing)", rule_ref="SRC-AWARD", expiredBids=expired)
+    return {"by": str(p.user_id), "byEmail": p.email, "byName": p.name, "at": clock.now().isoformat(), "reason": text_, "bids": expired}
 
 
 def propose_award(session: Session, event: SourcingEvent, scenario_id: uuid.UUID, rationale: Optional[str],
-                  conflict_declaration: str) -> AwardDecision:
+                  conflict_declaration: str, expired_offer_override: Optional[str] = None) -> AwardDecision:
     p = principal(session)
     auction_svc._require_manager(session, event)
     abac.guard(session, "SOURCING_MANAGE", event)
@@ -2189,7 +2261,7 @@ def propose_award(session: Session, event: SourcingEvent, scenario_id: uuid.UUID
     rows = evaluation_matrix(session, event)
     event_lines = _lines(session, event)
     multi = len(event_lines) > 1
-    gate = award_gate(session, event, scenario, rows, pol, rationale)
+    gate = award_gate(session, event, scenario, rows, pol, rationale, expired_offer_override)
     not_lowest = gate["notLowest"]
     annual_value = int(scenario.weighted_price_minor) if multi else int(Decimal(scenario.weighted_price_minor) * event_lines[0].annual_qty)
     abac.guard(session, "AWARD_APPROVE", event, value_minor=annual_value)
@@ -2205,6 +2277,8 @@ def propose_award(session: Session, event: SourcingEvent, scenario_id: uuid.UUID
     session.add(decision)
     session.flush()
     SM.apply(session, event, "propose_award", reason=rationale, rule_set_version=rule.ref)
+    if gate["override"]:
+        _record_expired_override(session, event, decision, gate["override"])
     instance = workflow.find(session, "SOURCING_EVENT", event.id, PROCESS)
     workflow.step(session, instance, "F3-06", outcome=f"{scenario.kind} proposed")
     needs_approval = (annual_value >= rule.body["approvalAboveMinor"] or not_lowest or gate["needsApproval"]
@@ -2223,6 +2297,30 @@ def propose_award(session: Session, event: SourcingEvent, scenario_id: uuid.UUID
     return decision
 
 
+def _record_expired_override(session: Session, event: SourcingEvent, decision: AwardDecision, override: dict) -> None:
+    """The override of the expired-offer block (D5): audited on the event and emitted (sourcing.award.offer_expiry_overridden)."""
+    audit.record(session, "SOURCING_EVENT", event.id, "AWARD_EXPIRED_OFFER_OVERRIDDEN", object_ref=event.number, reason=override["reason"],
+                 after={"decision": str(decision.id), "bids": override["bids"], "by": override["byEmail"]})
+    outbox.emit(session, "sourcing.award.offer_expiry_overridden", "SOURCING_EVENT", event.id, event.number,
+                {"decisionId": str(decision.id), "scenarioId": str(decision.scenario_id), "category": event.category, "round": event.round,
+                 "reason": override["reason"], "overriddenBy": override["byEmail"], "overriddenAt": override["at"],
+                 "bids": [{"supplier": b["supplier"], "validUntil": b["validUntil"], "daysExpired": b["daysExpired"]} for b in override["bids"]],
+                 "annualValueMinor": int(decision.annual_value_minor)})
+
+
+def _expired_without_override(session: Session, event: SourcingEvent, decision: Optional[AwardDecision]) -> list[dict]:
+    """Bids of the pending award whose offer has expired since it was proposed (or that the proposer did not override)."""
+    if decision is None:
+        return []
+    scenario = session.get(AwardScenario, decision.scenario_id)
+    if scenario is None:
+        return []
+    overridden = {b["supplier"] for e in decision.exceptions or [] if e.get("code") == EXPIRED_OFFER_CODE
+                  for b in (e.get("override") or {}).get("bids") or []}
+    by_supplier = {r["supplier"]: r for r in evaluation_matrix(session, event)}
+    return [b for b in expired_offers(session, event, [a["supplier"] for a in scenario.allocations], by_supplier) if b["supplier"] not in overridden]
+
+
 @workflow.guard_task("AWARD_APPROVAL")
 def _award_sod(session: Session, task: Task, decision: str) -> None:
     if decision == "APPROVE":
@@ -2233,6 +2331,11 @@ def _award_sod(session: Session, task: Task, decision: str) -> None:
         scenario = session.get(AwardScenario, pending.scenario_id) if pending else None
         for allocation in (scenario.allocations if scenario else []):
             _require_eligible(session, event, session.get(Supplier, uuid.UUID(allocation["supplierId"])), "be awarded")
+        expired = _expired_without_override(session, event, pending)
+        if expired:  # D5: an offer ran out while the award waited for its approvers, and nobody overrode it
+            raise Problem(409, EXPIRED_OFFER_CODE, f"{event.number}: the offer of " + ", ".join(f"{b['supplier']} (valid until {b['validUntil']})"
+                          for b in expired) + " expired while the award waited for approval. Return the award: the proposer asks for an extension "
+                          "in a new round or proposes again with a written override", rule_ref="SRC-AWARD", expiredBids=expired)
 
 
 @workflow.on_task("AWARD_APPROVAL")

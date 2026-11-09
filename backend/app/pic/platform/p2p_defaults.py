@@ -113,6 +113,16 @@ MANDATORY_FIELDS = {
     },
 }
 
+# Default invoice value bands approved by the client (docs/PIC_Default_Decisions.md): below 10 lakh accounts payable alone; 10 lakh to below
+# 1 crore AP then the finance controller; 1 crore and above AP, the finance controller, then the CFO. Gross in company-code currency, paise.
+# Seeded for NEW tenants (seed/reference.bootstrap, invoice_bands) and activated for the demo tenants by dataset pack approval_bands (D22).
+# Tenants bootstrapped before keep "bands": [] below (AP approval only) until their administrator publishes this as a new rule version.
+INVOICE_APPROVAL_BANDS = {
+    "bands": [{"fromMinor": 10 * L, "approvers": ["FINANCE_CONTROLLER"]},
+              {"fromMinor": 100 * L, "approvers": ["FINANCE_CONTROLLER", "CFO"]}],
+    "slaBusinessDays": 2,
+}
+
 BODIES = {
     "ONE-TIME-VENDOR": (ONE_TIME_VENDOR, "One-time-vendor exception: PO to a supplier that is not Qualified/Preferred (value cap, reason, approver)"),
     "PO-PRICE-CHECK": (PO_PRICE_CHECK, "PO price check: contract +2% band and last paid price +5% (BP §24, APR-8)"),

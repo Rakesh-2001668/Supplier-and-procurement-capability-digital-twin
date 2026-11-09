@@ -1,0 +1,30 @@
+{
+  "message": {
+    "type": "PAYMENT_REVERSAL",
+    "key": "PAYREV|PAY-880001",
+    "payload": {
+      "payment": "PAY-880001",
+      "clearingDocument": "1500002210",
+      "amountMinor": 2500000,
+      "companyCode": "1000",
+      "reason": "Account closed"
+    }
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/sap/opu/odata/sap/ZAPI_VENDOR_PAYMENT_SRV/A_VendorPaymentReversal",
+      "body": {
+        "CompanyCode": "1000",
+        "AccountingDocument": "1500002210",
+        "FiscalYear": "2026",
+        "ReversalReason": "01",
+        "PostingDate": "/Date(1799539200000)/",
+        "ResetClearing": true,
+        "DocumentHeaderText": "PAYREV|PAY-880001",
+        "PaymentReference": "PAY-880001",
+        "ReversalText": "Account closed"
+      }
+    }
+  ]
+}

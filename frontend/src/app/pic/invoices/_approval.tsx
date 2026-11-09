@@ -12,7 +12,8 @@ export type ApprovalStep = { taskId: string; sequence: number; role: string; sta
 export type InvoiceApproval = { status: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED' | string; requiredChain: string[]; band: { fromMinor?: number } | null;
   rule: string | null; valueMinor: number | null; apApprover?: string | null; steps: ApprovalStep[]; myTaskId?: string | null };
 
-const roleName = (role: string) => label(role);
+// Acronym roles stay in capitals ('CFO', not 'Cfo'): the last approver of the 1 crore band (rule INVOICE-APPROVAL default bands).
+const roleName = (role: string) => (role === 'CFO' || role === 'CPO' ? role : label(role));
 
 /** Toast text after POST /approve: approved for posting, or sent on to the roles of the invoice's value band. */
 export function approvedText(result: { status?: string; approval?: InvoiceApproval }): string {

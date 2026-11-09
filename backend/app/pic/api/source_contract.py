@@ -337,6 +337,9 @@ class AwardIn(BaseModel):
     scenario_id: uuid.UUID
     rationale: Optional[str] = None
     conflict_declaration: str
+    # D5: an award on an expired offer is refused (409 BID_OFFER_EXPIRED) unless a user allowed by SOURCING-POLICY.expiredOfferOverride
+    # (default: a category manager of the event's category) gives the written reason here (default at least 20 characters)
+    expired_offer_override: Optional[str] = Field(default=None, max_length=2000)
 
 
 @router.post("/sourcing/events/{ref}/award", tags=["F3 Sourcing"])
@@ -344,7 +347,7 @@ def award(ref: str, body: AwardIn, p: Principal = Depends(require("sourcing:mana
           if_match: Optional[str] = Header(default=None, alias="If-Match")):
     def work(s):
         event = _event(s, ref, if_match)
-        sourcing.propose_award(s, event, body.scenario_id, body.rationale, body.conflict_declaration)
+        sourcing.propose_award(s, event, body.scenario_id, body.rationale, body.conflict_declaration, body.expired_offer_override)
         return views.sourcing_event(s, event)
     return _command(p, f"POST /v1/sourcing/events/{ref}/award", key, body, work)
 

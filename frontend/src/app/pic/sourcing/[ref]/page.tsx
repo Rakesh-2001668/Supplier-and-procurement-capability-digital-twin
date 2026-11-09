@@ -229,7 +229,8 @@ export default function SourcingEventPage() {
       {ev && dialog === 'score' && <ScoreDialog event={ev} matrix={rows} onClose={() => setDialog(null)} />}
       {ev && dialog === 'round' && <RoundDialog event={ev} onClose={() => setDialog(null)} />}
       {ev && dialog === 'extend' && <ExtendDialog event={ev} onClose={() => setDialog(null)} />}
-      {ev && dialog === 'award' && <AwardDialog event={ev} scenarios={scenarios} comparison={comparison.data} initial={awardScenario} onClose={() => setDialog(null)} />}
+      {ev && dialog === 'award' && <AwardDialog event={ev} scenarios={scenarios} comparison={comparison.data} initial={awardScenario} onClose={() => setDialog(null)}
+        onNewRound={() => setDialog('round')} />}
       {ev && dialog === 'custom' && <CustomSplitDialog event={ev} rows={rows} onClose={() => setDialog(null)} />}
       {ev && dialog === 'cancel' && <CancelEventDialog event={ev} onClose={() => setDialog(null)} />}
       {ev && dialog === 'clone' && <CloneDialog event={ev} onClose={() => setDialog(null)} />}

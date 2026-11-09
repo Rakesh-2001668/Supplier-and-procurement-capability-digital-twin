@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from xml.etree import ElementTree
@@ -33,7 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.pic.models import IntegrationMessage
-from app.pic.platform import clock, integration, sap_mapping, sap_odata, sap_pull
+from app.pic.platform import clock, integration, sap_customizing, sap_defaults, sap_mapping, sap_odata, sap_pull
 from app.pic.platform.integration import ConnectorError, ConnectorTimeout
 
 MESSAGE_TYPES = ("SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT")
@@ -161,6 +161,11 @@ class Connector:
         timeout = float(self.env("TIMEOUT") or 20)
         return _http(method, f"{self.env('URL').rstrip('/')}{path}", headers=self._headers(content_type), body=body, timeout=timeout)
 
+    def skip_reason(self, session: Session, message_type: str, payload: dict) -> Optional[str]:
+        """Why a document this connector maps is deliberately not sent (e.g. a legal document an ERP has no object for), else None.
+        Asked before a message is queued; a skip is not an error."""
+        return None
+
     # interface used by integration.process
     def find(self, session: Session, message: IntegrationMessage) -> Optional[RemoteDocument]:
         return None
@@ -234,7 +239,9 @@ class SapS4Simulator(Connector):
 
 # ---------------------------------------------------------------- SAP S/4HANA: sandbox simulator by default, the real connector when configured
 REF_LEN = {"PURCHASE_ORDER": 12, "SUPPLIER_INVOICE": 25, "SUPPLIER_CREDIT_MEMO": 25, "SUPPLIER_DEBIT_MEMO": 25, "GOODS_RECEIPT": 25, "STOCK_POSTING": 25, "SUPPLIER_MASTER": 20,
-           "PURCHASE_REQUISITION": 40, "MATERIAL_MASTER": 40, "PAYMENT": 25}
+           "PURCHASE_REQUISITION": 40, "MATERIAL_MASTER": 40, "PAYMENT": 25, "OUTLINE_AGREEMENT": 12, "PAYMENT_REVERSAL": 25, "SCF_FINANCING": 25}
+# Message types the simulator maps through the live mapping and validates against the mock SAP customizing (platform/sap_customizing.py).
+SIMULATOR_VALIDATED = ("OUTLINE_AGREEMENT", "PAYMENT_REVERSAL", "SCF_FINANCING")
 # message type -> (mapping key in sap_mapping.SERVICES, entity set, reference field, number field, select)
 SAP_FIND = {
     "PURCHASE_REQUISITION": ("A_PurchaseRequisitionHeader", "PurReqnDescription", "PurchaseRequisition"),
@@ -260,7 +267,11 @@ class SapS4(SapS4Simulator):
         PIC_ERP_SAP_S4_IDOC_DIR       directory of the file port (idoc-file); also PIC_ERP_SAP_S4_IDOC_PARTNER / _IDOC_PORT / _IDOC_RECEIVER
         PIC_ERP_SAP_S4_COMPANY_MAP    PIC company code -> SAP company code, "1000=1710" (unmapped codes are sent unchanged)
         PIC_ERP_SAP_S4_PURCH_ORG, _PURCH_GROUP, _PO_TYPE, _TAX_CODE, _GL_ACCOUNT (invoices without PO), _BANK_GL_ACCOUNT (IDoc payment),
-        PIC_ERP_SAP_S4_PAYMENT_SERVICE (custom OData service for outgoing payments), _BP_GROUPING, _PRODUCT_TYPE
+        PIC_ERP_SAP_S4_PAYMENT_SERVICE (custom OData service for outgoing payments and their reversal), _BP_GROUPING, _PRODUCT_TYPE
+        PIC_ERP_SAP_S4_JOURNAL_SERVICE (custom OData journal entry service of the supply-chain-finance posting; without it IDoc FIDCCP02)
+        PIC_ERP_SAP_S4_TERMS_MAP ("N45=Z045,N30=Z030": PIC payment terms -> SAP terms key of outline agreements; unmapped terms are not sent)
+        Outline agreements, payment reversals and SCF postings take their SAP values from the rules SAP-OUTLINE-AGREEMENT,
+        SAP-PAYMENT-REVERSAL and SAP-SCF-FINANCING (platform/sap_defaults.py), per company code.
         PIC_ERP_SAP_S4_SCRAP_COST_CENTER (cost centre of a scrapping / goods issue whose PIC document names none), _REASON_MAP ("DAMAGED=0001,EXPIRED=0002":
         PIC scrap reason -> SAP goods movement reason), _STOCK_TYPE_MAP ("QUALITY=02,BLOCKED=03": PIC stock type -> SAP stock type code)
         PIC_ERP_SAP_S4_TIMEOUT / _RETRIES   seconds per call (20) and retries (2) on read errors and gateway overload
@@ -271,7 +282,7 @@ class SapS4(SapS4Simulator):
     credentials = "basic|token"
     SETTINGS = ("SAP_CLIENT", "ODATA_VERSION", "TRANSPORT", "IDOC_DIR", "IDOC_PARTNER", "IDOC_PORT", "IDOC_RECEIVER", "PURCH_ORG", "PURCH_GROUP",
                 "PO_TYPE", "TAX_CODE", "GL_ACCOUNT", "BANK_GL_ACCOUNT", "PAYMENT_SERVICE", "BP_GROUPING", "PRODUCT_TYPE", "TERMS_MAP", "TIMEOUT", "RETRIES",
-                "SCRAP_COST_CENTER", "REASON_MAP", "STOCK_TYPE_MAP")
+                "SCRAP_COST_CENTER", "REASON_MAP", "STOCK_TYPE_MAP", "JOURNAL_SERVICE")
 
     # ------------------------------------------------------------ mode and configuration
     @property
@@ -299,13 +310,18 @@ class SapS4(SapS4Simulator):
         value = self.transport()
         if message_type == "PAYMENT" and value == "odata":
             return "odata" if self.env("PAYMENT_SERVICE") else "idoc"
+        if message_type == "SCF_FINANCING" and value == "odata":
+            return "odata" if self.env("JOURNAL_SERVICE") else "idoc"
         return value
 
     @property
     def message_types(self) -> tuple:  # type: ignore[override]
         if not self.live:
             return tuple(integration.DOC_TYPES)
-        return tuple(sap_mapping.IDOC_TYPES) if self.transport() != "odata" else sap_mapping.MESSAGE_TYPES
+        if self.transport() != "odata":
+            return tuple(sap_mapping.IDOC_TYPES)
+        # the reversal of a returned payment needs the customer's payment service (no released API resets and reverses a clearing)
+        return sap_mapping.MESSAGE_TYPES + (sap_mapping.ODATA_SERVICE_TYPES if self.env("PAYMENT_SERVICE") else ())
 
     def requirements(self) -> list[dict]:
         if not self.live:
@@ -510,6 +526,180 @@ class SapS4(SapS4Simulator):
             out["bank"] = {"account": crypto.decrypt(tid, "bank", bank.account_enc), "ifsc": bank.ifsc, "holder": bank.holder_name}
         return out
 
+    # ------------------------------------------------------------ outline agreements, payment reversal, SCF (rules in platform/sap_defaults.py)
+    def skip_reason(self, session: Session, message_type: str, payload: dict) -> Optional[str]:
+        """OUTLINE_AGREEMENT: a contract type rule SAP-OUTLINE-AGREEMENT does not send (master agreement, NDA), a type without an SAP
+        document type, or a close (termination / renewal) the rule switches off. Live and simulator alike."""
+        if message_type != "OUTLINE_AGREEMENT":
+            return None
+        cfg = sap_defaults.resolve(session, sap_defaults.OUTLINE_KEY, payload.get("companyCode"))
+        reason = sap_defaults.skip_reason(cfg, payload.get("type"))
+        if reason:
+            return reason
+        if sap_defaults.api_of(cfg, payload.get("type")) is None:
+            doc_type = cfg["documentTypes"].get(payload.get("type"))
+            return f"SAP document type {doc_type} of {payload.get('type')} is in neither contractTypes nor schedulingAgreementTypes (rule {cfg.ref})"
+        if payload.get("action") == "CLOSE":
+            flag = "closeOnRenewal" if payload.get("closeReason") == "RENEWED" else "closeOnTermination"
+            if not cfg.get(flag):
+                return f"rule {cfg.ref} {flag} is off: the SAP agreement keeps its validity end"
+        return None
+
+    def _purchasing(self, session: Session, company_code: Optional[str], cfg) -> dict:
+        """Purchasing organisation and group of an outline agreement: the rule (per company code), else PIC_ERP_SAP_S4_PURCH_ORG / _PURCH_GROUP,
+        else the PIC purchasing-org master when it names exactly one for the company code (one group for the organisation). The simulator
+        falls back to the first master entry, the company code and the mock customizing; a live system rejects an undecided value."""
+        from app.pic.models import PurchasingGroup, PurchasingOrg
+        org = cfg.get("purchasingOrg") or self.env("PURCH_ORG")
+        if not org:
+            orgs = list(session.execute(select(PurchasingOrg.code).where(PurchasingOrg.company_code == company_code, PurchasingOrg.active.is_(True))
+                                        .order_by(PurchasingOrg.code)).scalars())
+            org = orgs[0] if len(orgs) == 1 or (orgs and not self.live) else (None if self.live else company_code)
+        group = cfg.get("purchasingGroup") or self.env("PURCH_GROUP")
+        if not group and org:
+            groups = list(session.execute(select(PurchasingGroup.code).where(PurchasingGroup.purchasing_org == org, PurchasingGroup.active.is_(True))
+                                          .order_by(PurchasingGroup.code)).scalars())
+            group = groups[0] if len(groups) == 1 or (groups and not self.live) else (
+                None if self.live else sap_customizing.load().defaults.get("purchasingGroup"))
+        if self.live and not (org and group):
+            missing = "purchasingOrg" if not org else "purchasingGroup"
+            raise ConnectorRejected(f"company code {company_code}: no SAP {missing} for outline agreements; set it in rule {cfg.ref} for the company "
+                                    f"code (or PIC_ERP_SAP_S4_PURCH_ORG / _PURCH_GROUP)")
+        return {"purch_org": org, "purch_group": group}
+
+    def _outline_number(self, session: Session, message: IntegrationMessage) -> Optional[str]:
+        """The SAP number of the agreement a message changes: the latest earlier OUTLINE_AGREEMENT message of the contract that SAP posted,
+        else the contract's ERP number (a contract migrated from SAP). An earlier message that is still pending or retrying goes first
+        (versions reach SAP in order); none = the message creates the agreement."""
+        from app.pic.models import Contract
+        p = _payload(message)
+        rank = (int(p.get("version") or 0), message.created_at or datetime.max.replace(tzinfo=timezone.utc), str(message.id))
+        earlier = [m for m in session.execute(select(IntegrationMessage).where(
+            IntegrationMessage.message_type == "OUTLINE_AGREEMENT", IntegrationMessage.target_system == message.target_system,
+            IntegrationMessage.object_id == message.object_id, IntegrationMessage.id != message.id)).scalars()
+            if (int((m.payload or {}).get("version") or 0), m.created_at, str(m.id)) < rank]
+        posted = sorted((m for m in earlier if m.status == "POSTED" and m.erp_doc_no),
+                        key=lambda m: (int((m.payload or {}).get("version") or 0), m.posted_at or m.created_at, str(m.id)))
+        if posted:
+            return posted[-1].erp_doc_no
+        waiting = [m for m in earlier if m.status in ("PENDING", "RETRY")]
+        if waiting:
+            raise ConnectorRejected(f"{p.get('contract')}: the earlier outline agreement message {waiting[0].idempotency_key} has to reach SAP first")
+        contract = session.get(Contract, message.object_id) if message.object_id else None
+        return contract.erp_doc_no if contract is not None and contract.erp_doc_no else None
+
+    def _existing_items(self, session: Session, plan_api: str, number: str) -> set:
+        """Item numbers SAP holds for an agreement: an OData read (live), the items of the documents recorded so far (simulator)."""
+        names = sap_mapping.OUTLINE_API[plan_api]
+        if self.live:
+            rows = self.client().query(names["service"], names["item_set"], filter=f"{names['number']} eq {sap_odata.literal(number)}", select=names["item"])
+            return {int(r[names["item"]]) for r in rows if str(r.get(names["item"]) or "").isdigit()}
+        from app.pic.models import ErpDocument
+        docs = session.execute(select(ErpDocument).where(ErpDocument.system == self.system, ErpDocument.doc_type == integration.DOC_TYPES["OUTLINE_AGREEMENT"][0],
+                                                         ErpDocument.doc_no == number)).scalars()
+        return {int(line["line"]) for doc in docs for line in (doc.payload or {}).get("lines") or [] if str(line.get("line") or "").isdigit()}
+
+    def _outline_plan(self, session: Session, message: IntegrationMessage, ctx: dict) -> "sap_mapping.OutlinePlan":
+        p = _payload(message)
+        cfg = sap_defaults.resolve(session, sap_defaults.OUTLINE_KEY, p.get("companyCode"))
+        reason = self.skip_reason(session, "OUTLINE_AGREEMENT", p)
+        if reason:
+            raise ConnectorRejected(f"{p.get('contract')} is not sent to SAP: {reason}")
+        api = sap_defaults.api_of(cfg, p.get("type"))
+        body = dict(cfg.body)
+        if any(not line.get("material") for line in p.get("lines") or []) and not body.get("textItemMaterialGroup"):
+            if self.live:
+                raise ConnectorRejected(f"{p.get('contract')} has lines without a material: SAP needs a material group for them; set "
+                                        f"textItemMaterialGroup in rule {cfg.ref}")
+            body["textItemMaterialGroup"] = sap_customizing.load().defaults.get("textItemMaterialGroup")
+        octx = {**ctx, "payment_terms": _pairs(self.env("TERMS_MAP")).get(p.get("paymentTerms") or "")}
+        if p.get("action") != "CLOSE":
+            octx.update(self._purchasing(session, p.get("companyCode"), cfg))
+        number = self._outline_number(session, message)
+        existing = self._existing_items(session, api, number) if number and p.get("action") != "CLOSE" else None
+        try:
+            return sap_mapping.outline_agreement(p, octx, body, api, p.get("lines") or [], number=number, existing_items=existing)
+        except ValueError as exc:
+            raise ConnectorRejected(f"{p.get('contract')}: {exc}")
+
+    def _post_outline(self, client, plan: "sap_mapping.OutlinePlan") -> str:
+        if plan.action == "CREATE":
+            entity = client.create(plan.service, plan.header_set, plan.ops[0].body)
+            number = entity.get(plan.number_field)
+            if not number:
+                raise ConnectorRejected(f"SAP accepted the outline agreement but returned no {plan.number_field}: {str(entity)[:200]}")
+            return str(number)
+        for op in plan.ops:            # items first, the header with the new reference last (sap_mapping.OutlinePlan)
+            if op.method == "POST":
+                client.create(plan.service, op.path, op.body)
+            else:
+                client.update(plan.service, op.path, op.body)
+        return str(plan.number)
+
+    def _reversal(self, session: Session, message: IntegrationMessage, ctx: dict) -> tuple["sap_mapping.Spec", date]:
+        """PAYMENT_REVERSAL body and the original posting date: fiscal year from the payment's value date and the company code's fiscal-year
+        start, reason and posting date by rule SAP-PAYMENT-REVERSAL (the closed-period reason when PIC closed the payment's period)."""
+        from app.pic.models import CompanyCode, Payment, PostingPeriod
+        p = _payload(message)
+        cfg = sap_defaults.resolve(session, sap_defaults.REVERSAL_KEY, p.get("companyCode"))
+        payment = session.execute(select(Payment).where(Payment.number == p.get("payment"))).scalar_one_or_none()
+        original = payment.value_date if payment is not None else clock.today()
+        returned = payment.bank_confirmed_at.astimezone(clock.IST).date() if payment is not None and payment.bank_confirmed_at else clock.today()
+        company = session.execute(select(CompanyCode).where(CompanyCode.code == p.get("companyCode"))).scalar_one_or_none()
+        start = company.fiscal_year_start_month if company is not None and company.fiscal_year_start_month else 4
+        fiscal_year = original.year if original.month >= start else original.year - 1
+        closed = session.execute(select(PostingPeriod.id).where(PostingPeriod.company_code == p.get("companyCode"), PostingPeriod.status == "CLOSED",
+                                                                PostingPeriod.period == original.strftime("%Y-%m"))).first() is not None
+        reason, posting = sap_mapping.reversal_terms(cfg.body, original, returned, closed)
+        try:
+            spec = sap_mapping.payment_reversal(p, ctx, cfg.body, {"fiscalYear": str(fiscal_year), "reason": reason, "postingDate": posting})
+        except ValueError as exc:
+            raise ConnectorRejected(str(exc))
+        return spec, original
+
+    def _scf(self, session: Session, message: IntegrationMessage) -> tuple[dict, dict, str]:
+        """(rule SAP-SCF-FINANCING body, the financier's entry, currency) of an SCF_FINANCING message. The simulator uses the mock financier
+        when the rule names none; a live system rejects the message until the client configures it."""
+        from app.pic.models import Invoice
+        p = _payload(message)
+        cfg = sap_defaults.resolve(session, sap_defaults.SCF_KEY, p.get("companyCode"))
+        try:
+            financier = sap_mapping.scf_financier(cfg.body, p.get("financier"))
+        except ValueError as exc:
+            if self.live:
+                raise ConnectorRejected(f"{exc} ({cfg.ref}); the SCF posting needs the client's design, see docs/PIC_SAP_Document_Types.md")
+            financier = dict(sap_customizing.load().defaults.get("financier") or {})
+        invoice = session.get(Invoice, message.object_id) if message.object_type == "INVOICE" and message.object_id else None
+        return cfg.body, financier, (getattr(invoice, "currency", None) or "INR")
+
+    def _scf_spec(self, session: Session, message: IntegrationMessage, ctx: dict) -> "sap_mapping.Spec":
+        cfg, financier, currency = self._scf(session, message)
+        return sap_mapping.scf_journal_entry(_payload(message), {**ctx, "currency": currency, "journal_service": self.env("JOURNAL_SERVICE")}, cfg, financier)
+
+    def _simulate(self, session: Session, message: IntegrationMessage) -> str:
+        """Sandbox simulator for the message types it validates: the live mapping builds the request, the mock customizing checks it
+        (platform/sap_customizing.py) and the simulator records it; an outline-agreement change or close keeps the agreement's number."""
+        t = message.message_type
+        ctx = self._ctx(session, message)
+        number = None
+        if t == "OUTLINE_AGREEMENT":
+            plan = self._outline_plan(session, message, ctx)
+            problems = sap_customizing.check_outline(plan, _payload(message).get("type"))
+            request = {"service": plan.service, "action": plan.action, "documentType": plan.doc_type,
+                       "ops": [{"method": op.method, "path": op.path, "body": op.body} for op in plan.ops]}
+            number = plan.number
+        elif t == "PAYMENT_REVERSAL":
+            spec, original = self._reversal(session, message, ctx)
+            problems = sap_customizing.check_reversal(spec.body, original)
+            request = {"service": spec.service, "entitySet": spec.entity_set, "body": spec.body}
+        else:
+            spec = self._scf_spec(session, message, ctx)
+            problems = sap_customizing.check_journal(spec.body)
+            request = {"service": spec.service, "entitySet": spec.entity_set, "body": spec.body}
+        if problems:
+            raise ConnectorRejected(f"SAP sandbox simulator refused the {t}: " + "; ".join(problems))
+        return self.inner.post(session, message, doc_no=number, request=request)
+
     # ------------------------------------------------------------ interface used by integration.process
     def _spec(self, session: Session, message: IntegrationMessage, ctx: dict) -> "sap_mapping.Spec":
         p, t = _payload(message), message.message_type
@@ -534,6 +724,10 @@ class SapS4(SapS4Simulator):
             return sap_mapping.product(p, ctx)
         if t == "PAYMENT":
             return sap_mapping.vendor_payment(p, ctx)
+        if t == "PAYMENT_REVERSAL":
+            return self._reversal(session, message, ctx)[0]
+        if t == "SCF_FINANCING":
+            return self._scf_spec(session, message, ctx)
         raise ConnectorUnsupported(f"SAP_S4 connector does not map {t}")
 
     def find(self, session, message):
@@ -559,6 +753,20 @@ class SapS4(SapS4Simulator):
             return RemoteDocument(str(found.get("Product"))) if found else None
         if t == "SUPPLIER_MASTER" and p.get("change"):
             return None            # master changes are always applied (PATCH is idempotent)
+        if t == "OUTLINE_AGREEMENT":
+            # create, change and close all write the message's reference into the header (a change and a close last), so one query covers them
+            api = sap_defaults.api_of(sap_defaults.resolve(session, sap_defaults.OUTLINE_KEY, p.get("companyCode")), p.get("type"))
+            if api is None:
+                return None
+            names = sap_mapping.OUTLINE_API[api]
+            rows = self.client().query(names["service"], names["header"], filter=f"{sap_mapping.OUTLINE_REFERENCE_FIELD} eq {sap_odata.literal(reference_value)}",
+                                       select=names["number"], top=1)
+            return RemoteDocument(str(rows[0][names["number"]])) if rows else None
+        if t in ("PAYMENT_REVERSAL", "SCF_FINANCING"):
+            service, entity, number = ((self.env("PAYMENT_SERVICE"), "A_VendorPaymentReversal", "ReverseDocument") if t == "PAYMENT_REVERSAL"
+                                       else (self.env("JOURNAL_SERVICE"), "A_JournalEntry", "AccountingDocument"))
+            rows = self.client().query(service, entity, filter=f"DocumentHeaderText eq {sap_odata.literal(reference_value)}", select=number, top=1)
+            return RemoteDocument(str(rows[0][number])) if rows else None
         if t == "PAYMENT":
             return None
         if t == "STOCK_POSTING":   # one material document per goods movement code: found only when every one of them is
@@ -592,6 +800,8 @@ class SapS4(SapS4Simulator):
 
     def post(self, session, message):
         if not self.live:
+            if message.message_type in SIMULATOR_VALIDATED:
+                return self._simulate(session, message)
             return super().post(session, message)
         self._require(message)
         t, p = message.message_type, _payload(message)
@@ -602,6 +812,8 @@ class SapS4(SapS4Simulator):
         client = self.client()
         if t == "STOCK_POSTING":
             return self._post_stock(session, client, message, ctx)
+        if t == "OUTLINE_AGREEMENT":
+            return self._post_outline(client, self._outline_plan(session, message, ctx))
         if t == "SUPPLIER_MASTER" and p.get("change"):
             return self._change_vendor(session, client, message, ctx)
         if t == "MATERIAL_MASTER" and p.get("change"):
@@ -631,6 +843,8 @@ class SapS4(SapS4Simulator):
             data["supplier"] = self._supplier_master(session, message)
         elif t == "STOCK_POSTING":
             return self._post_stock_idoc(session, message, ctx)
+        elif t == "SCF_FINANCING":
+            data["cfg"], data["financier"], data["currency"] = self._scf(session, message)
         xml = sap_mapping.idoc_xml(t, p, ctx, data)
         return self.idoc_transport().send(ctx["reference"], xml)
 
@@ -1093,6 +1307,12 @@ def maps(system: str, message_type: str) -> bool:
     if connector is None:
         return False
     return message_type in connector.message_types      # SAP_S4: the simulator's document types, or the live connector's mapping
+
+
+def skip_reason(system: str, session: Session, message_type: str, payload: dict) -> Optional[str]:
+    """Why the target connector deliberately does not send this document (SAP_S4: a contract type its rule does not send), else None."""
+    connector = REGISTRY.get((system or "").upper())
+    return connector.skip_reason(session, message_type, payload) if connector is not None else None
 
 
 def require_mapped(system: str, message_type: str) -> None:

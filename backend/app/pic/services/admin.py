@@ -17,7 +17,7 @@ from app.pic.platform.errors import Problem, not_found
 from app.pic.seed.templates import TEMPLATES
 from app.pic.services.common import principal
 
-SENSITIVE_ROLES = {"TENANT_ADMIN", "FINANCE_CONTROLLER", "CPO"}
+SENSITIVE_ROLES = {"TENANT_ADMIN", "FINANCE_CONTROLLER", "CFO", "CPO"}
 # Role pairs one person must not hold together (blueprint §4.1, enforced at assignment as well as at command time).
 TOXIC_PAIRS = [({"SUPPLIER_MANAGER"}, {"FINANCE_CONTROLLER"}, "SOD-02: bank changes and payment approval"),
                ({"BUYER"}, {"RECEIVER"}, "SOD-03: PO creation and goods receipt"),

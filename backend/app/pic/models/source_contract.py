@@ -279,6 +279,8 @@ class Contract(TenantScoped, Base):
     # agreement number of its current version (message OUTLINE_AGREEMENT).
     renews_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.contract.id"))
     erp_doc_no: Mapped[Optional[str]] = mapped_column(String(40))
+    # Migration 0028: s.195A gross-up agreed in this contract (the company bears the non-resident's withholding tax); NULL = the supplier's setting.
+    tax_gross_up: Mapped[Optional[bool]] = mapped_column(Boolean)
 
 
 class ContractLine(TenantScoped, Base):

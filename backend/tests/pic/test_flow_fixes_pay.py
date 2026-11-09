@@ -583,7 +583,7 @@ def test_flowfix3_sap_supplier_debit_memo_golden_payload():
         "SupplierInvoiceItem": "2", "CompanyCode": "1710", "GLAccount": "510000", "DocumentCurrency": "INR", "SupplierInvoiceItemAmount": "200.00",
         "DebitCreditCode": "S", "SupplierInvoiceItemText": "FREIGHT", "TaxCode": "V1"}]
     assert "SUPPLIER_DEBIT_MEMO" in sap_mapping.MESSAGE_TYPES and "SUPPLIER_DEBIT_MEMO" not in sap_mapping.IDOC_TYPES
-    assert set(sap_mapping.UNMAPPED_LIVE) == {"PAYMENT_REVERSAL", "SCF_FINANCING"}
+    assert sap_mapping.UNMAPPED_LIVE == ()          # payment reversal and SCF are mapped live now (tests/pic/test_sap_live_mapping.py)
 
 
 def test_flowfix3_gr_reversal_message_carries_the_received_lines(tx):

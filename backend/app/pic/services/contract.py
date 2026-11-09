@@ -12,8 +12,10 @@ CONTRACT_EXPIRING notification and a CONTRACT_RENEWAL decision task is opened. T
 
 ERP: an activated or amended call-off contract (scheduling agreement, quantity / value contract, rate card, SOW) is posted to the ERP as an
 OUTLINE_AGREEMENT message (exactly once per contract version, key ``<company>|OA|<number>|v<version>``); a master agreement or NDA carries
-no lines and is not an ERP outline agreement. A target connector that does not map OUTLINE_AGREEMENT leaves the contract active in PIC
-and records ERP_NOT_MAPPED in the audit trail.
+no lines and is not an ERP outline agreement. A terminated contract, and a predecessor renewed before its end, get a CLOSE message (key
+``...|v<version>|CLOSE``) that ends the ERP agreement on the last day in force. A target connector that does not map OUTLINE_AGREEMENT
+leaves the contract active in PIC and records ERP_NOT_MAPPED in the audit trail; a type the connector deliberately does not send (SAP
+rule SAP-OUTLINE-AGREEMENT notSent) records ERP_NOT_SENT.
 """
 import hashlib
 import hmac
@@ -1147,11 +1149,73 @@ def post_to_erp(session: Session, contract: Optional[Contract]) -> Optional[dict
                "companyCode": contract.company_code, "currency": contract.currency, "validFrom": contract.valid_from.isoformat(),
                "validTo": contract.valid_to.isoformat(), "paymentTerms": contract.payment_terms, "incoterms": contract.incoterms,
                "targetValueMinor": contract.target_value_minor, "lines": lines}
+    skipped = _not_sent(session, contract, target, payload)
+    if skipped is not None:
+        return skipped
     # Exactly once per content of a version: an index reset adds a price period without a new contract version, so the key carries a
     # digest of what is sent (a replay of the same content is the same message; new prices are a new message).
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:12]
     message = integration.enqueue(
         session, target_system=target, message_type=ERP_MESSAGE, idempotency_key=f"{contract.company_code}|OA|{contract.number}|v{contract.version}|{digest}",
+        object_type="CONTRACT", object_id=contract.id, object_ref=contract.number, payload=payload)
+    integration.process(session, message)
+    return {"status": message.status, "system": target, "erpDocument": message.erp_doc_no}
+
+
+def _not_sent(session: Session, contract: Contract, target: str, payload: dict) -> Optional[dict]:
+    """A document the target connector deliberately does not send (SAP rule SAP-OUTLINE-AGREEMENT: legal documents, or a close the rule
+    switches off): recorded as ERP_NOT_SENT in the audit trail, not an error. None when it is sent."""
+    from app.pic.platform import connectors
+
+    reason = connectors.skip_reason(target, session, ERP_MESSAGE, payload)
+    if not reason:
+        return None
+    audit.record(session, "CONTRACT", contract.id, "ERP_NOT_SENT", object_ref=contract.number, reason=reason,
+                 after={"system": target, "messageType": ERP_MESSAGE, "version": contract.version, "action": payload.get("action", "SEND")})
+    return {"status": "NOT_SENT", "system": target, "reason": reason}
+
+
+@outbox.consumer("contract.terminated", "erp-contract-close")
+@outbox.consumer("contract.renewed", "erp-contract-close")
+def _close_contract(session: Session, event) -> Optional[dict]:
+    contract = session.get(Contract, event.object_id)
+    if contract is None:
+        return None
+    if event.topic == "contract.renewed":
+        last_day = date.fromisoformat(event.payload["validFrom"]) - timedelta(days=1)
+        return close_in_erp(session, contract, last_day, "RENEWED")
+    effective = date.fromisoformat(event.payload.get("effectiveFrom") or clock.today().isoformat())
+    return close_in_erp(session, contract, effective - timedelta(days=1), "TERMINATED")
+
+
+def close_in_erp(session: Session, contract: Contract, last_day: date, close_reason: str) -> Optional[dict]:
+    """End the ERP outline agreement of a terminated contract (last day in force) or of a renewed predecessor (the day before its successor
+    starts), exactly once per contract version: an OUTLINE_AGREEMENT message with action CLOSE. Nothing is sent for a contract that never
+    reached the ERP, or when the agreement already ends by then."""
+    from app.pic.models import IntegrationMessage
+    from app.pic.platform import connectors, integration
+
+    if contract.type in FRAMEWORK_TYPES:
+        return None
+    reached = session.execute(select(func.count()).select_from(IntegrationMessage).where(
+        IntegrationMessage.message_type == ERP_MESSAGE, IntegrationMessage.object_id == contract.id)).scalar_one()
+    if not reached and not contract.erp_doc_no:
+        return None
+    if last_day >= contract.valid_to:
+        return None
+    last_day = max(last_day, contract.valid_from)
+    target = integration.target_system(session, contract.company_code)
+    if not connectors.maps(target, ERP_MESSAGE):
+        return None            # its activation was already recorded as ERP_NOT_MAPPED
+    supplier = session.get(Supplier, contract.supplier_id)
+    payload = {"contract": contract.number, "version": contract.version, "type": contract.type, "supplier": supplier.code,
+               "companyCode": contract.company_code, "currency": contract.currency, "action": "CLOSE", "closeReason": close_reason,
+               "validFrom": contract.valid_from.isoformat(), "validTo": last_day.isoformat(), "lines": []}
+    skipped = _not_sent(session, contract, target, payload)
+    if skipped is not None:
+        return skipped
+    message = integration.enqueue(
+        session, target_system=target, message_type=ERP_MESSAGE, idempotency_key=f"{contract.company_code}|OA|{contract.number}|v{contract.version}|CLOSE",
         object_type="CONTRACT", object_id=contract.id, object_ref=contract.number, payload=payload)
     integration.process(session, message)
     return {"status": message.status, "system": target, "erpDocument": message.erp_doc_no}

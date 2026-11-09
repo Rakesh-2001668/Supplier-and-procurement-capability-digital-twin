@@ -1,0 +1,80 @@
+{
+  "message": {
+    "type": "OUTLINE_AGREEMENT",
+    "payload": {
+      "contract": "QC-6101",
+      "version": 2,
+      "type": "QUANTITY_CONTRACT",
+      "supplier": "KD002",
+      "companyCode": "1000",
+      "currency": "INR",
+      "validFrom": "2027-04-01",
+      "validTo": "2028-03-31",
+      "paymentTerms": "N45",
+      "incoterms": "FCA Coimbatore",
+      "targetValueMinor": 25000000,
+      "lines": [
+        {
+          "line": 10,
+          "material": "FK-M8-50",
+          "description": "Fastener kit M8 x 50 zinc flake",
+          "plant": "P100",
+          "uom": "EA",
+          "targetQty": "25000",
+          "priceMinor": 1250
+        },
+        {
+          "line": 20,
+          "material": null,
+          "description": "Tool polishing, per hour",
+          "plant": "P100",
+          "uom": "H",
+          "targetQty": "100.000",
+          "priceMinor": 300000
+        }
+      ]
+    },
+    "sapNumber": "4600000101"
+  },
+  "requests": [
+    {
+      "method": "PATCH",
+      "path": "/sap/opu/odata/sap/API_PURCHASECONTRACT_PROCESS_SRV/A_PurchaseContractItem(PurchaseContract='4600000101',PurchaseContractItem='10')",
+      "body": {
+        "PurchaseContractItemText": "Fastener kit M8 x 50 zinc flake",
+        "TargetQuantity": "25000.000",
+        "OrderQuantityUnit": "EA",
+        "ContractNetPriceAmount": "12.50",
+        "NetPriceQuantity": "1"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/sap/opu/odata/sap/API_PURCHASECONTRACT_PROCESS_SRV/A_PurchaseContract('4600000101')/to_PurchaseContractItem",
+      "body": {
+        "PurchaseContract": "4600000101",
+        "PurchaseContractItem": "20",
+        "PurchaseContractItemText": "Tool polishing, per hour",
+        "Plant": "P100",
+        "TargetQuantity": "100.000",
+        "OrderQuantityUnit": "H",
+        "ContractNetPriceAmount": "3000.00",
+        "NetPriceQuantity": "1",
+        "MaterialGroup": "SERVICES",
+        "AccountAssignmentCategory": "U"
+      }
+    },
+    {
+      "method": "PATCH",
+      "path": "/sap/opu/odata/sap/API_PURCHASECONTRACT_PROCESS_SRV/A_PurchaseContract('4600000101')",
+      "body": {
+        "ValidityEndDate": "/Date(1838073600000)/",
+        "PaymentTerms": "Z045",
+        "IncotermsClassification": "FCA",
+        "IncotermsLocation1": "Coimbatore",
+        "CorrespncExternalReference": "1000|OA|QC-6",
+        "PurchaseContractTargetAmount": "250000.00"
+      }
+    }
+  ]
+}

@@ -54,7 +54,14 @@ function DecisionCard({ d, kind }: { d: AwardDecision; kind?: string }) {
       {ex.length > 0 && (
         <div className="mt-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Exceptions</p>
-          <ul className="mt-1 space-y-1">{ex.map((e) => <li key={e.code}><span className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">{e.code}</span> <span className="text-slate-700">{e.detail}</span></li>)}</ul>
+          <ul className="mt-1 space-y-1">{ex.map((e) => <li key={e.code}><span className="rounded bg-amber-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">{e.code}</span> <span className="text-slate-700">{e.detail}</span>
+            {e.override && (
+              <p className="mt-1 rounded bg-red-50 px-2 py-1 text-xs text-red-900" aria-label="Expired-offer override">
+                Expired offer overridden by {e.override.byName ?? e.override.byEmail ?? 'the proposer'}{e.override.at ? ` on ${dateTime(e.override.at)}` : ''}:
+                {' '}{e.override.bids.map((b) => `${b.supplier} (valid until ${date(b.validUntil)})`).join(', ')}. Reason: “{e.override.reason}”
+              </p>
+            )}
+          </li>)}</ul>
         </div>
       )}
       {d.rationale && <p className="mt-2 text-slate-700"><span className="font-semibold">Rationale:</span> {d.rationale}</p>}

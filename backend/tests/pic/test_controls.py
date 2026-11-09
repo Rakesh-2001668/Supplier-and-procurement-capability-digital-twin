@@ -163,8 +163,10 @@ def test_double_payment_is_impossible(client, login):
     assert r.status_code == 200
     assert all(p["invoice"] not in ("INV-TF-8812", "HTS/1107") for p in r.json()["paid"])
     with tenant_tx(_axn_id()) as s:
-        paid_invoices = s.execute(select(Payment.invoice_id)).scalars().all()
-        assert len(paid_invoices) == len(set(paid_invoices))  # never two payments for one invoice
+        # never two payments settling one invoice (partial payments, migration 0028, are numbered parts of one settlement)
+        paid_invoices = s.execute(select(Payment.invoice_id).where(Payment.status != "CANCELLED", Payment.debit_note_id.is_(None),
+                                                                   Payment.settles_invoice.is_(True))).scalars().all()
+        assert len(paid_invoices) == len(set(paid_invoices))
 
 
 def test_mrp_simulation_creates_no_documents(client, login):

@@ -26,6 +26,10 @@ POLICY_DEFAULT = {
     # evaluation and award controls
     "requireAllCriteriaScored": True,          # every manual criterion scored for every bidder in the award before an award can be proposed
     "minRationaleChars": 15,                   # the written rationale of a non-lowest / exceptional award is a sentence, not a word
+    # D5 (docs/PIC_Default_Decisions.md): an award on a bid whose offer validity has ended is BLOCKED (409 BID_OFFER_EXPIRED). The honest path is a
+    # new round in which the supplier confirms or extends its offer; the block is lifted only by an override with a written reason from a holder of
+    # one of these roles (a CATEGORY_MANAGER only for the event's category). An overridden award always goes to the AWARD-APPROVAL approvers.
+    "expiredOfferOverride": {"roles": ["CATEGORY_MANAGER"], "minReasonChars": 20, "requiresApproval": True},
     "incompleteTcoNeedsRationale": False,      # an award on a bid whose TCO has a missing input is flagged and recorded; True: it also needs the written rationale
                                                # (off by default: older data has no PPM; the KAC rule version turns it on)
     "unverifiedCapacityNeedsRationale": False, # volume to a supplier whose capacity nobody verified is flagged and recorded; True: it also needs the written rationale
@@ -147,6 +151,26 @@ def validate(key: str, body: dict) -> list[str]:
         for method in body.get("baselineMethods") or []:
             if method not in POLICY_DEFAULT["baselineMethods"]:
                 errors.append(f"baseline method {method} is unknown")
+        if "expiredOfferOverride" in body:
+            errors.extend(_override_errors(body["expiredOfferOverride"]))
+    return errors
+
+
+def _override_errors(value) -> list[str]:
+    """Problems of SOURCING-POLICY.expiredOfferOverride (who may lift the expired-offer block of an award, D5)."""
+    if not isinstance(value, dict):
+        return ["expiredOfferOverride must be an object {roles, minReasonChars, requiresApproval}"]
+    errors = []
+    roles = value.get("roles", [])
+    if not isinstance(roles, list) or not all(isinstance(r, str) and r.isupper() for r in roles):
+        errors.append("expiredOfferOverride.roles must be a list of role codes (an empty list: nobody may override)")
+    elif "SUPPLIER_USER" in roles:
+        errors.append("expiredOfferOverride.roles: a supplier user cannot override an award block")
+    chars = value.get("minReasonChars", 20)
+    if not isinstance(chars, int) or isinstance(chars, bool) or not 10 <= chars <= 1000:
+        errors.append("expiredOfferOverride.minReasonChars must be a whole number from 10 to 1000")
+    if not isinstance(value.get("requiresApproval", True), bool):
+        errors.append("expiredOfferOverride.requiresApproval must be true or false")
     return errors
 
 

@@ -85,7 +85,7 @@ def payment_due(ctx: jobs.JobContext) -> dict:
     horizon = today + timedelta(days=int(cfg["horizonDays"]))
     session = ctx.session
     due = session.execute(select(Invoice).where(
-        Invoice.status == "POSTED", Invoice.payment_status == "UNPAID", Invoice.payment_block.is_(False),
+        Invoice.status == "POSTED", Invoice.payment_status.in_(("UNPAID", "PARTIALLY_PAID")), Invoice.payment_block.is_(False),
         Invoice.due_date.is_not(None), Invoice.due_date <= horizon).order_by(Invoice.due_date, Invoice.number)).scalars().all()
     windows = _discount_windows(session, today, int(cfg["horizonDays"]), {i.number for i in due})
     summary = {"horizon": horizon.isoformat(), "due": len(due), "totalMinor": sum(i.gross_minor for i in due), "rule": rule_ref,

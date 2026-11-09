@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:remittance.form15.recorded",
+  "title": "remittance.form15.recorded",
+  "description": "Payload (outbox_event.payload) of remittance.form15.recorded on INVOICE. Produced by services/nonresident_tax.py.",
+  "type": "object",
+  "properties": {
+    "invoice": {"type": "string"},
+    "supplier": {"type": "string"},
+    "part": {"type": "string", "enum": ["A", "B", "C", "D"]},
+    "amountMinor": {"type": "integer"},
+    "currency": {"type": "string"},
+    "form15cb": {"type": "boolean"}
+  },
+  "required": [
+    "invoice",
+    "supplier",
+    "part",
+    "amountMinor",
+    "currency",
+    "form15cb"
+  ],
+  "additionalProperties": true
+}

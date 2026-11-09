@@ -882,7 +882,7 @@ def release_payment_block(session: Session, invoice: Invoice, reason: str) -> In
     abac.guard(session, "INVOICE_RESOLVE", invoice)
     if len((reason or "").strip()) < 5:
         raise Problem(422, "REASON_REQUIRED", "Give the reason for lifting the payment block", rule_ref="F7-05")
-    if invoice.status != "POSTED" or invoice.payment_status != "UNPAID" or not invoice.payment_block:
+    if invoice.status != "POSTED" or invoice.payment_status not in ("UNPAID", "PARTIALLY_PAID") or not invoice.payment_block:
         raise Problem(409, "ILLEGAL_TRANSITION", f"{invoice.number} is {invoice.status.lower()} / {invoice.payment_status.lower()} with "
                       f"{'a' if invoice.payment_block else 'no'} payment block: only a blocked, posted, unpaid invoice is released", rule_ref="F7-05")
     if invoice.duplicate_of or session.execute(select(InvoiceException.id).where(InvoiceException.invoice_id == invoice.id, InvoiceException.status == "OPEN")).first():
@@ -955,7 +955,9 @@ def approve(session: Session, invoice: Invoice) -> Invoice:
 APPROVAL_TASK = "INVOICE_APPROVAL"
 APPROVAL_RULE = "INVOICE-APPROVAL"
 # Without bands the accounts-payable approval is the only one (the Blueprint's default matrix has no invoice row; tenants add bands per
-# company code, e.g. {"bands": [{"fromMinor": 1000000000, "approvers": ["FINANCE_CONTROLLER"]}]}).
+# company code, e.g. {"bands": [{"fromMinor": 1000000000, "approvers": ["FINANCE_CONTROLLER"]}]}). This code fallback stays "no bands" so a
+# tenant without the rule never changes; new tenants are bootstrapped with p2p_defaults.INVOICE_APPROVAL_BANDS (FC from 10 lakh, CFO from
+# 1 crore, docs/PIC_Default_Decisions.md).
 APPROVAL_DEFAULT = {"bands": [], "slaBusinessDays": 2}
 
 
@@ -1043,8 +1045,11 @@ def approval_state(session: Session, invoice: Invoice) -> dict:
                             .order_by(Task.created_at.desc(), Task.sequence.desc())).scalars().all()
     if not tasks:
         chain, band, ref, value = approval_chain(session, invoice)
-        return {"status": "APPROVED" if invoice.status in ("APPROVED", "POSTED", "PAID") and invoice.approved_by else "NONE",
-                "requiredChain": chain, "band": band, "rule": ref, "valueMinor": value, "steps": []}
+        if invoice.status in ("APPROVED", "POSTED", "PAID") and invoice.approved_by:
+            # approved by accounts payable alone (below every band, or before the tenant's bands took effect): a band published later
+            # never re-labels an invoice that is already approved
+            return {"status": "APPROVED", "requiredChain": [], "band": None, "rule": None, "valueMinor": value, "steps": []}
+        return {"status": "NONE", "requiredChain": chain, "band": band, "rule": ref, "valueMinor": value, "steps": []}
     latest = tasks[0].group_key
     group = sorted((t for t in tasks if t.group_key == latest), key=lambda t: t.sequence)
     names = {}
@@ -1088,7 +1093,7 @@ def _approval_decided(session: Session, task: Task, outcome: str) -> None:
         invoice.payment_block = True
         session.add(InvoiceException(tenant_id=invoice.tenant_id, invoice_id=invoice.id, type="APPROVAL",
                                      delta={"role": task.candidate_role, "decision": task.decision, "task": str(task.id)},
-                                     detail=f"{task.candidate_role.replace('_', ' ').title()} {outcome.lower()} the invoice: {task.comment}",
+                                     detail=f"{workflow.role_title(task.candidate_role)} {outcome.lower()} the invoice: {task.comment}",
                                      suggested_action="Clarify with the approver and resubmit (CLARIFIED), dispute it with the supplier, or reject the invoice",
                                      status="OPEN", created_by=principal(session).user_id))
         SM.apply(session, invoice, "approval_rejected", reason=task.comment, rule_set_version=task.rule_set_version,
@@ -1266,6 +1271,15 @@ def _payment_posted(session: Session, message) -> None:
         if note.payment_status == "IN_PAYMENT":
             note.payment_status = "PAID"
     payment = session.execute(select(Payment).where(Payment.number == (message.payload or {}).get("payment"))).scalar_one_or_none()
+    if payment is not None and not payment.settles_invoice:
+        # a partial payment (settlement.py): cleared in the ERP, the rest of the invoice stays open (PARTIALLY_PAID) for a later run
+        audit.record(session, "INVOICE", invoice.id, "PARTIAL_PAYMENT_CLEARED", object_ref=invoice.number,
+                     after={"payment": payment.number, "installment": payment.installment_no, "amountMinor": payment.amount_minor,
+                            "paidMinor": invoice.paid_minor, "clearingDocument": message.erp_doc_no})
+        outbox.emit(session, "payment.completed", "INVOICE", invoice.id, invoice.number,
+                    {"payment": payment.number, "amountMinor": payment.amount_minor, "clearingDocument": message.erp_doc_no, "partial": True,
+                     "installment": payment.installment_no})
+        return
     SM.apply(session, invoice, "pay", extra_after={"payment": payment.number if payment else None, "clearingDocument": message.erp_doc_no})
     invoice.payment_status = "PAID"
     outbox.emit(session, "payment.completed", "INVOICE", invoice.id, invoice.number,
@@ -1295,15 +1309,26 @@ def return_payment(session: Session, payment: Payment, reason: str) -> Payment:
         if note is not None:
             note.payment_status = "UNPAID"
     else:
+        # Partial payments (settlement.py): only this payment's cash is reopened; the other live parts stay paid. The debit notes netted into it
+        # (the first part) are payable again, on their own while other parts are live; notes already paid on their own are left alone. The TDS it
+        # carried is deducted again by the next payment; its Form 15CA is free for that remittance.
+        from app.pic.services import nonresident_tax, settlement
+        invoice.paid_minor = max(int(invoice.paid_minor or 0) - int(payment.amount_minor), 0)
+        remaining = [x for x in settlement.live_payments(session, invoice) if x.id != payment.id]
         if invoice.status == "PAID":
             SM.apply(session, invoice, "return_payment", reason=reason, extra_after={"payment": payment.number})
-        invoice.payment_status = "UNPAID"
-        for note in debit_notes.notes_of(session, invoice, debit_notes.SETTLED):
-            if note.payment_status in ("IN_PAYMENT", "PAID"):
-                note.payment_status = "UNPAID"
+        invoice.payment_status = "PARTIALLY_PAID" if remaining else "UNPAID"
+        if not remaining or payment.debit_memo_minor:
+            own = set(session.execute(select(Payment.debit_note_id).where(Payment.invoice_id == invoice.id, Payment.debit_note_id.is_not(None),
+                                                                          Payment.status != "CANCELLED")).scalars())
+            for note in debit_notes.notes_of(session, invoice, debit_notes.SETTLED):
+                if note.payment_status in ("IN_PAYMENT", "PAID") and note.id not in own:
+                    note.payment_status = "UNPAID"
+        nonresident_tax.release_form15(session, payment)
     audit.record(session, "INVOICE", invoice.id, "PAYMENT_RETURNED", object_ref=invoice.number, reason=reason,
                  after={"payment": payment.number, "amountMinor": payment.amount_minor, "clearingDocument": clearing,
-                        "erpReversalRequired": clearing is not None, "erpReversal": reversal})
+                        "erpReversalRequired": clearing is not None, "erpReversal": reversal, "installment": payment.installment_no,
+                        "paidMinor": invoice.paid_minor, "paymentStatus": invoice.payment_status})
     outbox.emit(session, "payment.returned", "INVOICE", invoice.id, invoice.number,
                 {"payment": payment.number, "amountMinor": payment.amount_minor, "reason": reason, "clearingDocument": clearing})
     return payment
@@ -1380,7 +1405,7 @@ def _consume_budget(session: Session, amounts_by_requisition: dict[uuid.UUID, in
 def _due_invoices(session: Session, run_date: date, include_not_due: bool, supplier_codes: Optional[list[str]],
                   invoice_numbers: Optional[list[str]], lock: bool = False) -> tuple[list[Invoice], dict]:
     """POSTED, unblocked, unpaid invoices due by run_date (all when include_not_due), narrowed by supplier and invoice number."""
-    query = select(Invoice).where(Invoice.status == "POSTED", Invoice.payment_status == "UNPAID", Invoice.payment_block.is_(False))
+    query = select(Invoice).where(Invoice.status == "POSTED", Invoice.payment_status.in_(("UNPAID", "PARTIALLY_PAID")), Invoice.payment_block.is_(False))
     if not include_not_due:
         query = query.where(Invoice.due_date <= run_date)
     selection = {}
@@ -1424,6 +1449,8 @@ class _PayContext:
         self.retention_invoices: set[uuid.UUID] = set()
         self.accounts: dict[uuid.UUID, list] = {}
         self.cert_used: dict[str, int] = {}  # base taxed at each s.197 certificate by the payments of this proposal so far (cap)
+        self.installments: dict[uuid.UUID, int] = {}  # highest payment sequence number per invoice (partial payments, returned ones included)
+        self.non_resident: set[uuid.UUID] = set()  # suppliers with a NON_RESIDENT tax residency (section 195)
         self.closed = {c for c in {i.company_code for i in invoices} if finance_controls.is_closed(session, c, run_date)}
         if not ids:
             return
@@ -1443,12 +1470,74 @@ class _PayContext:
         for account in session.execute(select(SupplierBankAccount).where(SupplierBankAccount.supplier_id.in_(supplier_ids),
                                                                          SupplierBankAccount.active.is_(True))).scalars():
             self.accounts.setdefault(account.supplier_id, []).append(account)
+        for invoice_id, highest in session.execute(select(Payment.invoice_id, func.max(Payment.installment_no)).where(
+                Payment.invoice_id.in_(ids), Payment.debit_note_id.is_(None)).group_by(Payment.invoice_id)).all():
+            self.installments[invoice_id] = int(highest or 0)
+        from app.pic.models import SupplierTaxResidency
+        self.non_resident = set(session.execute(select(SupplierTaxResidency.supplier_id).where(
+            SupplierTaxResidency.supplier_id.in_(supplier_ids), SupplierTaxResidency.residency == "NON_RESIDENT")).scalars())
 
 
-def _assess_payment(session: Session, invoice: Invoice, run_date: date, *, preview: bool, ctx: Optional[_PayContext] = None) -> dict:
-    """What the payment run would do with one invoice: ``{"skip": reason}`` or the amount and the parts it is made of. Shared by the
-    run and the proposal, so the proposal is exactly what the run will pay. ``ctx`` carries the prefetched reads of a whole batch."""
+def _payable_parts(session: Session, invoice: Invoice, run_date: date, *, ctx: Optional[_PayContext] = None, preview: bool = False) -> dict:
+    """The money of the next payment of the invoice (settlement.py): credit notes, debit notes (netted into the first payment only), retention,
+    early-payment discount, advance recovery, TDS (deducted once, with the first payment: later parts withhold nothing while the payment that
+    carried it is live), TCS paid with it, what the earlier live parts paid, and ``open``: the cash still payable. With a s.195 gross-up the tax is
+    borne by the company (``borne``) and not withheld from the remittance."""
+    from app.pic.services import settlement
+    live = settlement.live_payments(session, invoice) if invoice.paid_minor else []
+    if ctx is not None:
+        credit = ctx.credit.get(invoice.id, 0)
+    else:
+        credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
+    if live:
+        debit_list, debit_gross = [], 0
+        netted = sum(int(x.debit_memo_minor or 0) for x in live)
+        prior_withheld = sum(int(x.tds_minor or 0) - int(x.tax_borne_minor or 0) for x in live)
+        carried = any(x.tds_minor or x.tds_certificate for x in live)
+    else:
+        if ctx is not None:
+            debit_list = ctx.debit.get(invoice.id, [])
+            debit_gross = sum(n.gross_minor for n in debit_list)
+        else:
+            debit_gross, debit_list = debit_notes.payable_adjustment(session, invoice)  # posted debit notes net into the payment
+        netted = prior_withheld = 0
+        carried = False
+    discount = early_payment.deduction_minor(invoice)                            # accepted early-payment discount
+    # TDS kept back for the tax authority on the invoice and the debit notes netted into this payment: s.197 certificate rate while valid and under
+    # its amount cap, the section rate for the rest; section 195 for a non-resident (nonresident_tax.py)
+    if carried:
+        tds_detail = {"tdsMinor": 0, "ratePct": None, "certificate": None, "baseMinor": 0, "certBaseMinor": 0}
+    else:
+        tds_detail = finance_controls.payment_tds(session, invoice, debit_list, run_date, used=ctx.cert_used if ctx is not None and preview else None)
+    rate = tds_detail["ratePct"] if tds_detail["ratePct"] is not None else invoice.tds_rate
+    tds = int(tds_detail["tdsMinor"])
+    borne = int(tds_detail.get("borneMinor") or 0)
+    recovery = ctx.recovery.get(invoice.id, 0) if ctx is not None else ind_construction.payment_deduction_minor(session, invoice)
+    tcs = int(invoice.tcs_minor or 0) if finance_controls.tcs_payable(session, invoice) else 0
+    total = (invoice.gross_minor - credit + debit_gross + netted - (invoice.retention_minor or 0) - discount - recovery - prior_withheld
+             - (tds - borne) + tcs)
+    paid = int(invoice.paid_minor or 0)
+    return {"credit": credit, "debit_gross": debit_gross, "debit_list": debit_list, "discount": discount, "tds": tds, "tds_rate": rate,
+            "tds_detail": tds_detail, "borne": borne, "recovery": recovery, "tcs": tcs, "paid": paid, "total": total, "open": total - paid,
+            "live": len(live)}
+
+
+def open_amount(session: Session, invoice: Invoice, on: Optional[date] = None) -> int:
+    """Cash a payment run on ``on`` (today) would pay to settle the invoice (0 when nothing is open; the gross less the paid cash when the
+    amount cannot be determined, e.g. a missing exchange rate)."""
+    try:
+        return max(_payable_parts(session, invoice, on or clock.today(), preview=True)["open"], 0)
+    except Problem:
+        return max(int(invoice.gross_minor) - int(invoice.paid_minor or 0), 0)
+
+
+def _assess_payment(session: Session, invoice: Invoice, run_date: date, *, preview: bool, ctx: Optional[_PayContext] = None,
+                    partial: Optional[dict] = None) -> dict:
+    """What the payment run would do with one invoice: ``{"skip": reason}`` (with a ``code`` for the checks a named invoice must pass) or the
+    amount and the parts it is made of. Shared by the run and the proposal, so the proposal is exactly what the run will pay. ``ctx`` carries the
+    prefetched reads of a whole batch; ``partial`` ({"amountMinor", "reason"}) pays only part of the open amount (settlement.py)."""
     from app.pic.platform import connectors
+    from app.pic.services import nonresident_tax, settlement
     p = principal(session)
     supplier = ctx.suppliers[invoice.supplier_id] if ctx is not None else session.get(Supplier, invoice.supplier_id)
     if supplier.status in ("BLOCKED", "MERGED"):
@@ -1456,24 +1545,29 @@ def _assess_payment(session: Session, invoice: Invoice, run_date: date, *, previ
     if (invoice.company_code in ctx.closed) if ctx is not None else finance_controls.is_closed(session, invoice.company_code, run_date):
         return {"skip": f"posting period {finance_controls.period_of(run_date)} of company code {invoice.company_code} is closed: "
                         "choose a run date in an open period"}
-    if ctx is not None:
-        credit = ctx.credit.get(invoice.id, 0)
-        debit_list = ctx.debit.get(invoice.id, [])
-        debit_gross = sum(n.gross_minor for n in debit_list)
-    else:
-        credit = sum(n.gross_minor for n in session.execute(select(CreditNote).where(CreditNote.invoice_id == invoice.id)).scalars())
-        debit_gross, debit_list = debit_notes.payable_adjustment(session, invoice)  # posted debit notes net into the payment
-    discount = early_payment.deduction_minor(invoice)                            # accepted early-payment discount
-    # TDS kept back for the tax authority on the invoice and the debit notes netted into this payment: s.197 certificate rate while valid and under
-    # its amount cap, the section rate for the rest
-    tds_detail = finance_controls.payment_tds(session, invoice, debit_list, run_date, used=ctx.cert_used if ctx is not None and preview else None)
-    rate = tds_detail["ratePct"] if tds_detail["ratePct"] is not None else invoice.tds_rate
-    tds = tds_detail["tdsMinor"]
-    recovery = ctx.recovery.get(invoice.id, 0) if ctx is not None else ind_construction.payment_deduction_minor(session, invoice)
-    tcs = int(invoice.tcs_minor or 0) if finance_controls.tcs_payable(session, invoice) else 0
-    amount = invoice.gross_minor - credit + debit_gross - (invoice.retention_minor or 0) - discount - recovery - tds + tcs
-    if amount <= 0:
-        return {"skip": f"nothing payable: net {fmt_inr(amount)} after credit notes and retention"}
+    non_resident = (supplier.id in ctx.non_resident) if ctx is not None else nonresident_tax.non_resident(session, supplier.id) is not None
+    tax195 = nonresident_tax.is_195(invoice.tds_section)
+    if non_resident and not tax195 and not invoice.withholding_tax_minor and invoice.match_type != RETENTION:
+        return {"skip": f"{supplier.code} is a non-resident but {invoice.number} has no section 195 determination (posted before the tax residency "
+                        f"was recorded): set its payment nature with PUT /v1/invoices/{invoice.number}/withholding-195", "code": "TDS_195_NOT_DETERMINED"}
+    try:
+        money = _payable_parts(session, invoice, run_date, ctx=ctx, preview=preview)
+    except Problem as exc:
+        return {"skip": exc.detail, "code": exc.code}
+    open_ = money["open"]
+    if open_ <= 0:
+        return {"skip": f"nothing payable: net {fmt_inr(open_)} after credit notes and retention"}
+    installment = ((ctx.installments.get(invoice.id, 0) + 1) if ctx is not None else settlement.next_installment(session, invoice))
+    amount, settles, partial_reason = open_, True, None
+    if partial is not None:
+        requested = int(partial.get("amountMinor") or 0)
+        if requested != open_:
+            problem = settlement.check_partial(session, invoice, amount_minor=requested, open_minor=open_, reason=partial.get("reason"),
+                                               installment=installment, on=run_date)
+            if problem:
+                return {"skip": problem, "code": "PARTIAL_NOT_ALLOWED"}
+            amount, settles = requested, False
+        partial_reason = (partial.get("reason") or "").strip() or None
     blocked = ind_construction.payment_blocker(session, invoice) if ctx is None or invoice.id in ctx.retention_invoices else None
     if blocked:
         return {"skip": blocked}
@@ -1503,34 +1597,61 @@ def _assess_payment(session: Session, invoice: Invoice, run_date: date, *, previ
     problem = foreign_account_problem(account, invoice)
     if problem:
         return {"skip": problem}
+    form15 = None
+    if tax195:  # Form 15CA / 15CB checkpoint: no remittance to a non-resident without it (rule TDS-195.form15)
+        try:
+            form15, missing = nonresident_tax.form15_for(session, invoice, amount, run_date, nonresident_tax.nature_of_section(invoice.tds_section))
+        except Problem as exc:
+            return {"skip": exc.detail, "code": exc.code}
+        if missing:
+            return {"skip": missing["detail"], "code": missing["code"], "rule": missing.get("rule")}
     try:
         fx = finance_controls.fx_at_payment(session, invoice, amount, run_date)
     except Problem as exc:
         return {"skip": exc.detail}
+    tds_detail = money["tds_detail"]
     if preview and ctx is not None and tds_detail["certificate"]:
         ctx.cert_used[tds_detail["certificate"]] = ctx.cert_used.get(tds_detail["certificate"], 0) + tds_detail["certBaseMinor"]
-    return {"supplier": supplier, "account": account, "target": target, "amount": amount, "credit": credit, "debit_gross": debit_gross,
-            "debit_list": debit_list, "discount": discount, "tds": tds, "tds_rate": rate, "tds_certificate": tds_detail["certificate"],
-            "tds_base": tds_detail["baseMinor"], "tds_cert_base": tds_detail["certBaseMinor"], "tcs": tcs, "fx": fx}
+    return {"supplier": supplier, "account": account, "target": target, "amount": amount, "credit": money["credit"], "debit_gross": money["debit_gross"],
+            "debit_list": money["debit_list"], "discount": money["discount"], "tds": money["tds"], "tds_rate": money["tds_rate"],
+            "tds_certificate": tds_detail["certificate"], "tds_base": tds_detail["baseMinor"], "tds_cert_base": tds_detail["certBaseMinor"],
+            "tcs": money["tcs"], "fx": fx, "borne": money["borne"], "tds_inr": tds_detail.get("inrMinor"), "tds_base_inr": tds_detail.get("baseInrMinor"),
+            "tax_detail": tds_detail.get("detail") or {}, "open": open_, "paid": money["paid"], "installment": installment, "settles": settles,
+            "partial_reason": partial_reason, "form15": form15}
+
+
+def _partial_instructions(partials: Optional[dict], invoice_numbers: Optional[list[str]]) -> dict:
+    """{invoice number: {"amountMinor": int, "reason": str}}; an invoice paid in part must be in the selection when the run names invoices."""
+    out = {}
+    for number, spec in (partials or {}).items():
+        amount = spec.get("amountMinor") if isinstance(spec, dict) else None
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+            raise Problem(422, "VALIDATION_FAILED", f"Partial payment of {number}: amountMinor must be a positive whole number of minor units", rule_ref="F7-07")
+        out[number] = {"amountMinor": amount, "reason": (spec.get("reason") or "").strip()}
+    if invoice_numbers and (outside := sorted(set(out) - set(invoice_numbers))):
+        raise Problem(422, "VALIDATION_FAILED", f"Partial amounts name invoices outside the run's selection: {', '.join(outside)}", rule_ref="F7-07")
+    return out
 
 
 def payment_proposal(session: Session, run_date: date, include_not_due: bool = False, supplier_codes: Optional[list[str]] = None,
-                     invoice_numbers: Optional[list[str]] = None) -> dict:
+                     invoice_numbers: Optional[list[str]] = None, partials: Optional[dict] = None) -> dict:
     """F7-07 payment-due proposal: what a run on ``run_date`` would pay and skip (and why), the totals by supplier, MSME invoices
-    first. Writes nothing and calls no ERP."""
+    first. ``partials`` previews partial amounts ({invoice: {"amountMinor", "reason"}}). Writes nothing and calls no ERP."""
     with batch.reading(session):
-        return _payment_proposal(session, run_date, include_not_due, supplier_codes, invoice_numbers)
+        return _payment_proposal(session, run_date, include_not_due, supplier_codes, invoice_numbers, _partial_instructions(partials, invoice_numbers))
 
 
 def _payment_proposal(session: Session, run_date: date, include_not_due: bool, supplier_codes: Optional[list[str]],
-                      invoice_numbers: Optional[list[str]]) -> dict:
+                      invoice_numbers: Optional[list[str]], partials: Optional[dict] = None) -> dict:
+    partials = partials or {}
     invoices, selection = _due_invoices(session, run_date, include_not_due, supplier_codes, invoice_numbers)
     ctx = _PayContext(session, invoices, run_date)
     items, skipped = [], []
     for invoice in invoices:
-        decision = _assess_payment(session, invoice, run_date, preview=True, ctx=ctx)
+        decision = _assess_payment(session, invoice, run_date, preview=True, ctx=ctx, partial=partials.get(invoice.number))
         if "skip" in decision:
-            skipped.append({"invoice": invoice.number, "supplier": ctx.suppliers[invoice.supplier_id].code, "reason": decision["skip"]})
+            skipped.append({"invoice": invoice.number, "supplier": ctx.suppliers[invoice.supplier_id].code, "reason": decision["skip"],
+                            **({"code": decision["code"]} if decision.get("code") else {})})
             continue
         supplier = decision["supplier"]
         items.append({"invoice": invoice.number, "supplier": supplier.code, "supplierName": supplier.legal_name,
@@ -1539,7 +1660,12 @@ def _payment_proposal(session: Session, run_date: date, include_not_due: bool, s
                       "creditNotesMinor": decision["credit"], "debitNotesMinor": decision["debit_gross"],
                       "retentionMinor": invoice.retention_minor or 0, "discountMinor": decision["discount"], "tdsMinor": decision["tds"],
                       "tcsMinor": decision["tcs"], "tdsCertificate": decision["tds_certificate"], "tdsCertBaseMinor": decision["tds_cert_base"],
-                      "tdsBaseMinor": decision["tds_base"],
+                      "tdsBaseMinor": decision["tds_base"], "paidMinor": decision["paid"], "openMinor": decision["open"],
+                      "installment": decision["installment"], "partial": not decision["settles"], "partialReason": decision["partial_reason"],
+                      **({"tdsInrMinor": decision["tds_inr"], "taxBorneMinor": decision["borne"], "tdsBasis": decision["tax_detail"].get("basis"),
+                          "tdsRatePct": decision["tax_detail"].get("ratePct"), "returnForm": "27Q",
+                          "form15ca": decision["form15"].form15ca_ack_masked if decision["form15"] is not None else None}
+                         if decision["tax_detail"].get("section") else {}),
                       "amountMinor": decision["amount"], "currency": invoice.currency})
     items.sort(key=lambda i: (not i["msme"], i["dueDate"], i["invoice"]))
     by_supplier: dict[str, dict] = {}
@@ -1553,30 +1679,47 @@ def _payment_proposal(session: Session, run_date: date, include_not_due: bool, s
 
 
 def payment_run(session: Session, run_date: date, include_not_due: bool = False,
-                supplier_codes: Optional[list[str]] = None, invoice_numbers: Optional[list[str]] = None) -> dict:
-    """Pay the posted, unblocked invoices due by run_date; supplier_codes / invoice_numbers narrow the run (F7-07)."""
+                supplier_codes: Optional[list[str]] = None, invoice_numbers: Optional[list[str]] = None, partials: Optional[dict] = None) -> dict:
+    """Pay the posted, unblocked invoices due by run_date; supplier_codes / invoice_numbers narrow the run (F7-07); ``partials`` pays part of
+    named invoices ({invoice: {"amountMinor", "reason"}}, settlement.py)."""
     with batch.reading(session):
-        return _payment_run(session, run_date, include_not_due, supplier_codes, invoice_numbers)
+        return _payment_run(session, run_date, include_not_due, supplier_codes, invoice_numbers, _partial_instructions(partials, invoice_numbers))
+
+
+# A payment run that names an invoice (selection or partial amount) refuses the whole run, before anything is written or sent to the ERP, when the
+# named invoice fails one of these checks; an invoice that is merely due is skipped with the reason instead.
+NAMED_REFUSAL = {"FORM_15CA_REQUIRED": 409, "FORM_15CB_REQUIRED": 409, "TDS_195_NOT_DETERMINED": 409, "PARTIAL_NOT_ALLOWED": 422}
 
 
 def _payment_run(session: Session, run_date: date, include_not_due: bool, supplier_codes: Optional[list[str]],
-                 invoice_numbers: Optional[list[str]]) -> dict:
+                 invoice_numbers: Optional[list[str]], partials: Optional[dict] = None) -> dict:
+    from app.pic.services import nonresident_tax
+    partials = partials or {}
     p = principal(session)
     early_payment.lapse_missed(session, run_date)  # accepted early-payment offers whose pay-on date has passed
     invoices, selection = _due_invoices(session, run_date, include_not_due, supplier_codes, invoice_numbers, lock=True)
+    named = set(invoice_numbers or []) | set(partials)
+    for invoice in invoices:  # release checkpoint of the named invoices, before the first payment is written
+        if invoice.number in named:
+            check = _assess_payment(session, invoice, run_date, preview=True, partial=partials.get(invoice.number))
+            if check.get("code") in NAMED_REFUSAL:
+                raise Problem(NAMED_REFUSAL[check["code"]], check["code"], check["skip"], rule_ref=check.get("rule") or "F7-07", invoice=invoice.number)
     ctx = _PayContext(session, invoices, run_date)
     run_ref = next_number(session, "PAYMENT_RUN")
     paid, skipped = [], []
+    for number in sorted(set(partials) - {i.number for i in invoices}):
+        skipped.append({"invoice": number, "reason": "not open for payment: posted, unblocked, unpaid or partially paid and due by the run date"})
     for invoice in invoices:
-        decision = _assess_payment(session, invoice, run_date, preview=False, ctx=ctx)
+        decision = _assess_payment(session, invoice, run_date, preview=False, ctx=ctx, partial=partials.get(invoice.number))
         if "skip" in decision:
-            skipped.append({"invoice": invoice.number, "reason": decision["skip"]})
+            skipped.append({"invoice": invoice.number, "reason": decision["skip"], **({"code": decision["code"]} if decision.get("code") else {})})
             continue
         supplier, account, target = decision["supplier"], decision["account"], decision["target"]
         amount, discount, tds = decision["amount"], decision["discount"], decision["tds"]
         tds_rate, tds_certificate, tds_base = decision["tds_rate"], decision["tds_certificate"], decision["tds_base"]
         fx, tcs = decision["fx"], decision["tcs"]
         debit_list, debit_gross = decision["debit_list"], decision["debit_gross"]
+        settles, installment, detail = decision["settles"], decision["installment"], decision["tax_detail"]
         if account.verified_on and (run_date - account.verified_on).days <= 30:
             audit.record(session, "INVOICE", invoice.id, "BANK_CHANGE_RECENT_ALERT", object_ref=invoice.number,
                          reason="Bank details changed within 30 days of this payment", after={"verifiedOn": account.verified_on.isoformat()})
@@ -1585,17 +1728,25 @@ def _payment_run(session: Session, run_date: date, include_not_due: bool, suppli
                           tds_base_minor=tds_base if tds or tds_certificate else 0, tds_rate=tds_rate if tds or tds_certificate else None,
                           tds_certificate=tds_certificate, tds_cert_base_minor=decision["tds_cert_base"], tcs_minor=tcs,
                           value_date=run_date, status="COMPLETED", run_ref=run_ref, approved_by=p.user_id, created_by=p.user_id,
+                          installment_no=installment, settles_invoice=settles, partial_reason=decision["partial_reason"], debit_memo_minor=debit_gross,
+                          tax_borne_minor=decision["borne"], tax_detail=detail,
+                          **({"tds_inr_minor": decision["tds_inr"], "tds_base_inr_minor": decision["tds_base_inr"]} if detail.get("section") else {}),
                           **({"fx_rate": fx["fxRate"], "amount_group_minor": fx["amountGroupMinor"], "fx_gain_loss_minor": fx["gainLossMinor"]} if fx else {}))
         session.add(payment)
         session.flush()
+        ctx.installments[invoice.id] = installment
         sod.record(session, "PAYMENT_APPROVE", {"supplier_id": supplier.id, "invoice_id": invoice.id})
         # Paid in the run (the payment record and its unique index stop a second payment); the invoice becomes PAID and the
-        # process ends "reconciled" only when the ERP has posted the payment (_payment_posted).
-        invoice.payment_status = "IN_PAYMENT"
+        # process ends "reconciled" only when the ERP has posted the payment (_payment_posted). A partial payment leaves it PARTIALLY_PAID.
+        paid_before = int(invoice.paid_minor or 0)
+        invoice.paid_minor = paid_before + amount
+        invoice.payment_status = "IN_PAYMENT" if settles else "PARTIALLY_PAID"
         for note in debit_list:
             note.payment_status = "IN_PAYMENT"
-        if discount:
+        if discount and settles:
             early_payment.applied(session, invoice)
+        if decision["form15"] is not None:
+            nonresident_tax.use_form15(session, decision["form15"], payment)
         interest = (finance_controls.msme_interest_minor(session, amount, invoice.due_date, run_date)
                     if finance_controls.is_msme(session, supplier) else None)
         finance_controls.accrue_msme_interest(session, payment, invoice, supplier, interest, run_date)
@@ -1614,21 +1765,36 @@ def _payment_run(session: Session, run_date: date, include_not_due: bool, suppli
                                                **({"fxRate": str(fx["fxRate"]), "amountGroupMinor": fx["amountGroupMinor"], "fxGainLossMinor": fx["gainLossMinor"]}
                                                   if fx else {}),
                                                **({"scf": True} if invoice.payment_option == "SCF" else {}),
+                                               **({"installment": installment, "partial": not settles, "paidBeforeMinor": paid_before,
+                                                   "openAfterMinor": decision["open"] - amount} if installment > 1 or not settles else {}),
+                                               **({"withholdingSection": detail.get("sectionLabel"), "tdsInrMinor": decision["tds_inr"],
+                                                   "tdsBasis": detail.get("basis"), "tdsRatePct": detail.get("ratePct"),
+                                                   **({"taxBorneByCompanyMinor": decision["borne"]} if decision["borne"] else {}),
+                                                   **({"form15ca": decision["form15"].form15ca_ack_masked} if decision["form15"] is not None else {})}
+                                                  if detail.get("section") and tds else {}),
                                                **ind_construction.payment_payload(session, invoice)})
         link(session, "INVOICE", invoice.id, invoice.number, "PAYMENT", payment.id, payment.number, "paid_by")
         instance = _instance(session, invoice)
         if instance is not None:  # an invoice migrated from the legacy ERP has no process instance: it is paid all the same (D29)
-            workflow.step(session, instance, "F7-07", outcome=f"{run_ref}: {payment.number} {fmt_inr(payment.amount_minor)}")
+            part = "" if settles and installment == 1 else (f" (part {installment}, partial)" if not settles else f" (part {installment}, final)")
+            workflow.step(session, instance, "F7-07", outcome=f"{run_ref}: {payment.number} {fmt_inr(payment.amount_minor)}{part}")
+        if not settles:
+            audit.record(session, "INVOICE", invoice.id, "PARTIAL_PAYMENT", object_ref=invoice.number, reason=decision["partial_reason"],
+                         after={"payment": payment.number, "installment": installment, "amountMinor": amount, "paidMinor": invoice.paid_minor,
+                                "openAfterMinor": decision["open"] - amount, "tdsMinor": tds})
         integration.process(session, message)
         paid.append({"invoice": invoice.number, "payment": payment.number, "amountMinor": payment.amount_minor, "clearing": message.erp_doc_no,
                      "integrationStatus": message.status, "dueDate": invoice.due_date.isoformat(), "tdsMinor": tds, "discountMinor": discount,
                      "tcsMinor": tcs, "tdsCertificate": tds_certificate, "tdsCertBaseMinor": decision["tds_cert_base"], "tdsBaseMinor": tds_base,
                      "currency": invoice.currency, "msme": finance_controls.is_msme(session, supplier),
+                     "installment": installment, "partial": not settles, "openAfterMinor": decision["open"] - amount,
+                     **({"tdsInrMinor": decision["tds_inr"], "taxBorneMinor": decision["borne"], "tdsBasis": detail.get("basis")} if detail.get("section") else {}),
                      **({"msmeInterestMinor": interest} if interest else {}),
                      **({"error": message.last_error} if message.status != "POSTED" else {})})
     _pay_late_debit_notes(session, run_date, run_ref, include_not_due, supplier_codes, invoice_numbers, paid, skipped)
     audit.record(session, "PAYMENT_RUN", uuid.uuid5(uuid.NAMESPACE_URL, run_ref), "EXECUTED", object_ref=run_ref,
-                 after={"paid": len(paid), "skipped": skipped, **({"selection": selection} if selection else {})})
+                 after={"paid": len(paid), "skipped": skipped, **({"selection": selection} if selection else {}),
+                        **({"partials": {k: v["amountMinor"] for k, v in partials.items()}} if partials else {})})
     return {"run": run_ref, "paid": paid, "skipped": skipped, **({"selection": selection} if selection else {})}
 
 
@@ -2065,10 +2231,10 @@ def insights(session: Session, company_codes: Optional[list[str]] = None) -> dic
     suppliers = {s.id: s for s in session.execute(select(Supplier)).scalars()}
     ladder = {"overdue": 0, "0-7": 0, "8-30": 0, "31-60": 0, "60+": 0}
     for i in invoices:
-        if i.status == "POSTED" and i.payment_status == "UNPAID" and i.due_date:
+        if i.status == "POSTED" and i.payment_status in ("UNPAID", "PARTIALLY_PAID") and i.due_date:
             days = (i.due_date - today).days
             bucket = "overdue" if days < 0 else "0-7" if days <= 7 else "8-30" if days <= 30 else "31-60" if days <= 60 else "60+"
-            ladder[bucket] += finance_controls.group_minor(i, i.gross_minor)
+            ladder[bucket] += finance_controls.group_minor(i, i.gross_minor - (i.paid_minor or 0))
     payments = session.execute(scoped(select(Payment, Invoice).join(Invoice, Invoice.id == Payment.invoice_id).where(Payment.status == "COMPLETED"),
                                       Invoice.company_code)).all()
     weighted = sum(Decimal((pay.value_date - inv.invoice_date).days) * finance_controls.group_minor(inv, pay.amount_minor) for pay, inv in payments)
@@ -2097,7 +2263,8 @@ def insights(session: Session, company_codes: Optional[list[str]] = None) -> dic
                          "bucket": "0-30" if age <= 30 else "31-90" if age <= 90 else "90+"})
     ageing = {b: sum(a["accrualMinor"] for a in accruals if a["bucket"] == b) for b in ("0-30", "31-90", "90+")}
     msme_ids = {sid for sid, sup in suppliers.items() if finance_controls.is_msme(session, sup)}  # once per supplier, not once per invoice (D43)
-    msme_unpaid = [i for i in invoices if i.status == "POSTED" and i.payment_status == "UNPAID" and i.due_date and i.supplier_id in msme_ids]
+    msme_unpaid = [i for i in invoices if i.status == "POSTED" and i.payment_status in ("UNPAID", "PARTIALLY_PAID") and i.due_date
+                   and i.supplier_id in msme_ids]
     msme_paid = [(pay, inv) for pay, inv in payments if inv.supplier_id in msme_ids]
     msme_late = [(pay, inv) for pay, inv in msme_paid if inv.due_date and pay.value_date > inv.due_date]
     exception_age = {"0-2": 0, "3-7": 0, "8-30": 0, "30+": 0}

@@ -44,8 +44,9 @@ type Sections = Record<string, { label: string | null; ratePct: number }>;
 // ---------------------------------------------------------------- TDS challans and the deducted-against-deposited reconciliation
 type Challan = { id: string; companyCode: string; fiscalYear: string; quarter: string; section: string; challanNo: string; bsrCode: string; depositDate: string;
   amountMinor: number; status: 'RECORDED' | 'VOID'; note: string | null };
-type ReconRow = { companyCode: string; section: string; deductedMinor: number; depositedMinor: number; challans: number; differenceMinor: number; status: string };
-type Recon = { fiscalYear: string; quarter: string; from: string; to: string; rows: ReconRow[]; deductedMinor: number; depositedMinor: number; differenceMinor: number; reconciled: boolean };
+type ReconRow = { companyCode: string; section: string; returnForm?: '26Q' | '27Q'; deductedMinor: number; depositedMinor: number; challans: number; differenceMinor: number; status: string };
+type Recon = { fiscalYear: string; quarter: string; from: string; to: string; rows: ReconRow[]; deductedMinor: number; depositedMinor: number; differenceMinor: number; reconciled: boolean;
+  byReturnForm?: Partial<Record<'26Q' | '27Q', { deductedMinor: number; depositedMinor: number }>> };
 
 const DIFFERENCE_TEXT: Record<string, string> = { RECONCILED: 'deducted and deposited agree', SHORT_DEPOSITED: 'still to be deposited', EXCESS_DEPOSITED: 'deposited in excess' };
 
@@ -77,10 +78,19 @@ export function ChallansTab() {
               <Kpi label="Status" value={recon.data.reconciled ? 'Reconciled' : 'Open'} tone={recon.data.reconciled ? 'good' : 'warn'}
                 hint={recon.data.rows.length ? `${recon.data.rows.length} company code and section line(s)` : 'no TDS deducted in the quarter'} />
             </div>
+            {recon.data.byReturnForm && (
+              <p className="text-xs text-slate-600" aria-label="By return form">
+                {(['26Q', '27Q'] as const).map((form) => {
+                  const f = recon.data?.byReturnForm?.[form];
+                  return f ? `${form} (${form === '26Q' ? 'residents' : 'non-residents'}): deducted ${inr(f.deductedMinor)} · deposited ${inr(f.depositedMinor)}` : null;
+                }).filter(Boolean).join('  |  ')}
+              </p>
+            )}
             <DataTable<ReconRow & { id: string }> rows={recon.data.rows.map((r) => ({ ...r, id: `${r.companyCode}-${r.section}` }))} empty="No TDS was deducted and no challan was deposited in this quarter"
               caption="TDS deducted against deposited by company code and section" columns={[
                 { key: 'companyCode', header: 'Company code' },
                 { key: 'section', header: 'Section', render: (r) => <span className="font-mono text-xs">{r.section}</span> },
+                { key: 'returnForm', header: 'Return', render: (r) => r.returnForm ?? '–' },
                 { key: 'deductedMinor', header: 'Deducted', align: 'right', render: (r) => inr(r.deductedMinor) },
                 { key: 'depositedMinor', header: 'Deposited', align: 'right', render: (r) => inr(r.depositedMinor) },
                 { key: 'challans', header: 'Challans', align: 'right' },
@@ -194,8 +204,8 @@ function VoidChallanDialog({ challan, onClose }: { challan: Challan; onClose: ()
 
 // ---------------------------------------------------------------- Form 16A data
 type Cert16A = { form: string; financialYear: string; assessmentYear: string; quarter: string; companyCode: string; certificateNo: string | null;
-  deductor: { tan: string | null; pan: string | null; name: string | null }; deductee: { supplier: string; name: string; pan: string };
-  section: string; sectionLabel: string | null;
+  deductor: { tan: string | null; pan: string | null; name: string | null }; deductee: { supplier: string; name: string; pan: string; residency?: string; country?: string | null };
+  section: string; sectionLabel: string | null; returnForm?: '26Q' | '27Q';
   payments: { payment: string; invoice: string; dateOfPaymentCredit: string; amountPaidCreditedMinor: number; ratePct: string | null; taxDeductedMinor: number; certificate197: string | null }[];
   totals: { amountPaidCreditedMinor: number; taxDeductedMinor: number; taxDepositedMinor: number };
   challans: { bsrCode: string; challanSerialNo: string; depositDate: string; challanAmountMinor: number }[]; missingMandatory: string[] };
@@ -212,6 +222,12 @@ export function Form16ATab() {
   const data = useApi<{ fiscalYear: string; quarter: string; certificates: Cert16A[]; count: number }>(loaded);
   const fileBase = `FORM16A_${period.fiscalYear}_${period.quarter}`;
   const download = (format: 'json' | 'csv') => { setError(null); downloadFile(`/finance/tds-certificates/data?${base}&format=${format}`, `${fileBase}.${format}`).catch(setError); };
+  // Form 16A information copy (PDF) of one deductee for the quarter shown; the statutory certificate comes from TRACES.
+  const downloadPdf = (code: string, fiscalYear: string, quarter: string) => {
+    setError(null);
+    downloadFile(`/finance/tds-certificates/pdf?fiscal_year=${fiscalYear}&quarter=${quarter}&supplier=${encodeURIComponent(code)}`,
+      `FORM16A_INFO_${code}_${fiscalYear}_${quarter}.pdf`).catch(setError);
+  };
   const missing = (data.data?.certificates ?? []).filter((c) => c.missingMandatory.length);
   return (
     <div className="space-y-4">
@@ -241,12 +257,20 @@ export function Form16ATab() {
           )}
           {!data.data.certificates.length ? <Empty title="No TDS was deducted in this quarter" hint="A payment with TDS or a lower-deduction certificate puts the deductee here." /> : (
             <div className="space-y-2">
+              <p className="text-xs text-slate-600" role="note">16A PDF: information copy — the statutory Form 16A must be downloaded from TRACES.</p>
               {data.data.certificates.map((c) => (
                 <details key={`${c.companyCode}-${c.deductee.supplier}-${c.section}`} className="rounded-lg border border-slate-200">
                   <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-3 py-2 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB]">
-                    <span><span className="font-medium">{c.deductee.supplier} · {c.deductee.name}</span> <span className="text-xs text-slate-500">PAN {c.deductee.pan} · {c.section}{c.sectionLabel ? ` · ${c.sectionLabel}` : ''} · company {c.companyCode}</span></span>
-                    <span className="tabular-nums">paid {inr(c.totals.amountPaidCreditedMinor)} · deducted <span className="font-semibold">{inr(c.totals.taxDeductedMinor)}</span> · deposited {inr(c.totals.taxDepositedMinor)}
-                      {c.missingMandatory.length > 0 && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-inset ring-amber-200">data missing</span>}</span>
+                    <span><span className="font-medium">{c.deductee.supplier} · {c.deductee.name}</span> <span className="text-xs text-slate-500">PAN {c.deductee.pan} · {c.section}{c.sectionLabel ? ` · ${c.sectionLabel}` : ''} · company {c.companyCode}
+                      {c.returnForm ? ` · return ${c.returnForm}` : ''}{c.deductee.residency === 'NON_RESIDENT' ? ` · non-resident${c.deductee.country ? ` (${c.deductee.country})` : ''}` : ''}</span></span>
+                    <span className="flex flex-wrap items-center gap-2 tabular-nums">
+                      <span>paid {inr(c.totals.amountPaidCreditedMinor)} · deducted <span className="font-semibold">{inr(c.totals.taxDeductedMinor)}</span> · deposited {inr(c.totals.taxDepositedMinor)}
+                        {c.missingMandatory.length > 0 && <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-inset ring-amber-200">data missing</span>}</span>
+                      <Button aria-label={`Download the Form 16A information copy of ${c.deductee.supplier} as PDF`} title="Information copy — the statutory Form 16A must be downloaded from TRACES"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); downloadPdf(c.deductee.supplier, data.data?.fiscalYear ?? period.fiscalYear, data.data?.quarter ?? period.quarter); }}>
+                        16A PDF (information copy)
+                      </Button>
+                    </span>
                   </summary>
                   <div className="space-y-2 border-t border-slate-100 p-3">
                     <p className="text-xs text-slate-600">

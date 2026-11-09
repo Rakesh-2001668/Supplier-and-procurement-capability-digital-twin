@@ -190,7 +190,14 @@ def invoice(session: Session, inv: Invoice) -> dict:
                                                    "poLine": po_refs.get(x.po_line_id, (None, None))[0]}) for x in lines], "exceptions": rows(exceptions),
                            "creditNotes": rows(notes), "payments": rows(payments), "process": _process(session, "INVOICE", inv),
                            "debitNotes": _debit_notes(session, inv),
+                           "settlement": _settlement(session, inv),
                            "lineage": lineage(session, "INVOICE", inv.id)})
+
+
+def _settlement(session: Session, inv: Invoice) -> dict:
+    """Paid and open amounts and the payments (parts) of the invoice (services/settlement.py)."""
+    from app.pic.services import settlement
+    return settlement.position(session, inv)
 
 
 def _debit_notes(session: Session, inv: Invoice) -> list[dict]:

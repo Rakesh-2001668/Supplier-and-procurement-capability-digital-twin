@@ -780,7 +780,7 @@ def block(session: Session, supplier: Supplier, reason: str) -> dict:
     # A blocked supplier is not paid: every unpaid invoice gets a payment block (the payment run also skips blocked
     # suppliers); only an explicit unblock lifts the blocks set here.
     payment_blocked = []
-    for invoice in session.execute(select(Invoice).where(Invoice.supplier_id == supplier.id, Invoice.payment_status == "UNPAID",
+    for invoice in session.execute(select(Invoice).where(Invoice.supplier_id == supplier.id, Invoice.payment_status.in_(("UNPAID", "PARTIALLY_PAID")),
                                                          Invoice.status.notin_(("REJECTED", "PAID"))).order_by(Invoice.number)).scalars():
         if not invoice.payment_block:
             invoice.payment_block = True
@@ -827,7 +827,7 @@ def unblock(session: Session, supplier: Supplier, reason: str) -> dict:
     lifted = []
     for number in ((blocked.after or {}).get("paymentBlocked") or []) if blocked is not None else []:
         invoice = session.execute(select(Invoice).where(Invoice.number == number, Invoice.supplier_id == supplier.id)).scalar_one_or_none()
-        if invoice is None or not invoice.payment_block or invoice.payment_status != "UNPAID" or invoice.status != "POSTED":
+        if invoice is None or not invoice.payment_block or invoice.payment_status not in ("UNPAID", "PARTIALLY_PAID") or invoice.status != "POSTED":
             continue  # not yet posted: matching and posting decide the block; paid or rejected: nothing to lift
         if invoice.duplicate_of or session.execute(select(InvoiceException.id).where(InvoiceException.invoice_id == invoice.id,
                                                                                     InvoiceException.status == "OPEN")).first():
@@ -837,7 +837,7 @@ def unblock(session: Session, supplier: Supplier, reason: str) -> dict:
         audit.record(session, "INVOICE", invoice.id, "PAYMENT_BLOCK_LIFTED", object_ref=invoice.number, reason=reason,
                      before={"paymentBlock": True}, after={"paymentBlock": False, "cause": "SUPPLIER_UNBLOCKED"})
     # Payment blocks that came with the ERP load (no BLOCKED audit event lists them) are lifted the same way: posted, unpaid, nothing else explains them.
-    for invoice in session.execute(select(Invoice).where(Invoice.supplier_id == supplier.id, Invoice.status == "POSTED", Invoice.payment_status == "UNPAID",
+    for invoice in session.execute(select(Invoice).where(Invoice.supplier_id == supplier.id, Invoice.status == "POSTED", Invoice.payment_status.in_(("UNPAID", "PARTIALLY_PAID")),
                                                          Invoice.payment_block.is_(True), Invoice.duplicate_of.is_(None))).scalars().all():
         if session.execute(select(InvoiceException.id).where(InvoiceException.invoice_id == invoice.id, InvoiceException.status == "OPEN")).first():
             continue

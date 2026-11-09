@@ -29,7 +29,7 @@ from app.pic.services import invitations, master_changes, role_admin
 from app.pic.services.common import principal
 
 MAX_IMPORT_ROWS = 500
-SENSITIVE_ROLES = {"TENANT_ADMIN", "FINANCE_CONTROLLER", "CPO"}
+SENSITIVE_ROLES = {"TENANT_ADMIN", "FINANCE_CONTROLLER", "CFO", "CPO"}
 
 
 def _hours(name: str, default: int) -> int:

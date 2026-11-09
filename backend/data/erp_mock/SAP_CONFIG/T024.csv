@@ -1,0 +1,11 @@
+TENANT,EKGRP,EKNAM,PIC_EKORG
+AXN,G01,Direct Steel & Heavy Forgings,PO10
+AXN,G02,Machined Components & Castings,PO10
+AXN,G03,Indirect Tools & MRO Supplies,PO20
+AXN,G04,EV Battery & High-Voltage Systems,PO30
+AXN,G05,General Plant Consumables & Services,1000
+KAC,G01,Ferrous & Non-Ferrous Castings,PO21
+KAC,G02,Precision CNC Tooling & Cutters,PO20
+KAC,G03,Chassis Stamping & Sub-Assemblies,PO10
+KAC,G04,Electrical Systems & Wiring Harness,PO10
+KAC,G05,Plant Maintenance & Capital Spares,1000

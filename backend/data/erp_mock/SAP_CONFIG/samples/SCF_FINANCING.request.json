@@ -1,0 +1,55 @@
+{
+  "message": {
+    "type": "SCF_FINANCING",
+    "key": "SCF|AXN|1000|KD002|0412",
+    "payload": {
+      "invoice": "KD/26-27/0412",
+      "invoiceErp": "5100004425",
+      "supplier": "KD002",
+      "companyCode": "1000",
+      "grossMinor": 59000000,
+      "maturity": "2027-05-15",
+      "financier": "PROGRAMME",
+      "offer": "00000000-0000-0000-0000-000000000001"
+    }
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/sap/opu/odata/sap/ZAPI_JOURNAL_ENTRY_SRV/A_JournalEntry",
+      "body": {
+        "CompanyCode": "1000",
+        "AccountingDocumentType": "KA",
+        "DocumentDate": "/Date(1806537600000)/",
+        "PostingDate": "/Date(1806537600000)/",
+        "DocumentReferenceID": "KD/26-27/0412",
+        "DocumentHeaderText": "SCF|AXN|1000|KD002|0412",
+        "TransactionCurrency": "INR",
+        "to_Item": {
+          "results": [
+            {
+              "JournalEntryItem": "1",
+              "PostingKey": "21",
+              "Supplier": "200081",
+              "DebitCreditCode": "S",
+              "AmountInTransactionCurrency": "590000.00",
+              "AssignmentReference": "5100004425",
+              "DocumentItemText": "SCF KD/26-27/0412 PROGRAMME"
+            },
+            {
+              "JournalEntryItem": "2",
+              "PostingKey": "31",
+              "Supplier": "9800001",
+              "DebitCreditCode": "H",
+              "AmountInTransactionCurrency": "590000.00",
+              "DueCalculationBaseDate": "/Date(1810339200000)/",
+              "PaymentMethod": "R",
+              "AssignmentReference": "5100004425",
+              "DocumentItemText": "SCF KD/26-27/0412 PROGRAMME"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

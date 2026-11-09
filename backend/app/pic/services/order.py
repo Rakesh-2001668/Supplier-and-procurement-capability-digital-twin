@@ -242,9 +242,11 @@ def _create_po(session: Session, pr: Requisition, supplier_id: uuid.UUID, items,
     )
     session.add(po)
     session.flush()
-    # SEC-AZ: the buyer must be assigned to the company code and every plant of the order (PO_CREATE; category for tenants whose rule checks it)
+    # SEC-AZ: the buyer must be assigned to the company code, every plant and (for tenants whose ABAC rule checks it, D3) every category of the order
+    categories = list(dict.fromkeys(_category_of(session, line) for line, _ in items)) or [None]
     for line_plant in dict.fromkeys([pr.plant] + [line.plant for line, _ in items]):
-        abac.guard(session, "PO_CREATE", po, plant=line_plant, category=_category_of(session, items[0][0]))
+        for line_category in categories:
+            abac.guard(session, "PO_CREATE", po, plant=line_plant, category=line_category)
     sod.guard(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
     sod.record(session, "PO_CREATE", {"supplier_id": supplier.id, "po_id": po.id})
     po_controls.record_one_time_vendor(session, po, one_time_vendor_reason, p.actor)
@@ -720,9 +722,11 @@ def _release(session: Session, po: PurchaseOrder, ai_ref: Optional[str] = None, 
         raise Problem(422, "PO_SUPPLIER_BLOCKED", f"{supplier.code} is blocked", rule_ref="SLM-BLOCK")
     release_lines = lines_of(session, po)
     po_controls.check_mandatory(session, po, release_lines)
-    category, _ = po_controls.category_and_status(session, po, release_lines) if release_lines else (None, None)
+    # SEC-AZ (agents: their autonomy limits): company code, every plant, every category (when the tenant's ABAC rule checks it, D3), value limit
+    categories = list(dict.fromkeys(po_controls.category_and_status(session, po, [line])[0] for line in release_lines)) or [None]
     for line_plant in dict.fromkeys([po.plant] + [line.plant for line in release_lines]):
-        abac.guard(session, "PO_RELEASE", po, plant=line_plant, category=category)   # SEC-AZ (agents: their autonomy limits)
+        for line_category in categories:
+            abac.guard(session, "PO_RELEASE", po, plant=line_plant, category=line_category)
     from app.pic.services import contract as contract_svc
     contract_checks = contract_svc.check_release(session, po, release_lines)       # B3: the contract may have been used up meanwhile
     if contract_checks:

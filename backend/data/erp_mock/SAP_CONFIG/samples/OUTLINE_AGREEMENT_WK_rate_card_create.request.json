@@ -1,0 +1,65 @@
+{
+  "message": {
+    "type": "OUTLINE_AGREEMENT",
+    "payload": {
+      "contract": "RC-7101",
+      "version": 1,
+      "type": "RATE_CARD",
+      "supplier": "KD002",
+      "companyCode": "1000",
+      "currency": "INR",
+      "validFrom": "2027-04-01",
+      "validTo": "2028-03-31",
+      "paymentTerms": "N45",
+      "incoterms": "FCA Coimbatore",
+      "targetValueMinor": 30000000,
+      "lines": [
+        {
+          "line": 10,
+          "material": null,
+          "description": "Tool polishing, per hour",
+          "plant": "P100",
+          "uom": "H",
+          "targetQty": "100.000",
+          "priceMinor": 300000
+        }
+      ]
+    }
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/sap/opu/odata/sap/API_PURCHASECONTRACT_PROCESS_SRV/A_PurchaseContract",
+      "body": {
+        "PurchaseContractType": "WK",
+        "CompanyCode": "1000",
+        "PurchasingOrganization": "PO10",
+        "PurchasingGroup": "G01",
+        "Supplier": "200081",
+        "DocumentCurrency": "INR",
+        "ValidityStartDate": "/Date(1806537600000)/",
+        "ValidityEndDate": "/Date(1838073600000)/",
+        "PaymentTerms": "Z045",
+        "IncotermsClassification": "FCA",
+        "IncotermsLocation1": "Coimbatore",
+        "CorrespncExternalReference": "1000|OA|QC-6",
+        "PurchaseContractTargetAmount": "300000.00",
+        "to_PurchaseContractItem": {
+          "results": [
+            {
+              "PurchaseContractItem": "10",
+              "PurchaseContractItemText": "Tool polishing, per hour",
+              "Plant": "P100",
+              "TargetQuantity": "100.000",
+              "OrderQuantityUnit": "H",
+              "ContractNetPriceAmount": "3000.00",
+              "NetPriceQuantity": "1",
+              "MaterialGroup": "SERVICES",
+              "AccountAssignmentCategory": "U"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

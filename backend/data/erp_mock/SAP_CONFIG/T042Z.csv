@@ -1,0 +1,6 @@
+LAND1,ZLSCH,TEXT1,PIC_RAIL
+IN,N,NEFT transfer,NEFT
+IN,R,RTGS transfer,RTGS
+IN,I,IMPS transfer,IMPS
+IN,T,Host-to-host bank transfer,H2H
+IN,C,Cheque,CHEQUE

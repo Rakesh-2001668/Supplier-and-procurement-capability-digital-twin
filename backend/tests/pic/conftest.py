@@ -92,6 +92,13 @@ def login(client):
 def pytest_collection_modifyitems(config, items):
     """Dataset-pack tests (test_datasets_*.py) add data on top of the signature case: run them after every other test so
     the signature-case assertions always see the base seed."""
-    # test_datasets_contracts_kac builds on the KAC pack of test_datasets_erp_client_kac (whose fixture expects to be the one that loads it): last.
+    # test_datasets_contracts_kac builds on the KAC pack of test_datasets_erp_client_kac (whose fixture expects to be the one that loads it): last
+    # but one. test_datasets_approval_bands turns the invoice value bands on in AXN and KAC (as pack approval_bands, the last of PACKS): very last,
+    # so no other pack approves an invoice of 10 lakh or more under them.
+    # test_tax_195_partial runs its whole flow in AXN with its own vendors and adds seven first-pass-matched invoices (January 2028): after the
+    # other modules, so the signature-case KPI assertions (first-pass match 85.7 %, test_wave1_spend_kpi and test_workspace_api) see the base seed.
+    late = ("test_tax_195_partial",)
     items.sort(key=lambda item: (item.module.__name__.rsplit(".", 1)[-1].startswith("test_datasets_"),
-                                 item.module.__name__.rsplit(".", 1)[-1] == "test_datasets_contracts_kac"))
+                                 item.module.__name__.rsplit(".", 1)[-1] in late,
+                                 item.module.__name__.rsplit(".", 1)[-1] in ("test_datasets_contracts_kac", "test_datasets_approval_bands"),
+                                 item.module.__name__.rsplit(".", 1)[-1] == "test_datasets_approval_bands"))

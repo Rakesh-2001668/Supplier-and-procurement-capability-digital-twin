@@ -674,11 +674,27 @@ def post_invoice(ref: str, p: Principal = Depends(require("invoice:post")),
         return idem.store({**result, "replayed": False})
 
 
+class PartialPaymentIn(BaseModel):
+    invoice: str = Field(min_length=1, max_length=30)
+    amountMinor: int = Field(gt=0, description="Cash to pay now in the invoice currency (minor units); less than the open amount = a partial payment")
+    reason: str = Field(default="", max_length=500, description="Why only part of the invoice is paid (rule PARTIAL-PAYMENT.reasonMinLength)")
+
+
 class PaymentRunIn(BaseModel):
     run_date: date
     include_not_due: bool = False
     supplier_codes: Optional[list[str]] = Field(None, max_length=200)
     invoice_numbers: Optional[list[str]] = Field(None, max_length=500)
+    partials: Optional[list[PartialPaymentIn]] = Field(None, max_length=500, description="Partial amounts of named invoices (settlement)")
+
+
+def partial_map(partials: Optional[list[PartialPaymentIn]]) -> dict:
+    out = {}
+    for item in partials or []:
+        if item.invoice in out:
+            raise Problem(422, "VALIDATION_FAILED", f"Invoice {item.invoice} has more than one partial amount in the run", rule_ref="F7-07")
+        out[item.invoice] = {"amountMinor": item.amountMinor, "reason": item.reason}
+    return out
 
 
 @router.post("/payments/runs", tags=["F7 Invoice"])
@@ -687,7 +703,8 @@ def payment_run(body: PaymentRunIn, p: Principal = Depends(require("payment:run"
         idem = idempotent(s, "POST /v1/payments/runs", key, body)
         if idem.replay:
             return idem.replay
-        return idem.store(payables.payment_run(s, body.run_date, body.include_not_due, body.supplier_codes, body.invoice_numbers))
+        return idem.store(payables.payment_run(s, body.run_date, body.include_not_due, body.supplier_codes, body.invoice_numbers,
+                                               partial_map(body.partials)))
 
 
 @router.get("/purchase-orders/{ref}/retention", tags=["F7 Invoice"])

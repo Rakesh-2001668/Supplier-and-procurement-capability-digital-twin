@@ -1,0 +1,63 @@
+{
+  "message": {
+    "type": "OUTLINE_AGREEMENT",
+    "payload": {
+      "contract": "SA-5521",
+      "version": 1,
+      "type": "SCHEDULING_AGREEMENT",
+      "supplier": "KD002",
+      "companyCode": "1000",
+      "currency": "INR",
+      "validFrom": "2027-04-01",
+      "validTo": "2028-03-31",
+      "paymentTerms": "N45",
+      "incoterms": "FCA Coimbatore",
+      "targetValueMinor": 0,
+      "lines": [
+        {
+          "line": 10,
+          "material": "DC-330",
+          "description": "Die-cast housing DC-330",
+          "plant": "P100",
+          "uom": "EA",
+          "targetQty": "24000",
+          "priceMinor": 41800
+        }
+      ]
+    }
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "path": "/sap/opu/odata/sap/API_SCHED_AGRMT_PROCESS_SRV/A_SchAgrmtHeader",
+      "body": {
+        "PurchasingDocumentType": "LP",
+        "CompanyCode": "1000",
+        "PurchasingOrganization": "PO10",
+        "PurchasingGroup": "G01",
+        "Supplier": "200081",
+        "DocumentCurrency": "INR",
+        "ValidityStartDate": "/Date(1806537600000)/",
+        "ValidityEndDate": "/Date(1838073600000)/",
+        "PaymentTerms": "Z045",
+        "IncotermsClassification": "FCA",
+        "IncotermsLocation1": "Coimbatore",
+        "CorrespncExternalReference": "1000|OA|QC-6",
+        "to_SchAgrmtItem": {
+          "results": [
+            {
+              "SchedulingAgreementItem": "10",
+              "PurchasingDocumentItemText": "Die-cast housing DC-330",
+              "Material": "DC-330",
+              "Plant": "P100",
+              "TargetQuantity": "24000.000",
+              "OrderQuantityUnit": "EA",
+              "NetPriceAmount": "418.00",
+              "NetPriceQuantity": "1"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

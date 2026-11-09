@@ -131,12 +131,17 @@ def split_tax(tax_minor: int, supply: Optional[str]) -> dict:
 
 def reverse_charge(session: Session, supplier, hsn_code: Optional[str], on: Optional[date] = None) -> bool:
     """Whether GST on this supply is paid by the buyer under reverse charge (rule set GST-RCM, tenant data: ``hsnPrefixes`` of the notified goods and
-    services, ``unregisteredSupplier`` for a supplier without a GSTIN). Without the rule no supply is reverse charge."""
+    services, ``unregisteredSupplier`` for a supplier without a GSTIN). Without the rule no supply is reverse charge, except an import of services:
+    a service (SAC chapter 99) from a supplier located outside India is always reverse charge (IGST Act s.5(3), notification 10/2017-Integrated
+    Tax (Rate) entry 1); the foreign supplier charges no Indian GST. Imported goods are not: their IGST is paid at customs on the bill of entry."""
+    digits = digits_of(hsn_code)
+    country = getattr(supplier, "country", None)
+    if digits and digits.startswith("99") and country and country not in ("IN", "ZZ"):  # ZZ: country not known (legacy spend suppliers)
+        return True
     try:
         body = rules.resolve(session, RCM_RULE_KEY, on).body
     except Problem:
         return False
-    digits = digits_of(hsn_code)
     if digits and any(digits.startswith(str(prefix)) for prefix in body.get("hsnPrefixes") or []):
         return True
     return bool(body.get("unregisteredSupplier")) and not supplier.gstin_enc

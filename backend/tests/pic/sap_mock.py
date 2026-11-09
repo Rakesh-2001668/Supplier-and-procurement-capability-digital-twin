@@ -9,7 +9,14 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 NUMBERS = {"A_PurchaseOrder": ("PurchaseOrder", 4500000100), "A_SupplierInvoice": ("SupplierInvoice", 5105600000),
            "A_MaterialDocumentHeader": ("MaterialDocument", 4900000000), "A_BusinessPartner": ("BusinessPartner", 100200),
-           "A_PurchaseRequisitionHeader": ("PurchaseRequisition", 10000100)}
+           "A_PurchaseRequisitionHeader": ("PurchaseRequisition", 10000100),
+           # outline agreements, payment reversal (customer payment service), SCF journal entry (customer journal service)
+           "A_PurchaseContract": ("PurchaseContract", 4600000100), "A_SchAgrmtHeader": ("SchedulingAgreement", 5500000100),
+           "A_VendorPaymentReversal": ("ReverseDocument", 1500009100), "A_JournalEntry": ("AccountingDocument", 100000100)}
+# Deep-insert navigations whose rows the mock keeps as their own entity set (with the parent's number), so $filter reads and key PATCHes find them.
+CHILDREN = {"to_PurchaseContractItem": ("A_PurchaseContractItem", "PurchaseContract"), "to_SchAgrmtItem": ("A_SchAgrmtItem", "SchedulingAgreement")}
+# Entity sets whose PATCH by key is applied to the stored entity (the outline agreement change and close write the new reference there).
+PATCHED = ("A_PurchaseContract", "A_SchAgrmtHeader", "A_PurchaseContractItem", "A_SchAgrmtItem")
 
 
 class SapMock:
@@ -19,6 +26,7 @@ class SapMock:
         self.failures: list[tuple[int, str, dict]] = []  # queued (status, body, headers) answers for the next requests
         self.get_data: dict[str, object] = {}          # entity set -> list of entities returned by a GET (with or without $filter)
         self.idocs: list[str] = []
+        self.patched: list[tuple[str, dict, dict]] = []  # (entity set, key, changes) of the PATCHes applied to stored entities
         self.token = uuid.uuid4().hex
         self.cookie = uuid.uuid4().hex
         self.counter = {k: v[1] for k, v in NUMBERS.items()}
@@ -86,7 +94,8 @@ class SapMock:
                 results = []
                 if found:
                     field, value = found.groups()
-                    results = [dict(body, **{NUMBERS[name][0]: self._number_of(body)}) for name, body in mock.created if name == entity and body.get(field) == value]
+                    results = [dict(body, **({NUMBERS[name][0]: self._number_of(body)} if name in NUMBERS else {}))
+                               for name, body in mock.created if name == entity and body.get(field) == value]
                     results = results or [r for r in mock.get_data.get(entity, []) if r.get(field) == value]
                 return self._send(200, json.dumps({"d": {"results": results}}), headers)
 
@@ -97,16 +106,37 @@ class SapMock:
                 entity = path.rstrip("/").rsplit("/", 1)[-1]
                 body = json.loads(raw or "{}")
                 if "(" in entity:
+                    keyed = re.match(r"(\w+)\((.*)\)$", entity)
+                    if keyed and keyed.group(1) in PATCHED:
+                        self._patch(keyed.group(1), dict(re.findall(r"(\w+)='([^']*)'", keyed.group(2))) or {"_number": keyed.group(2).strip("'")}, body)
                     return self._send(204, "")
+                if entity in CHILDREN:                       # POST to a navigation: a new item of an existing agreement
+                    child_set, _parent = CHILDREN[entity]
+                    mock.created.append((child_set, body))
+                    return self._send(201, json.dumps({"d": body}))
                 number_field, _ = NUMBERS.get(entity, (None, None))
                 response = dict(body)
                 if number_field:
                     mock.counter[entity] += 1
                     body["_number"] = str(mock.counter[entity])
-                    response = {number_field: body["_number"], **({"FiscalYear": "2026"} if entity == "A_SupplierInvoice" else {}),
+                    response = {number_field: body["_number"], **({"FiscalYear": "2026"} if entity in ("A_SupplierInvoice", "A_VendorPaymentReversal", "A_JournalEntry") else {}),
                                 **({"MaterialDocumentYear": "2026"} if entity == "A_MaterialDocumentHeader" else {})}
+                    for nav, (child_set, parent) in CHILDREN.items():
+                        rows = body.get(nav)
+                        for row in (rows.get("results") if isinstance(rows, dict) else rows) or []:
+                            mock.created.append((child_set, {**row, parent: body["_number"]}))
                 mock.created.append((entity, body))
                 return self._send(201, json.dumps({"d": response}))
+
+            def _patch(self, entity, key, changes):
+                for name, body in mock.created:
+                    if name != entity:
+                        continue
+                    own = {"_number": body.get("_number")} if "_number" in key else {k: str(body.get(k)) for k in key}
+                    if own == {k: str(v) for k, v in key.items()}:
+                        body.update(changes)
+                        mock.patched.append((entity, key, changes))
+                        return
 
             def _batch(self, raw):
                 gets = raw.count("GET ")

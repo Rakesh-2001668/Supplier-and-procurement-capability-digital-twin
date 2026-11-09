@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Button, Card, DataTable, Dialog, Empty, Field, Input, LinkButton, Loading, PageHeader, ProblemBox, Select, StatusChip } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
-import { date, inr, qty } from '@/lib/pic/format';
+import type { ApiError } from '@/lib/pic/api';
+import { date, inr, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand, useList } from '@/lib/pic/hooks';
-import { BlockChip, CaptureInvoiceDialog, hasRole, InvoiceRow, MatchChip, today, useSessionUser } from './_components';
+import { BlockChip, CaptureInvoiceDialog, hasRole, InvoiceRow, isPositive, MatchChip, today, useSessionUser } from './_components';
 import { ConsignmentSettlementDialog, PaymentFilesCard, SETTLE_ROLES } from './_ops';
 
 type Filters = { status: string; supplier: string; q: string; company_code: string; date_from: string; date_to: string; due_from: string; due_to: string;
@@ -22,7 +23,7 @@ function overdueDays(due: string | null, paymentStatus: string | null, status: s
   return Math.max(0, Math.floor((new Date(`${today()}T00:00:00Z`).getTime() - new Date(`${due}T00:00:00Z`).getTime()) / 86_400_000));
 }
 const YES_NO = [{ value: '', label: 'Any' }, { value: 'true', label: 'Yes' }, { value: 'false', label: 'No' }];
-const PAYMENT_STATUSES = ['', 'UNPAID', 'IN_PAYMENT', 'PAID'];
+const PAYMENT_STATUSES = ['', 'UNPAID', 'PARTIALLY_PAID', 'IN_PAYMENT', 'PAID'];
 const MATCH_TYPES = ['', '2WAY', '3WAY', '4WAY', 'SES', 'ERS'];
 
 function queryOf(filters: Filters) {
@@ -37,12 +38,17 @@ const STATUSES = ['', 'CAPTURED', 'DUPLICATE_CHECK', 'MATCHING', 'EXCEPTION', 'M
 type Grir = { po: string; line: number; qty: string; accrualMinor: number };
 type RunResult = { run: string; replayed?: boolean; paid: { invoice: string; payment: string; amountMinor: number; clearing: string | null; tdsMinor?: number;
   tcsMinor?: number; tdsCertificate?: string | null; msmeInterestMinor?: number; error?: string;
-  discountMinor?: number; msme?: boolean; dueDate?: string; currency?: string }[]; skipped: { invoice: string; reason: string }[] };
-type Proposal = { runDate: string; totalMinor: number; skipped: { invoice: string; supplier?: string; reason: string }[];
-  bySupplier: { supplier: string; invoices: number; amountMinor: number; currency: string }[];
-  items: { invoice: string; supplier: string; supplierName: string; dueDate: string; overdueDays: number; msme: boolean; msmeCapped: boolean; grossMinor: number;
-    creditNotesMinor: number; debitNotesMinor: number; retentionMinor: number; discountMinor: number; tdsMinor: number; tcsMinor?: number; tdsCertificate?: string | null;
-    tdsCertBaseMinor?: number; amountMinor: number; currency: string }[] };
+  discountMinor?: number; msme?: boolean; dueDate?: string; currency?: string; installment?: number; partial?: boolean; openAfterMinor?: number }[];
+  skipped: { invoice: string; reason: string; code?: string }[] };
+type ProposalItem = { invoice: string; supplier: string; supplierName: string; dueDate: string; overdueDays: number; msme: boolean; msmeCapped: boolean; grossMinor: number;
+  creditNotesMinor: number; debitNotesMinor: number; retentionMinor: number; discountMinor: number; tdsMinor: number; tcsMinor?: number; tdsCertificate?: string | null;
+  tdsCertBaseMinor?: number; amountMinor: number; currency: string; paidMinor?: number; openMinor?: number; installment?: number; partial?: boolean;
+  partialReason?: string | null; tdsInrMinor?: number; taxBorneMinor?: number; tdsBasis?: string | null; tdsRatePct?: string | null; returnForm?: string; form15ca?: string | null };
+type Proposal = { runDate: string; totalMinor: number; skipped: { invoice: string; supplier?: string; reason: string; code?: string }[];
+  bySupplier: { supplier: string; invoices: number; amountMinor: number; currency: string }[]; items: ProposalItem[] };
+/** Partial amount the user typed for an invoice of the run: amount in currency units (converted to minor units) and why only part is paid. */
+type PartialDraft = { amount: string; reason: string };
+const PARTIAL_REASON_MIN = 10;
 
 export default function Invoices() {
   const router = useRouter();
@@ -174,11 +180,17 @@ const SKIP_GROUPS: [RegExp, string][] = [
   [/^SOD|segregation|you approved|you captured|you changed/i, 'Segregation of duties'],
   [/connector does not map/i, 'ERP connector'],
 ];
-const skipGroup = (reason: string) => SKIP_GROUPS.find(([re]) => re.test(reason))?.[1] ?? 'Other reasons';
+/** Skips the API names with a code (non-resident withholding, partial payments) group by that code. */
+const SKIP_CODES: Record<string, string> = {
+  FORM_15CA_REQUIRED: 'Form 15CA not recorded (non-resident)', FORM_15CB_REQUIRED: 'Form 15CB not recorded (non-resident)',
+  TDS_195_NOT_DETERMINED: 'Section 195 withholding not determined', PARTIAL_NOT_ALLOWED: 'Partial payment not allowed',
+};
+const skipGroup = (x: Skipped) => (x.code ? SKIP_CODES[x.code] ?? x.code.replace(/_/g, ' ').toLowerCase() : null)
+  ?? SKIP_GROUPS.find(([re]) => re.test(x.reason))?.[1] ?? 'Other reasons';
 
-type Skipped = { invoice: string; supplier?: string; reason: string };
+type Skipped = { invoice: string; supplier?: string; reason: string; code?: string };
 function SkippedList({ skipped, tone = 'amber' }: { skipped: Skipped[]; tone?: 'amber' | 'plain' }) {
-  const groups = Object.entries(skipped.reduce<Record<string, Skipped[]>>((g, x) => ({ ...g, [skipGroup(x.reason)]: [...(g[skipGroup(x.reason)] ?? []), x] }), {}))
+  const groups = Object.entries(skipped.reduce<Record<string, Skipped[]>>((g, x) => ({ ...g, [skipGroup(x)]: [...(g[skipGroup(x)] ?? []), x] }), {}))
     .sort((a, b) => b[1].length - a[1].length);
   if (!groups.length) return null;
   return (
@@ -187,7 +199,8 @@ function SkippedList({ skipped, tone = 'amber' }: { skipped: Skipped[]; tone?: '
         <details key={name} className="border-b border-amber-100 last:border-b-0">
           <summary className="cursor-pointer px-2 py-1.5 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB]">{name} · {items.length}</summary>
           <ul className="max-h-48 divide-y divide-amber-100 overflow-auto px-2 pb-1">
-            {items.map((x, n) => <li key={`${x.invoice}-${n}`} className="py-1"><span className="font-medium">{x.invoice}</span>{x.supplier ? ` (${x.supplier})` : ''} — {x.reason}</li>)}
+            {items.map((x, n) => <li key={`${x.invoice}-${n}`} className="py-1"><span className="font-medium">{x.invoice}</span>{x.supplier ? ` (${x.supplier})` : ''} — {x.reason}
+              {x.code ? <span className="ml-1 rounded bg-white/70 px-1 font-mono text-[10px] ring-1 ring-inset ring-amber-200">{x.code}</span> : null}</li>)}
           </ul>
         </details>
       ))}
@@ -204,19 +217,25 @@ function PaymentRunDialog({ onClose }: { onClose: () => void }) {
   const [invoices, setInvoices] = useState('');
   const [result, setResult] = useState<RunResult | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [partials, setPartials] = useState<Record<string, PartialDraft>>({});
+  const partialEntries = Object.entries(partials).filter(([, p]) => p.amount.trim() !== '' || p.reason.trim() !== '');
+  const partialProblem = partialEntries.map(([invoice, p]) => (!isPositive(p.amount) ? `${invoice}: enter the partial amount to pay now (more than zero)`
+    : p.reason.trim().length < PARTIAL_REASON_MIN ? `${invoice}: give the reason for the partial payment (at least ${PARTIAL_REASON_MIN} characters)` : '')).find(Boolean) ?? '';
+  const setPartial = (invoice: string, patch: Partial<PartialDraft>) =>
+    setPartials((all) => ({ ...all, [invoice]: { amount: all[invoice]?.amount ?? '', reason: all[invoice]?.reason ?? '', ...patch } }));
+  const runBody = () => ({
+    run_date: runDate, include_not_due: includeNotDue, ...selection(),
+    ...(partialEntries.length ? { partials: partialEntries.map(([invoice, p]) => ({ invoice, amountMinor: rupeesToMinor(p.amount), reason: p.reason.trim() })) } : {}),
+  });
   const selection = () => ({ supplier_codes: codes(suppliers).length ? codes(suppliers) : undefined, invoice_numbers: codes(invoices).length ? codes(invoices) : undefined });
   // A filter that holds text but no code would silently mean "pay everything"; the API refuses an empty list, and so does this form.
   const selectionProblem = (suppliers.trim() && !codes(suppliers).length ? 'The supplier filter holds no supplier code: name codes or leave it empty to pay everything due'
     : invoices.trim() && !codes(invoices).length ? 'The invoice filter holds no invoice number: name numbers or leave it empty to pay everything due'
       : codes(suppliers).length > 200 ? 'At most 200 supplier codes per run'
         : codes(invoices).length > 500 ? 'At most 500 invoice numbers per run' : '');
-  const preview = useCommand(() => {
-    const params = new URLSearchParams({ run_date: runDate, include_not_due: String(includeNotDue) });
-    codes(suppliers).forEach((c) => params.append('supplier', c));
-    codes(invoices).forEach((c) => params.append('invoice', c));
-    return api.get<Proposal>(`/payments/proposal?${params.toString()}`);
-  }, { onSuccess: setProposal });
-  const run = useCommand(() => api.post<RunResult>('/payments/runs', { run_date: runDate, include_not_due: includeNotDue, ...selection() }), {
+  // The preview takes the same body as the run (partial amounts included); nothing is written.
+  const preview = useCommand(() => api.post<Proposal>('/payments/proposal', runBody()), { onSuccess: setProposal });
+  const run = useCommand(() => api.post<RunResult>('/payments/runs', runBody()), {
     success: (r) => `${r.run}: ${r.paid.length} paid, ${r.skipped.length} skipped`, onSuccess: setResult,
   });
   const changed = () => setProposal(null);
@@ -249,13 +268,24 @@ function PaymentRunDialog({ onClose }: { onClose: () => void }) {
             there is no exchange rate for the run date, a bank change is still in its cooling-off period, the posting period is closed, the amount is above your approval limit,
             or segregation of duties forbids you releasing the payment (you cannot pay an invoice you approved).
           </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Partial payments: preview the proposal, enter an amount to pay now (in the invoice currency) and a reason against an invoice, then preview again. The rest stays open
+            for a later run. A non-resident invoice is paid only once a Form 15CA (and Form 15CB where required) covering it is recorded on the invoice.
+          </p>
           {preview.error && <div className="mt-3"><ProblemBox error={preview.error} /></div>}
-          {run.error && <div className="mt-3"><ProblemBox error={run.error} /></div>}
-          {proposal && <ProposalView proposal={proposal} />}
+          {run.error && <div className="mt-3"><ProblemBox error={run.error} /><RunRefusalHint error={run.error} /></div>}
+          {proposal && <ProposalView proposal={proposal} partials={partials} onPartial={setPartial} />}
+          {partialEntries.length > 0 && (
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-700" role="status">
+              {partialEntries.length} partial amount{partialEntries.length === 1 ? '' : 's'} set ({partialEntries.map(([invoice]) => invoice).join(', ')}): sent with the preview and the run.
+              <Button onClick={() => setPartials({})}>Clear partial amounts</Button>
+            </p>
+          )}
+          {partialProblem && <p role="alert" className="mt-2 text-xs text-red-700">{partialProblem}</p>}
           <div className="mt-4 flex justify-end gap-2">
             <Button onClick={onClose}>Cancel</Button>
-            <Button disabled={!runDate || !!selectionProblem} busy={preview.isPending} onClick={() => preview.mutate()}>Preview proposal</Button>
-            <Button variant="primary" disabled={!runDate || !!selectionProblem} busy={run.isPending} onClick={() => run.mutate()}>Execute run</Button>
+            <Button disabled={!runDate || !!selectionProblem || !!partialProblem} busy={preview.isPending} onClick={() => preview.mutate()}>Preview proposal</Button>
+            <Button variant="primary" disabled={!runDate || !!selectionProblem || !!partialProblem} busy={run.isPending} onClick={() => run.mutate()}>Execute run</Button>
           </div>
         </>
       ) : (
@@ -275,7 +305,12 @@ function PaymentRunDialog({ onClose }: { onClose: () => void }) {
                     <span>{p.invoice} → <span className="font-mono">{p.payment}</span>{p.clearing ? ` · ERP clearing ${p.clearing}` : ''}
                       {p.msme ? ' · MSME' : ''}{p.tdsMinor ? ` · TDS ${inr(p.tdsMinor)}` : ''}{p.tcsMinor ? ` · TCS ${inr(p.tcsMinor)}` : ''}
                       {p.tdsCertificate ? ` · s.197 ${p.tdsCertificate}` : ''}{p.discountMinor ? ` · discount ${inr(p.discountMinor)}` : ''}
-                      {p.msmeInterestMinor ? ` · MSME interest accrued ${inr(p.msmeInterestMinor)}` : ''}{p.error ? ` · ERP: ${p.error}` : ''}</span>
+                      {p.msmeInterestMinor ? ` · MSME interest accrued ${inr(p.msmeInterestMinor)}` : ''}{p.error ? ` · ERP: ${p.error}` : ''}
+                      {p.partial || (p.installment ?? 1) > 1 ? (
+                        <span className="ml-1 text-amber-800">
+                          · {p.partial ? 'partial' : 'final'} installment {p.installment ?? 1}{p.openAfterMinor !== undefined ? ` · open after ${amountText(p.openAfterMinor, p.currency ?? 'INR')}` : ''}
+                        </span>
+                      ) : null}</span>
                     <span className="font-semibold tabular-nums">{amountText(p.amountMinor, p.currency ?? 'INR')}</span>
                   </li>
                 ))}
@@ -294,10 +329,25 @@ function PaymentRunDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ProposalView({ proposal }: { proposal: Proposal }) {
+/** What to do about a run the API refused because a named non-resident invoice lacks its Form 15CA / 15CB (409). */
+function RunRefusalHint({ error }: { error: ApiError }) {
+  const code = error.problem?.code;
+  if (code !== 'FORM_15CA_REQUIRED' && code !== 'FORM_15CB_REQUIRED') return null;
+  const invoice = typeof error.problem.invoice === 'string' ? error.problem.invoice : null;
+  return (
+    <p className="mt-1 text-xs text-red-800">
+      <span className="font-mono">{code}</span>: record the {code === 'FORM_15CA_REQUIRED' ? 'Form 15CA' : 'Form 15CB'} of the remittance on the invoice
+      {invoice ? <> (<Link href={`/pic/invoices/${encodeURIComponent(invoice)}`} className="font-medium text-[#1A56DB] hover:underline">{invoice}</Link>)</> : ''},
+      {' '}or leave the invoice out of the run.
+    </p>
+  );
+}
+
+function ProposalView({ proposal, partials, onPartial }: { proposal: Proposal; partials: Record<string, PartialDraft>; onPartial: (invoice: string, patch: Partial<PartialDraft>) => void }) {
   const totals = proposal.items.reduce<Record<string, number>>((t, i) => ({ ...t, [i.currency]: (t[i.currency] ?? 0) + i.amountMinor }), {});
   const hasTcs = proposal.items.some((i) => i.tcsMinor);
   const hasCert = proposal.items.some((i) => i.tdsCertificate);
+  const hasPaid = proposal.items.some((i) => i.paidMinor);
   return (
     <div className="mt-4 space-y-3" aria-label="Payment proposal">
       <p className="text-sm font-medium">
@@ -311,20 +361,48 @@ function ProposalView({ proposal }: { proposal: Proposal }) {
               <tr><th scope="col" className="px-2 py-1.5">Invoice</th><th scope="col" className="px-2 py-1.5">Supplier</th><th scope="col" className="px-2 py-1.5">Due</th>
                 <th scope="col" className="px-2 py-1.5 text-right">Credit / debit</th><th scope="col" className="px-2 py-1.5 text-right">Discount</th>
                 <th scope="col" className="px-2 py-1.5 text-right">TDS</th>{hasCert && <th scope="col" className="px-2 py-1.5">s.197</th>}
-                {hasTcs && <th scope="col" className="px-2 py-1.5 text-right">TCS</th>}<th scope="col" className="px-2 py-1.5 text-right">Pay</th></tr>
+                {hasTcs && <th scope="col" className="px-2 py-1.5 text-right">TCS</th>}
+                {hasPaid && <th scope="col" className="px-2 py-1.5 text-right">Paid before</th>}<th scope="col" className="px-2 py-1.5 text-right">Open</th>
+                <th scope="col" className="px-2 py-1.5 text-right">Pay</th><th scope="col" className="px-2 py-1.5">Partial amount · reason</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {proposal.items.map((i) => (
-                <tr key={i.invoice}>
+                <tr key={i.invoice} className="align-top">
                   <td className="px-2 py-1.5 font-medium">{i.invoice}</td>
                   <td className="px-2 py-1.5">{i.supplier}{i.msme ? <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-800">MSME</span> : null}</td>
                   <td className="px-2 py-1.5">{date(i.dueDate)}{i.overdueDays > 0 ? <span className="ml-1 text-red-700">{i.overdueDays}d late</span> : null}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{i.creditNotesMinor || i.debitNotesMinor ? `${i.creditNotesMinor ? `-${inr(i.creditNotesMinor)}` : ''}${i.debitNotesMinor ? ` +${inr(i.debitNotesMinor)}` : ''}` : '–'}</td>
                   <td className="px-2 py-1.5 text-right tabular-nums">{i.discountMinor ? inr(i.discountMinor) : '–'}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{i.tdsMinor ? inr(i.tdsMinor) : '–'}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">
+                    {i.tdsMinor ? amountText(i.tdsMinor, i.currency) : '–'}
+                    {i.returnForm === '27Q' ? (
+                      <span className="block text-[10px] text-slate-500">
+                        s.195 · {i.tdsBasis ?? '–'}{i.tdsRatePct ? ` ${i.tdsRatePct}%` : ''}{i.tdsInrMinor ? ` · ${inr(i.tdsInrMinor)}` : ''}{i.taxBorneMinor ? ` · borne ${amountText(i.taxBorneMinor, i.currency)}` : ''}
+                        {' '}· 27Q · 15CA {i.form15ca ?? 'missing'}
+                      </span>
+                    ) : null}
+                  </td>
                   {hasCert && <td className="px-2 py-1.5 font-mono">{i.tdsCertificate ? `${i.tdsCertificate}${i.tdsCertBaseMinor ? ` · ${inr(i.tdsCertBaseMinor)}` : ''}` : '–'}</td>}
                   {hasTcs && <td className="px-2 py-1.5 text-right tabular-nums">{i.tcsMinor ? inr(i.tcsMinor) : '–'}</td>}
-                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{amountText(i.amountMinor, i.currency)}</td>
+                  {hasPaid && <td className="px-2 py-1.5 text-right tabular-nums">{i.paidMinor ? amountText(i.paidMinor, i.currency) : '–'}</td>}
+                  <td className="px-2 py-1.5 text-right tabular-nums">{i.openMinor !== undefined ? amountText(i.openMinor, i.currency) : '–'}</td>
+                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums">
+                    {amountText(i.amountMinor, i.currency)}
+                    {i.partial ? (
+                      <span className="mt-0.5 block font-normal" title={i.partialReason ?? undefined}>
+                        <span className="rounded bg-amber-100 px-1 text-[10px] font-semibold uppercase text-amber-800">partial</span>
+                        {i.installment ? <span className="ml-1 text-[10px] text-slate-500">installment {i.installment}</span> : null}
+                      </span>
+                    ) : (i.installment ?? 1) > 1 ? <span className="mt-0.5 block text-[10px] font-normal text-slate-500">final · installment {i.installment}</span> : null}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <div className="flex min-w-[220px] flex-col gap-1">
+                      <Input aria-label={`Partial amount to pay now for ${i.invoice} (${i.currency})`} inputMode="decimal" placeholder={`Amount (${i.currency})`}
+                        value={partials[i.invoice]?.amount ?? ''} onChange={(e) => onPartial(i.invoice, { amount: e.target.value })} className="w-32 text-xs" />
+                      <Input aria-label={`Reason for the partial payment of ${i.invoice}`} placeholder={`Reason (at least ${PARTIAL_REASON_MIN} characters)`} maxLength={500}
+                        value={partials[i.invoice]?.reason ?? ''} onChange={(e) => onPartial(i.invoice, { reason: e.target.value })} className="text-xs" />
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

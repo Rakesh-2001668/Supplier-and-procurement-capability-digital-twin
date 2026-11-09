@@ -27,15 +27,30 @@ Assumptions (confirm against the customer's system at onboarding; they are the *
                         mapping); VALIDATE in a sandbox (unplanned delivery costs instead of G/L items for freight is a customer choice).
   GOODS_RECEIPT 102     the reversal of a receipt PIC reverses is a material document with movement type 102 against the same PO items,
                         quantities and batches (GoodsMovementCode 01), its own reference; VALIDATE in a sandbox (cancellation instead).
-  PAYMENT_REVERSAL,     NOT MAPPED for a live system (UNMAPPED_LIVE): a returned bank credit is reversed in SAP with FB08 plus resetting the
-  SCF_FINANCING         cleared items, and an SCF settlement is booked by the financier's interface; both need the customer's design and a sandbox.
+  OUTLINE_AGREEMENT     PIC contract -> SAP outline agreement; the document type comes from rule SAP-OUTLINE-AGREEMENT (platform/sap_defaults.py,
+                        defaults MK quantity contract, WK value contract (also rate card and SOW), LP scheduling agreement; master agreements
+                        and NDAs are legal documents that are not sent). Contract types (category K): API_PURCHASECONTRACT_PROCESS_SRV
+                        A_PurchaseContract, deep insert to_PurchaseContractItem. Scheduling agreements (category L): API_SCHED_AGRMT_PROCESS_SRV
+                        A_SchAgrmtHeader, deep insert to_SchAgrmtItem. Reference in CorrespncExternalReference (12 chars); number =
+                        PurchaseContract / SchedulingAgreement. A new contract version (amendment, extension, index reset) PATCHes the header
+                        and the items (new lines are POSTed to the item navigation) and writes the new reference last, so query-before-retry
+                        finds a change only once all of it is applied; a termination or renewal sets the validity end (action CLOSE).
+                        OData only. VALIDATED AGAINST THE MOCK ONLY: several item field names are assumptions (docs/PIC_SAP_Document_Types.md).
+  PAYMENT_REVERSAL      reversal of the clearing document of a payment the bank returned (reset of the cleared items + FB08): no released
+                        OData API does both, so it goes to the customer's payment service (PIC_ERP_SAP_S4_PAYMENT_SERVICE, entity set
+                        A_VendorPaymentReversal) with the fields of BAPI_ACC_DOCUMENT_REV_POST / the Journal Entry reversal; reversal reason
+                        and posting date from rule SAP-PAYMENT-REVERSAL. Not mapped without that service (and not over IDoc).
+  SCF_FINANCING         SAP has no standard supply-chain-finance posting: a journal entry moves the payable from the supplier (debit) to the
+                        financier (credit: its business partner, or a G/L account) per rule SAP-SCF-FINANCING. OData: the customer's journal
+                        entry service PIC_ERP_SAP_S4_JOURNAL_SERVICE (entity set A_JournalEntry, fields of the Journal Entry Post API);
+                        otherwise IDoc FIDCCP02. Clearing of the invoice, fees and withholding tax are the CLIENT'S DESIGN.
   PAYMENT               no released OData API posts an outgoing payment: the IDoc FIDCCP02 (FI document, message type FIDCCH) is
                         used when an IDoc transport is configured; otherwise a customer service named in
                         PIC_ERP_SAP_S4_PAYMENT_SERVICE with entity set A_VendorPayment (fields as built below).
 
 IDoc basic types: PORDCR105/PORDCR1 (purchase order), MBGMCR03/MBGMCR (goods movement), INVOIC02/INVOIC (logistics invoice
-verification), CREMAS05/CREMAS (vendor), MATMAS05/MATMAS (material), FIDCCP02/FIDCCH (payment FI document). Segment field names
-follow the standard IDoc definitions; the partner profile, port and process codes are the customer's.
+verification), CREMAS05/CREMAS (vendor), MATMAS05/MATMAS (material), FIDCCP02/FIDCCH (payment and supply-chain-finance FI documents).
+Segment field names follow the standard IDoc definitions; the partner profile, port and process codes are the customer's.
 """
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -56,15 +71,15 @@ SERVICES = {
     "MATERIAL_MASTER": "API_PRODUCT_SRV",
 }
 MESSAGE_TYPES = ("PURCHASE_REQUISITION", "PURCHASE_ORDER", "GOODS_RECEIPT", "SUPPLIER_INVOICE", "SUPPLIER_CREDIT_MEMO",
-                 "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT", "STOCK_POSTING", "SUPPLIER_DEBIT_MEMO")
-# Not mapped for a live SAP system (simulator only; they stay manual steps until confirmed in the customer's sandbox, see the docstring):
-# PAYMENT_REVERSAL (returned bank credit: FB08 reversal + reset of the cleared items, no released API) and SCF_FINANCING (the financier's
-# settlement is booked by the SCF platform's own ERP interface).
-UNMAPPED_LIVE = ("PAYMENT_REVERSAL", "SCF_FINANCING")
+                 "SUPPLIER_MASTER", "MATERIAL_MASTER", "PAYMENT", "STOCK_POSTING", "SUPPLIER_DEBIT_MEMO", "OUTLINE_AGREEMENT", "SCF_FINANCING")
+# Mapped for the OData transport only when the customer's payment service is configured (PIC_ERP_SAP_S4_PAYMENT_SERVICE): connectors.SapS4.
+ODATA_SERVICE_TYPES = ("PAYMENT_REVERSAL",)
+# Every PIC message type has a live SAP mapping now (OUTLINE_AGREEMENT, PAYMENT_REVERSAL and SCF_FINANCING were simulator-only before).
+UNMAPPED_LIVE: tuple = ()
 # message type -> (IDoc basic type, message type)
 IDOC_TYPES = {"PURCHASE_ORDER": ("PORDCR105", "PORDCR1"), "GOODS_RECEIPT": ("MBGMCR03", "MBGMCR"), "STOCK_POSTING": ("MBGMCR03", "MBGMCR"), "SUPPLIER_INVOICE": ("INVOIC02", "INVOIC"),
               "SUPPLIER_CREDIT_MEMO": ("INVOIC02", "INVOIC"), "SUPPLIER_MASTER": ("CREMAS05", "CREMAS"),
-              "MATERIAL_MASTER": ("MATMAS05", "MATMAS"), "PAYMENT": ("FIDCCP02", "FIDCCH")}
+              "MATERIAL_MASTER": ("MATMAS05", "MATMAS"), "PAYMENT": ("FIDCCP02", "FIDCCH"), "SCF_FINANCING": ("FIDCCP02", "FIDCCH")}
 
 
 def amount(minor: Optional[int]) -> str:
@@ -381,6 +396,195 @@ def vendor_payment(p: dict, ctx: dict) -> Spec:
     return Spec(ctx.get("payment_service") or "ZAPI_VENDOR_PAYMENT_SRV", "A_VendorPayment", body, "DocumentHeaderText", trim(ctx["reference"], 25), "AccountingDocument")
 
 
+# ---------------------------------------------------------------- outline agreements (OUTLINE_AGREEMENT)
+# The two APIs an outline agreement can go to, by the SAP document category of its type (rule SAP-OUTLINE-AGREEMENT). The header field names are
+# those of the released APIs; the item text and item category field names are ASSUMPTIONS to confirm (docs/PIC_SAP_Document_Types.md).
+OUTLINE_API = {
+    "CONTRACT": {"service": "API_PURCHASECONTRACT_PROCESS_SRV", "header": "A_PurchaseContract", "number": "PurchaseContract",
+                 "type": "PurchaseContractType", "items": "to_PurchaseContractItem", "item_set": "A_PurchaseContractItem",
+                 "item": "PurchaseContractItem", "text": "PurchaseContractItemText", "price": "ContractNetPriceAmount", "category": "K"},
+    "SCHEDULING_AGREEMENT": {"service": "API_SCHED_AGRMT_PROCESS_SRV", "header": "A_SchAgrmtHeader", "number": "SchedulingAgreement",
+                             "type": "PurchasingDocumentType", "items": "to_SchAgrmtItem", "item_set": "A_SchAgrmtItem",
+                             "item": "SchedulingAgreementItem", "text": "PurchasingDocumentItemText", "price": "NetPriceAmount", "category": "L"},
+}
+OUTLINE_REFERENCE_FIELD = "CorrespncExternalReference"   # "Your reference" (EKKO-IHREZ), 12 characters, as on the purchase order
+
+
+class Op:
+    """One OData write of an outline-agreement plan: POST (create, or an item under a navigation) or PATCH (change by key)."""
+
+    def __init__(self, method: str, path: str, body: dict):
+        self.method, self.path, self.body = method, path, body
+
+    def __repr__(self) -> str:
+        return f"Op({self.method} {self.path})"
+
+
+class OutlinePlan:
+    """What the connector sends for one OUTLINE_AGREEMENT message: the API, the action (CREATE, CHANGE, CLOSE), the SAP number of an existing
+    agreement and the writes in order. CREATE is a single deep insert whose answer carries the number; CHANGE and CLOSE end with the header
+    PATCH that writes the message's reference, so the agreement is found by that reference only once every write before it succeeded."""
+
+    def __init__(self, api: str, action: str, doc_type: str, reference: str, ops: list[Op], number: Optional[str] = None):
+        self.api, self.action, self.doc_type, self.reference, self.ops, self.number = api, action, doc_type, reference, ops, number
+        self.names = OUTLINE_API[api]
+
+    @property
+    def service(self) -> str:
+        return self.names["service"]
+
+    @property
+    def header_set(self) -> str:
+        return self.names["header"]
+
+    @property
+    def number_field(self) -> str:
+        return self.names["number"]
+
+
+def _incoterms(value: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """PIC incoterms text ("FCA Trichy") -> (classification "FCA", location "Trichy")."""
+    text = (value or "").strip()
+    if not text:
+        return None, None
+    code, _, place = text.partition(" ")
+    return trim(code.upper(), 3), trim(place.strip(), 70) or None
+
+
+def _items_list(rows: list[dict], v: int):
+    return {"results": rows} if v == 2 else rows
+
+
+def _outline_item(names: dict, line: dict, cfg: dict, contract_type: str) -> dict:
+    """One item of an outline agreement. A line without a material is a text item: material group (rule textItemMaterialGroup unless the
+    line carries one), account assignment category (U, unknown) and, for the serviceItems types, the configured item category."""
+    text_item = not line.get("material")
+    item = {names["item"]: str(int(line["line"])), names["text"]: trim(line.get("description") or line.get("material"), 40),
+            "Material": line.get("material") or None, "Plant": line.get("plant") or None, "TargetQuantity": quantity(line.get("targetQty")),
+            "OrderQuantityUnit": line.get("uom") or "EA", names["price"]: amount(line.get("priceMinor")) if line.get("priceMinor") is not None else None,
+            "NetPriceQuantity": "1"}
+    if text_item:
+        item["MaterialGroup"] = trim(line.get("materialGroup") or cfg.get("textItemMaterialGroup"), 9) or None
+        if names["category"] == "K":
+            item["AccountAssignmentCategory"] = cfg.get("textItemAccountAssignment") or None
+            if contract_type in (cfg.get("serviceItems") or []) and cfg.get("serviceItemCategory"):
+                item["PurchasingDocumentItemCategory"] = cfg["serviceItemCategory"]
+    return {k: x for k, x in item.items() if x not in (None, "")}
+
+
+def outline_agreement(p: dict, ctx: dict, cfg: dict, api: str, lines: list[dict], *, number: Optional[str] = None,
+                      existing_items: Optional[set] = None) -> OutlinePlan:
+    """OUTLINE_AGREEMENT -> plan. ``cfg`` is the SAP-OUTLINE-AGREEMENT rule body, ``api`` CONTRACT or SCHEDULING_AGREEMENT (sap_defaults.api_of),
+    ``lines`` the payload lines (material group added for text lines), ``number`` the SAP number when the agreement exists (CHANGE / CLOSE) and
+    ``existing_items`` its item numbers (ints). ctx: version, company, vendor, reference, purch_org, purch_group, payment_terms."""
+    v, names = ctx["version"], OUTLINE_API[api]
+    contract_type = p.get("type")
+    doc_type = (cfg.get("documentTypes") or {}).get(contract_type)
+    if not doc_type:
+        raise ValueError(f"no SAP document type for contract type {contract_type}")
+    reference = trim(ctx["reference"], 12)
+    action = "CLOSE" if p.get("action") == "CLOSE" else ("CHANGE" if number else "CREATE")
+    valid_to = odata_date(date.fromisoformat(p["validTo"]), v) if p.get("validTo") else None
+    header_path = f"{names['header']}({_q(str(number))})" if number else None
+    if action == "CLOSE":
+        if not number:
+            raise ValueError(f"{p.get('contract')} has no SAP number to close")
+        return OutlinePlan(api, action, doc_type, reference, [Op("PATCH", header_path, {"ValidityEndDate": valid_to, OUTLINE_REFERENCE_FIELD: reference})],
+                           number)
+    incoterms, location = _incoterms(p.get("incoterms"))
+    header = {"CompanyCode": ctx["company"], "PurchasingOrganization": ctx.get("purch_org"), "PurchasingGroup": ctx.get("purch_group"),
+              "Supplier": ctx["vendor"], "DocumentCurrency": p.get("currency") or "INR",
+              "ValidityStartDate": odata_date(date.fromisoformat(p["validFrom"]), v) if p.get("validFrom") else None, "ValidityEndDate": valid_to,
+              "PaymentTerms": ctx.get("payment_terms"), "IncotermsClassification": incoterms, "IncotermsLocation1": location,
+              OUTLINE_REFERENCE_FIELD: reference}
+    if api == "CONTRACT":      # header target value: what a value contract (WK) is consumed against; informative on a quantity contract
+        header["PurchaseContractTargetAmount"] = amount(p.get("targetValueMinor")) if p.get("targetValueMinor") else None
+    items = [_outline_item(names, line, cfg, contract_type) for line in lines]
+    if action == "CREATE":
+        body = {names["type"]: doc_type, **header}
+        if items:
+            body[names["items"]] = _items_list(items, v)
+        body = {k: x for k, x in body.items() if x not in (None, "")}
+        return OutlinePlan(api, action, doc_type, reference, [Op("POST", names["header"], body)])
+    # CHANGE: items first (PATCH the ones SAP has, POST the new ones), the header with the new reference last
+    ops = []
+    have = {int(i) for i in (existing_items or set())}
+    for item in items:
+        item_no = item[names["item"]]
+        if int(item_no) in have:
+            patch = {k: item[k] for k in (names["text"], "TargetQuantity", "OrderQuantityUnit", names["price"], "NetPriceQuantity") if k in item}
+            ops.append(Op("PATCH", f"{names['item_set']}({names['number']}={_q(str(number))},{names['item']}={_q(item_no)})", patch))
+        else:
+            ops.append(Op("POST", f"{header_path}/{names['items']}", {names["number"]: str(number), **item}))
+    patch = {k: x for k, x in header.items() if k in ("ValidityEndDate", "PaymentTerms", "IncotermsClassification", "IncotermsLocation1",
+                                                         "PurchaseContractTargetAmount", OUTLINE_REFERENCE_FIELD) and x not in (None, "")}
+    ops.append(Op("PATCH", header_path, patch))
+    return OutlinePlan(api, action, doc_type, reference, ops, number)
+
+
+# ---------------------------------------------------------------- payment reversal (PAYMENT_REVERSAL)
+def reversal_terms(cfg: dict, original_posting: date, returned_on: date, period_closed: bool) -> tuple[str, date]:
+    """(reversal reason, posting date) of the reversal of a payment's clearing document under rule SAP-PAYMENT-REVERSAL: the configured
+    reason with the original posting date (ORIGINAL, what reason 01 requires) or the return date (RETURN_DATE); when the original posting
+    period is closed, the closed-period reason with the return date."""
+    if period_closed and cfg.get("closedPeriodReason"):
+        return cfg["closedPeriodReason"], returned_on
+    return cfg.get("reversalReason") or "01", (returned_on if cfg.get("postingDate") == "RETURN_DATE" else original_posting)
+
+
+def payment_reversal(p: dict, ctx: dict, cfg: dict, data: dict) -> Spec:
+    """Reversal of the clearing document of a returned payment on the customer's payment service (A_VendorPaymentReversal). data:
+    {"fiscalYear": "2026", "reason": "01", "postingDate": date}. The fields are those of BAPI_ACC_DOCUMENT_REV_POST / the Journal Entry
+    reversal (company code, accounting document, fiscal year, reason, posting date); ResetClearing asks the service to reset the cleared
+    items first (FBRA). Reference in DocumentHeaderText (25 chars); number = ReverseDocument."""
+    v = ctx["version"]
+    if not p.get("clearingDocument"):
+        raise ValueError(f"payment {p.get('payment')} has no clearing document to reverse")
+    body = {"CompanyCode": ctx["company"], "AccountingDocument": trim(p["clearingDocument"], 10), "FiscalYear": data["fiscalYear"],
+            "ReversalReason": data["reason"], "PostingDate": odata_date(data["postingDate"], v), "ResetClearing": bool(cfg.get("resetClearing", True)),
+            "DocumentHeaderText": trim(ctx["reference"], 25), "PaymentReference": trim(p.get("payment"), 18),
+            "ReversalText": trim(p.get("reason"), 50) or None}
+    body = {k: x for k, x in body.items() if x not in (None, "")}
+    return Spec(ctx.get("payment_service") or "ZAPI_VENDOR_PAYMENT_SRV", "A_VendorPaymentReversal", body, "DocumentHeaderText",
+                trim(ctx["reference"], 25), "ReverseDocument", select="ReverseDocument,FiscalYear")
+
+
+# ---------------------------------------------------------------- supply-chain finance (SCF_FINANCING)
+def scf_financier(cfg: dict, code: Optional[str]) -> dict:
+    """The financier entry of rule SAP-SCF-FINANCING for a PIC financier code; ValueError when it is not configured."""
+    entry = (cfg.get("financiers") or {}).get(code or "")
+    if not entry or not (entry.get("businessPartner") or entry.get("glAccount")):
+        raise ValueError(f"financier {code} has no SAP business partner or G/L account in rule SAP-SCF-FINANCING financiers")
+    return entry
+
+
+def scf_journal_entry(p: dict, ctx: dict, cfg: dict, financier: dict) -> Spec:
+    """Journal entry that moves the payable from the supplier to the financier (rule SAP-SCF-FINANCING): supplier line debited (posting key
+    supplierDebit), financier credited as a vendor (businessPartner, key financierCredit, due on the maturity) or on a G/L account (glCredit).
+    Posted on the customer's journal entry service (A_JournalEntry, fields of the Journal Entry Post API); reference in DocumentHeaderText
+    (25 chars); number = AccountingDocument. CLIENT DESIGN NEEDED: clearing against the invoice, fees and withholding tax."""
+    v = ctx["version"]
+    keys = cfg.get("postingKeys") or {}
+    gross, maturity = amount(p.get("grossMinor")), date.fromisoformat(p["maturity"]) if p.get("maturity") else None
+    text = trim(f"SCF {p.get('invoice') or ''} {p.get('financier') or ''}".strip(), 50)
+    supplier = {"JournalEntryItem": "1", "PostingKey": keys.get("supplierDebit"), "Supplier": ctx["vendor"], "DebitCreditCode": "S",
+                "AmountInTransactionCurrency": gross, "AssignmentReference": trim(p.get("invoiceErp"), 18) or None, "DocumentItemText": text}
+    if financier.get("businessPartner"):
+        other = {"JournalEntryItem": "2", "PostingKey": keys.get("financierCredit"), "Supplier": financier["businessPartner"], "DebitCreditCode": "H",
+                 "AmountInTransactionCurrency": gross, "DueCalculationBaseDate": odata_date(maturity, v), "PaymentMethod": financier.get("paymentMethod"),
+                 "AssignmentReference": trim(p.get("invoiceErp"), 18) or None, "DocumentItemText": text}
+    else:
+        other = {"JournalEntryItem": "2", "PostingKey": keys.get("glCredit"), "GLAccount": financier["glAccount"], "DebitCreditCode": "H",
+                 "AmountInTransactionCurrency": gross, "AssignmentReference": trim(p.get("invoiceErp"), 18) or None, "DocumentItemText": text}
+    rows = [{k: x for k, x in row.items() if x not in (None, "")} for row in (supplier, other)]
+    body = {"CompanyCode": ctx["company"], "AccountingDocumentType": cfg.get("documentType") or "KA", "DocumentDate": odata_date(ctx["today"], v),
+            "PostingDate": odata_date(ctx["today"], v), "DocumentReferenceID": trim(p.get("invoice"), 16) or None,
+            "DocumentHeaderText": trim(ctx["reference"], 25), "TransactionCurrency": ctx.get("currency") or "INR", "to_Item": _items_list(rows, v)}
+    body = {k: x for k, x in body.items() if x not in (None, "")}
+    return Spec(ctx.get("journal_service") or "ZAPI_JOURNAL_ENTRY_SRV", "A_JournalEntry", body, "DocumentHeaderText", trim(ctx["reference"], 25),
+                "AccountingDocument", select="AccountingDocument,FiscalYear")
+
+
 def _q(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -457,6 +661,22 @@ def idoc_xml(message_type: str, p: dict, ctx: dict, data: dict) -> str:
     elif message_type == "MATERIAL_MASTER":
         body = _seg("E1MARAM", {"MATNR": trim(p.get("material"), 18), "MTART": ctx.get("product_type") or "ROH", "MEINS": p.get("uom") or "EA", "MATKL": trim(p.get("group"), 9)})
         body += _seg("E1MAKTM", {"SPRAS": "E", "MAKTX": trim(p.get("description"), 40)})
+    elif message_type == "SCF_FINANCING":
+        # data: {"cfg": SAP-SCF-FINANCING body, "financier": its entry, "currency": "INR"}: the journal entry of scf_journal_entry as an FI document
+        cfg, financier, keys = data["cfg"], data["financier"], data["cfg"].get("postingKeys") or {}
+        text = trim(f"SCF {p.get('invoice') or ''} {p.get('financier') or ''}".strip(), 50)
+        maturity = _ymd(date.fromisoformat(p["maturity"])) if p.get("maturity") else None
+        body = _seg("E1FIKPF", {"BUKRS": ctx["company"], "BLART": cfg.get("documentType") or "KA", "BLDAT": _ymd(today), "BUDAT": _ymd(today),
+                                "WAERS": data.get("currency") or "INR", "XBLNR": trim(p.get("invoice"), 16), "BKTXT": trim(ref, 25)})
+        body += _seg("E1FISEG", {"BUZEI": "001", "BSCHL": keys.get("supplierDebit"), "KOART": "K", "LIFNR": ctx["vendor"], "WRBTR": amount(p.get("grossMinor")),
+                                 "ZUONR": trim(p.get("invoiceErp"), 18), "SGTXT": text})
+        if financier.get("businessPartner"):
+            body += _seg("E1FISEG", {"BUZEI": "002", "BSCHL": keys.get("financierCredit"), "KOART": "K", "LIFNR": financier["businessPartner"],
+                                     "WRBTR": amount(p.get("grossMinor")), "ZFBDT": maturity, "ZLSCH": financier.get("paymentMethod"),
+                                     "ZUONR": trim(p.get("invoiceErp"), 18), "SGTXT": text})
+        else:
+            body += _seg("E1FISEG", {"BUZEI": "002", "BSCHL": keys.get("glCredit"), "KOART": "S", "HKONT": financier["glAccount"],
+                                     "WRBTR": amount(p.get("grossMinor")), "ZUONR": trim(p.get("invoiceErp"), 18), "SGTXT": text})
     else:  # PAYMENT
         body = _seg("E1FIKPF", {"BUKRS": ctx["company"], "BLART": "KZ", "BLDAT": _ymd(today), "BUDAT": _ymd(today), "WAERS": "INR",
                                 "XBLNR": trim(p.get("payment"), 16), "BKTXT": trim(ref, 25)})

@@ -3,12 +3,12 @@
 import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import { ObjectPage } from '@/components/pic/object';
-import { Button, Card, DataTable, Dialog, Empty, Facts, Field, LinkButton, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
+import { Button, Card, DataTable, Dialog, Empty, Facts, Field, Input, LinkButton, ProblemBox, Select, StatusChip, Textarea } from '@/components/pic/ui';
 import { api } from '@/lib/pic/api';
-import { date, dateTime, inr, label, qty } from '@/lib/pic/format';
+import { date, dateTime, inr, label, qty, rupeesToMinor } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import type { ApiError } from '@/lib/pic/api';
-import { BlockChip, hasRole, MatchChip, useSessionUser } from '../_components';
+import { BlockChip, hasRole, isPositive, MatchChip, today, useSessionUser } from '../_components';
 import { EInvoiceBadge, EInvoicePanel } from '../_ops';
 import { DebitNotesPanel, EarlyPaymentPanel, ScfBadge } from '../_p2p';
 import { ApprovalPanel, approvedText, InvoiceApproval } from '../_approval';
@@ -36,7 +36,22 @@ type Invoice = { id: string; number: string; supplier_invoice_no: string; fiscal
   place_of_supply?: string | null; cgst_minor?: number; sgst_minor?: number; igst_minor?: number; reverse_charge?: boolean; rcm_tax_minor?: number;
   tcs_section?: string | null; tcs_rate?: string | number | null; tcs_minor?: number;
   supplier: { id: string; code: string; name: string }; lines: InvLine[]; exceptions: InvException[]; creditNotes: CreditNote[]; payments: Payment[]; debitNotes?: { id: string }[];
-  approval?: InvoiceApproval };
+  approval?: InvoiceApproval; settlement?: Settlement };
+/** Partial payments (installments) of the invoice and what is still open. */
+type Installment = { payment: string; installment: number; amountMinor: number; status: string; bankStatus: string; settlesInvoice: boolean; reason: string | null;
+  valueDate: string; tdsMinor: number; taxBorneMinor: number; run: string };
+type Settlement = { paidMinor: number; openMinor: number; currency: string; paymentStatus: string; partialAllowed: boolean; minPartialMinor: number; installments: Installment[] };
+/** Section 195 withholding of a payment to a non-resident (GET /invoices/{ref}/withholding-195). */
+type Form15 = { id: string; part: string; acknowledgement: string; filedOn: string; amountMinor: number; currency: string;
+  form15cb: { certificateNo: string; date: string; caName: string; membershipNo: string } | null; status: 'RECORDED' | 'USED' | 'VOID' };
+type W195 = { applies: boolean; returnForm: '26Q' | '27Q'; forms: Form15[];
+  determination: { basis: 'ACT' | 'DTAA' | 'NO_PAN_206AA' | 'LOWER_DEDUCTION_CERTIFICATE'; ratePct: string; actRatePct: string; surchargePct: string; cessPct: string;
+    actEffectivePct: string; treaty: { label: string; article: string; ratePct: string } | null; treatyUnavailable: string | null; grossUp: boolean; taxMinor: number;
+    taxInrMinor: number; natureLabel: string; sectionLabel: string; mock: boolean } | null };
+
+/** An amount in its currency: ₹ grouping for INR, the ISO code otherwise. */
+const money = (minor: number | null | undefined, currency?: string | null) => (!currency || currency === 'INR' ? inr(minor)
+  : `${currency} ${(Number(minor ?? 0) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 type PostResult = { status: string; erpDocument?: string | null; replayed?: boolean; integrationStatus?: string; attempts?: number; error?: string | null };
 
 const RESOLUTIONS = [
@@ -95,6 +110,9 @@ export default function InvoicePage() {
   const finance = hasRole(user, 'FINANCE_CONTROLLER');
   const approver = hasRole(user, 'AP_CLERK', 'FINANCE_CONTROLLER');
   const postingKey = inv && user ? `${user.tenant}|${inv.company_code}|${inv.supplier.code}|${inv.supplier_invoice_no}` : '';
+  // Section 195 (non-resident) withholding: AP (invoice:post) and finance (payment:run) only; any refusal or error hides the card.
+  const w195 = useApi<W195>(inv && approver ? `/invoices/${ref}/withholding-195` : null);
+  const [recordingForm15, setRecordingForm15] = useState(false);
 
   const rematch = useCommand(() => api.post<{ status: string; exceptions: unknown[] }>(`/invoices/${inv!.id}/match`), {
     success: (r) => `Matched again · ${r.status.toLowerCase()}${r.exceptions.length ? ` · ${r.exceptions.length} exception(s)` : ''}`,
@@ -187,7 +205,7 @@ export default function InvoicePage() {
             ]} />
             {inv.approval && <ApprovalPanel invoiceId={inv.id} approval={inv.approval} />}
             {inApproval && (
-              <p className="text-sm text-amber-800">In approval: {inv.approval?.requiredChain.map((r) => label(r)).join(' → ')}. It can be posted once the last approver has approved.</p>
+              <p className="text-sm text-amber-800">In approval: {inv.approval?.requiredChain.map((r) => (r === 'CFO' ? r : label(r))).join(' → ')}. It can be posted once the last approver has approved.</p>
             )}
             {inv.irn && <p className="break-all font-mono text-[11px] text-slate-500">IRN {inv.irn}</p>}
             {inv.irn_valid === false && (
@@ -211,6 +229,13 @@ export default function InvoicePage() {
             )}
             {inv.status === 'APPROVED' && ap && (
               <p className="text-xs text-slate-500">Posting key: <span className="font-mono">{postingKey}</span> — tenant | company code | supplier | invoice number.</p>
+            )}
+            {inv.settlement && (inv.settlement.installments.length > 0 || inv.settlement.paidMinor > 0 || inv.status === 'POSTED') && (
+              <SettlementPanel settlement={inv.settlement} />
+            )}
+            {w195.data?.applies && (
+              <Withholding195Card data={w195.data} currency={inv.currency ?? inv.settlement?.currency ?? 'INR'} canRecord={finance}
+                onRecord={() => setRecordingForm15(true)} />
             )}
           </div>
         )}
@@ -311,7 +336,147 @@ export default function InvoicePage() {
       {inv && resolving && <ResolveDialog inv={inv} exc={resolving} onClose={() => setResolving(null)} />}
       {inv && rejecting && <RejectDialog inv={inv} onClose={() => setRejecting(false)} />}
       {inv && releasing && <ReleaseBlockDialog inv={inv} onClose={() => setReleasing(false)} />}
+      {inv && recordingForm15 && (
+        <Form15Dialog invoiceRef={ref} invoiceNumber={inv.number} currency={inv.currency ?? inv.settlement?.currency ?? 'INR'}
+          defaultAmountMinor={inv.settlement?.openMinor || inv.gross_minor} onClose={() => setRecordingForm15(false)} />
+      )}
     </>
+  );
+}
+
+/** Paid and open amounts of the invoice and its payments (installments): partial payments and the final one. */
+function SettlementPanel({ settlement: s }: { settlement: Settlement }) {
+  return (
+    <section aria-label="Paid and open" className="rounded-lg border border-slate-200 p-3">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Paid / open</h3>
+        <span>Paid <span className="font-semibold tabular-nums">{money(s.paidMinor, s.currency)}</span></span>
+        <span>Open <span className={`font-semibold tabular-nums ${s.openMinor > 0 ? 'text-amber-800' : 'text-emerald-800'}`}>{money(s.openMinor, s.currency)}</span></span>
+        <StatusChip status={s.paymentStatus} />
+        <span className="text-xs text-slate-500">
+          {s.partialAllowed ? `Partial payments allowed${s.minPartialMinor ? ` (at least ${money(s.minPartialMinor, s.currency)} each)` : ''}` : 'Partial payments not allowed'}
+        </span>
+      </div>
+      {s.installments.length > 0 ? (
+        <div className="mt-2">
+          <DataTable<Installment & { id: string }> rows={s.installments.map((i) => ({ ...i, id: i.payment }))} caption="Payments of the invoice" columns={[
+            { key: 'installment', header: 'No.', align: 'right' },
+            { key: 'payment', header: 'Payment', render: (i) => <span className="font-mono text-xs">{i.payment}</span> },
+            { key: 'run', header: 'Run', render: (i) => <span className="font-mono text-xs">{i.run || '–'}</span> },
+            { key: 'valueDate', header: 'Value date', render: (i) => date(i.valueDate) },
+            { key: 'amountMinor', header: 'Amount', align: 'right', render: (i) => money(i.amountMinor, s.currency) },
+            { key: 'tdsMinor', header: 'TDS', align: 'right', render: (i) => (
+              <>{i.tdsMinor ? money(i.tdsMinor, s.currency) : '–'}{i.taxBorneMinor ? <p className="text-xs text-slate-500">borne {money(i.taxBorneMinor, s.currency)}</p> : null}</>
+            ) },
+            { key: 'settlesInvoice', header: 'Kind', render: (i) => (i.settlesInvoice ? 'final' : <span className="font-semibold text-amber-800">partial</span>) },
+            { key: 'reason', header: 'Reason', className: 'min-w-[160px]', render: (i) => i.reason ?? '–' },
+            { key: 'status', header: 'Status', render: (i) => <span className="flex flex-wrap gap-1"><StatusChip status={i.status} />{i.bankStatus ? <StatusChip status={i.bankStatus} /> : null}</span> },
+          ]} />
+        </div>
+      ) : <p className="mt-2 text-xs text-slate-500">No payment yet.</p>}
+    </section>
+  );
+}
+
+const BASIS_TEXT: Record<string, string> = { ACT: 'Income-tax Act rate', DTAA: 'Tax treaty (DTAA) rate', NO_PAN_206AA: 'No PAN: s.206AA higher rate',
+  LOWER_DEDUCTION_CERTIFICATE: 'Lower-deduction certificate (s.197)' };
+
+/** Section 195 withholding on a payment to a non-resident supplier, with the Form 15CA / 15CB records. */
+function Withholding195Card({ data, currency, canRecord, onRecord }: { data: W195; currency: string; canRecord: boolean; onRecord: () => void }) {
+  const d = data.determination;
+  return (
+    <section aria-label="Section 195 withholding" className="rounded-lg border border-slate-200 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Section 195 withholding · return {data.returnForm}</h3>
+        {canRecord && <Button onClick={onRecord}>Record Form 15CA</Button>}
+      </div>
+      <p role="note" className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900">
+        MOCK rule values — the client&apos;s chartered accountant must confirm
+      </p>
+      {d ? (
+        <div className="mt-2">
+          <Facts items={[
+            ['Payment nature', `${d.natureLabel}${d.sectionLabel ? ` · ${d.sectionLabel}` : ''}`],
+            ['Basis', BASIS_TEXT[d.basis] ?? label(d.basis)],
+            ['Rate applied', `${d.ratePct}%`],
+            ['Act rate', `${d.actRatePct}% + surcharge ${d.surchargePct}% + cess ${d.cessPct}% = ${d.actEffectivePct}%`],
+            ['Treaty', d.treaty ? `${d.treaty.label} · ${d.treaty.article} · ${d.treaty.ratePct}%` : d.treatyUnavailable ? `not applied: ${d.treatyUnavailable}` : 'not applied'],
+            ['Gross-up (s.195A)', d.grossUp ? 'yes: the buyer bears the tax' : 'no'],
+            ['Tax', `${money(d.taxMinor, currency)}${currency !== 'INR' ? ` · ${inr(d.taxInrMinor)}` : ''}`],
+          ]} />
+        </div>
+      ) : <p className="mt-2 text-sm text-amber-800">Not determined yet: set the payment nature of the invoice before it is paid.</p>}
+      <div className="mt-3">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Form 15CA / 15CB</h4>
+        <div className="mt-1">
+          <DataTable<Form15> rows={data.forms} empty="No Form 15CA recorded: the payment run does not release the remittance until one covers it" caption="Form 15CA and 15CB records" columns={[
+            { key: 'part', header: 'Part', render: (f) => `15CA Part ${f.part}` },
+            { key: 'acknowledgement', header: 'Acknowledgement', render: (f) => <span className="font-mono text-xs">{f.acknowledgement}</span> },
+            { key: 'filedOn', header: 'Filed on', render: (f) => date(f.filedOn) },
+            { key: 'amountMinor', header: 'Remittance', align: 'right', render: (f) => money(f.amountMinor, f.currency) },
+            { key: 'form15cb', header: 'Form 15CB', render: (f) => f.form15cb ? (
+              <span className="text-xs">{f.form15cb.certificateNo} · {date(f.form15cb.date)}<span className="block text-slate-500">CA {f.form15cb.caName} · M.No. {f.form15cb.membershipNo}</span></span>
+            ) : '–' },
+            { key: 'status', header: 'Status', render: (f) => <StatusChip status={f.status} /> },
+          ]} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const FORM15_PARTS = [
+  { value: 'A', label: 'Part A · remittance up to ₹5 lakh in the year' },
+  { value: 'B', label: 'Part B · with a s.195(2)/(3) or s.197 order' },
+  { value: 'C', label: 'Part C · above ₹5 lakh, with Form 15CB' },
+  { value: 'D', label: 'Part D · remittance not chargeable to tax' },
+];
+
+function Form15Dialog({ invoiceRef, invoiceNumber, currency, defaultAmountMinor, onClose }: {
+  invoiceRef: string; invoiceNumber: string; currency: string; defaultAmountMinor: number; onClose: () => void;
+}) {
+  const [part, setPart] = useState('C');
+  const [ack, setAck] = useState('');
+  const [filedOn, setFiledOn] = useState(today());
+  const [amount, setAmount] = useState((defaultAmountMinor / 100).toFixed(2));
+  const [cbNo, setCbNo] = useState('');
+  const [cbDate, setCbDate] = useState('');
+  const [caName, setCaName] = useState('');
+  const [caNo, setCaNo] = useState('');
+  const [note, setNote] = useState('');
+  const problems = [
+    (ack.trim().length < 8 || ack.trim().length > 20) && 'The Form 15CA acknowledgement number is 8 to 20 characters',
+    !filedOn && 'Enter the date Form 15CA was filed',
+    !isPositive(amount) && `Enter the remittance amount in ${currency}`,
+    part === 'C' && (!cbNo.trim() || !cbDate || !caName.trim() || !caNo.trim()) && 'Part C needs the Form 15CB certificate: number, date, CA name and membership number',
+  ].filter(Boolean) as string[];
+  const save = useCommand(() => api.post<Form15>(`/invoices/${invoiceRef}/form15`, {
+    part, acknowledgement: ack.trim(), filedOn, amountMinor: rupeesToMinor(amount),
+    form15cbCertificateNo: cbNo.trim() || undefined, form15cbDate: cbDate || undefined, caName: caName.trim() || undefined,
+    caMembershipNo: caNo.trim() || undefined, note: note.trim() || undefined,
+  }), { success: (f) => `Form 15CA Part ${f.part} recorded for ${invoiceNumber}`, onSuccess: onClose });
+  return (
+    <Dialog open title={`Record Form 15CA · ${invoiceNumber}`} onClose={onClose}>
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Part">{(id) => <Select id={id} value={part} onChange={(e) => setPart(e.target.value)} options={FORM15_PARTS} />}</Field>
+        <Field label="Acknowledgement number" hint="from the income-tax e-filing portal">
+          {(id, dsc) => <Input id={id} aria-describedby={dsc} maxLength={20} value={ack} onChange={(e) => setAck(e.target.value)} />}
+        </Field>
+        <Field label="Filed on">{(id) => <Input id={id} type="date" max={today()} value={filedOn} onChange={(e) => setFiledOn(e.target.value)} />}</Field>
+        <Field label={`Remittance covered (${currency})`}>{(id) => <Input id={id} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />}</Field>
+        <Field label={`Form 15CB certificate no.${part === 'C' ? '' : ' (optional)'}`}>{(id) => <Input id={id} maxLength={40} value={cbNo} onChange={(e) => setCbNo(e.target.value)} />}</Field>
+        <Field label={`Form 15CB date${part === 'C' ? '' : ' (optional)'}`}>{(id) => <Input id={id} type="date" value={cbDate} onChange={(e) => setCbDate(e.target.value)} />}</Field>
+        <Field label={`Chartered accountant${part === 'C' ? '' : ' (optional)'}`}>{(id) => <Input id={id} maxLength={200} value={caName} onChange={(e) => setCaName(e.target.value)} />}</Field>
+        <Field label={`CA membership no.${part === 'C' ? '' : ' (optional)'}`}>{(id) => <Input id={id} maxLength={10} value={caNo} onChange={(e) => setCaNo(e.target.value)} />}</Field>
+        <div className="md:col-span-2"><Field label="Note (optional)">{(id) => <Input id={id} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />}</Field></div>
+      </div>
+      {problems.length > 0 && ack && <p className="mt-2 text-xs text-amber-700" role="status">{problems[0]}</p>}
+      <div className="mt-3"><ProblemBox error={save.error} /></div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={problems.length > 0} busy={save.isPending} onClick={() => save.mutate()}>Record Form 15CA</Button>
+      </div>
+    </Dialog>
   );
 }
 

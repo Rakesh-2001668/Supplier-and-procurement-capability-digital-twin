@@ -741,7 +741,7 @@ def test_fin2_gap_c_challans_reconcile_deducted_against_deposited_and_form_16a_d
     base = {"companyCode": "1000", "fiscalYear": "2027-28", "quarter": "Q1", "section": "194C-OTH", "challanNo": "00123", "bsrCode": "6360280",
             "depositDate": "2027-05-07", "amountMinor": 50_000}
     recon = lambda: client.get("/v1/finance/tds-challans/reconciliation?fiscal_year=2027-28&quarter=Q1", headers=fin).json()   # noqa: E731
-    assert recon()["rows"] == [{"companyCode": "1000", "section": "194C-OTH", "deductedMinor": 80_000, "depositedMinor": 0, "challans": 0, "differenceMinor": 80_000,
+    assert recon()["rows"] == [{"companyCode": "1000", "section": "194C-OTH", "returnForm": "26Q", "deductedMinor": 80_000, "depositedMinor": 0, "challans": 0, "differenceMinor": 80_000,
                                 "status": "SHORT_DEPOSITED"}]
     assert client.post("/v1/finance/tds-challans", json=base, headers=_h(login, "ap1")).status_code == 403
     for patch, code in (({"bsrCode": "123"}, 422), ({"challanNo": "12"}, 422), ({"amountMinor": 0}, 422), ({"section": "999Z"}, 422),

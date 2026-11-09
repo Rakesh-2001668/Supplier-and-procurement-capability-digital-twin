@@ -39,6 +39,9 @@ ROLE_SCOPES: dict[str, set[str]] = {
     "SERVICE_OWNER": {READ, TASKS, "ses:approve"},
     "AP_CLERK": {READ, TASKS, "invoice:capture", "invoice:resolve", "invoice:approve", "invoice:post"},
     "FINANCE_CONTROLLER": {READ, TASKS, "payment:run", "savings:validate", "invoice:approve", "spend:read", "period:close", "inventory:approve"},
+    # Chief financial officer: the last approver of the invoice value bands (rule INVOICE-APPROVAL, default from 1 crore). Approves only;
+    # never captures, posts or pays (SOD-08 / SOD-09 per invoice; the AP approver and earlier chain approvers are excluded from the CFO step).
+    "CFO": {READ, TASKS, "invoice:approve", "spend:read"},
     "PROCUREMENT_HEAD": {READ, TASKS, "spend:read"},
     "CPO": {READ, TASKS, "spend:read", "agents:manage"},
     "CAPEX_COMMITTEE": {READ, TASKS},

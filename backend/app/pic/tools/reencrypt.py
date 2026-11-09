@@ -18,7 +18,8 @@ from typing import Callable
 from sqlalchemy import select
 
 from app.pic.db import system_tx, tenant_tx
-from app.pic.models import Bid, MfaFactor, PaymentFile, Supplier, SupplierBankAccount, SupplierMasterChange, Tenant
+from app.pic.models import (Bid, MfaFactor, PaymentFile, RemittanceCertificate, Supplier, SupplierBankAccount, SupplierMasterChange,
+                            SupplierTaxResidency, Tenant)
 from app.pic.platform import audit, crypto
 
 
@@ -39,6 +40,12 @@ TARGETS = [
     Target("mfa_factor.secret_enc", MfaFactor, "secret_enc", lambda r: "mfa-totp", text=True),
     Target("payment_file.content", PaymentFile, "content", lambda r: "payment_file", text=True),
     Target("supplier_master_change.after_enc", SupplierMasterChange, "after_enc", lambda r: "supplier-master-change", text=True),
+    # section 195 (migration 0028): non-resident tax identifiers and Form 15CA acknowledgements
+    Target("supplier_tax_residency.pan_enc", SupplierTaxResidency, "pan_enc", lambda r: "tax-pan"),
+    Target("supplier_tax_residency.tax_id_enc", SupplierTaxResidency, "tax_id_enc", lambda r: "tax-id"),
+    Target("supplier_tax_residency.trc_no_enc", SupplierTaxResidency, "trc_no_enc", lambda r: "tax-trc"),
+    Target("supplier_tax_residency.form10f_ack_enc", SupplierTaxResidency, "form10f_ack_enc", lambda r: "tax-10f"),
+    Target("remittance_certificate.form15ca_ack_enc", RemittanceCertificate, "form15ca_ack_enc", lambda r: "tax-15ca"),
 ]
 
 

@@ -44,6 +44,8 @@ STREAM_ONLY = {
     "finance.period.reopened": "A closed posting period was reopened with a reason; the audit trail holds who and why.",
     "msme.interest.accrued": "Interest owed to an MSME supplier for a late payment (MSMED Act s.16) was recorded; treasury and the ERP posting read the stream.",
     "tds.challan.recorded": "A TDS deposit challan (BSR code, serial, deposit date) was recorded; the tax team's reconciliation reads the stream.",
+    "remittance.form15.recorded": "A Form 15CA (with Form 15CB where required) was recorded for a remittance to a non-resident (section 195): the payment run "
+                                  "reads the record itself; treasury and the tax team read the stream.",
     "stock_posting.submitted": "Approval tasks and the audit trail already carry it; subscribers use it for the inventory approval backlog.",
     "stock_posting.approved": "The posting is posted by a stock poster; the audit trail holds the approver and the rule version.",
     "stock_posting.posted": "The stock movements are in the ledger and the ERP material document is queued; subscribers (planning, BI) read the stream.",
@@ -60,8 +62,10 @@ STREAM_ONLY = {
     "planned_order.cancelled": "The MRP controller cancelled a planned order (e.g. on a CANCEL message); its exceptions are closed and the next net-change run replans the material.",
     "planned_order.unfirmed": "The MRP controller took the firming off a planned order; the next run may change or replace it.",
     "material_request.withdrawn": "The requester withdrew a material request (also a blocked duplicate); its steward tasks are cancelled and the audit trail holds the reason.",
+    "sourcing.award.offer_expiry_overridden": "An award was proposed on a bid whose offer validity had ended, with the written override of a category manager "
+                                              "(D5, SOURCING-POLICY.expiredOfferOverride); the decision carries it as exception BID_OFFER_EXPIRED and goes to the "
+                                              "approvers; subscribers (audit analytics, BI) read the stream.",
     "sourcing.bid.withdrawn":"A supplier withdrew its sealed bid before the close; the content is destroyed unread and the audit trail holds the reason; nothing else reacts.",
-    "contract.renewed": "A successor contract took over (TD 6 Renewed): the predecessor no longer prices orders; the successor's own contract.activated drives the ERP posting and source determination, subscribers (BI, renewals calendar) read the stream.",
 }
 
 

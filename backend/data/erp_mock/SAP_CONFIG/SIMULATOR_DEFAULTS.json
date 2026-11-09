@@ -1,0 +1,6 @@
+{
+  "_comment": "Used by the SAP S/4HANA sandbox simulator only, for values a tenant's SAP rules leave empty (a live SAP connector rejects such a message instead). Not customizing of any real system.",
+  "purchasingGroup": "001",
+  "textItemMaterialGroup": "SERVICES",
+  "financier": {"businessPartner": "9800001", "paymentMethod": "R"}
+}

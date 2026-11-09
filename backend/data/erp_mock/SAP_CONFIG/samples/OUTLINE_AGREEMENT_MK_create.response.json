@@ -1,0 +1,10 @@
+{
+  "status": 201,
+  "body": {
+    "d": {
+      "PurchaseContract": "4600000101",
+      "PurchaseContractType": "MK",
+      "CorrespncExternalReference": "1000|OA|QC-6"
+    }
+  }
+}

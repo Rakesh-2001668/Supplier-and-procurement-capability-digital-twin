@@ -1,0 +1,9 @@
+{
+  "status": 201,
+  "body": {
+    "d": {
+      "SchedulingAgreement": "5500000101",
+      "PurchasingDocumentType": "LP"
+    }
+  }
+}

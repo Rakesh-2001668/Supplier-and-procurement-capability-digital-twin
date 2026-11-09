@@ -235,6 +235,11 @@ def compute_tds(session: Session, invoice: Invoice, supplier: Supplier) -> dict:
     (or the invoice already carries the withholding migrated from the ERP). A valid s.197 certificate is applied at payment, not here."""
     if invoice.tds_section is None and (invoice.withholding_tax_minor or 0) > 0:
         return {}
+    if (getattr(supplier, "country", None) or "IN").upper() != "IN":  # set_residency keeps a non-resident's country outside IN
+        from app.pic.services import nonresident_tax
+        nr = nonresident_tax.posting_tds(session, invoice, supplier)  # a non-resident supplier: section 195 instead of the resident sections
+        if nr is not None:
+            return nr
     section = (supplier.tds_section or "").strip()
     if not section:
         return {}
@@ -298,6 +303,9 @@ def compute_note_tds(session: Session, invoice: Invoice, note) -> dict:
     invoice; thresholds count the supplier's invoices and earlier debit notes of the section in the fiscal year. {} when the invoice carries no TDS section."""
     if not invoice.tds_section or invoice.tds_rate is None:
         return {}
+    from app.pic.services import nonresident_tax
+    if nonresident_tax.is_195(invoice.tds_section):
+        return nonresident_tax.note_tds(invoice, int(note.net_minor))
     supplier = session.get(Supplier, invoice.supplier_id)
     spec, _, _, _ = _section_spec(session, supplier, invoice.tds_section, invoice.company_code)
     prior_total, prior_taxed = _prior(session, supplier, invoice.tds_section, invoice.fiscal_year, exclude_note=note.id)
@@ -334,6 +342,9 @@ def payment_tds(session: Session, invoice: Invoice, notes: Optional[list] = None
     Returns tdsMinor, baseMinor (invoice + notes), certBaseMinor (taxed at the certificate rate), ratePct (the certificate rate, the section rate, or
     the blended rate when the cap splits the payment), certificate (number, only when it was used)."""
     notes = notes or []
+    from app.pic.services import nonresident_tax
+    if nonresident_tax.is_195(invoice.tds_section):  # section 195: re-determined on the payment date (treaty documents, FX, gross-up)
+        return nonresident_tax.payment_tax(session, invoice, notes, on or clock.today(), include_invoice=include_invoice)
     if not invoice.tds_section or invoice.tds_rate is None:
         legacy = max(int(invoice.withholding_tax_minor or 0), 0) if include_invoice else 0
         return {"tdsMinor": legacy, "ratePct": None, "certificate": None, "baseMinor": 0, "certBaseMinor": 0}
@@ -659,14 +670,18 @@ def tds_register(session: Session, fiscal_year: Optional[str] = None, supplier: 
         query = query.where(Supplier.code == supplier)
     if company_codes is not None:
         query = query.where(Invoice.company_code.in_(company_codes))
+    from app.pic.services import nonresident_tax
     rows, totals = [], {}
     for payment, invoice, sup in session.execute(query).all():
+        tds_inr = int(payment.tds_inr_minor) if payment.tds_inr_minor is not None else int(payment.tds_minor)
         rows.append({"payment": payment.number, "invoice": invoice.number, "supplier": sup.code, "section": invoice.tds_section,
-                     "ratePct": str(invoice.tds_rate) if invoice.tds_rate is not None else None, "baseMinor": invoice.tds_base_minor,
-                     "tdsMinor": payment.tds_minor, "valueDate": payment.value_date.isoformat(), "fiscalYear": invoice.fiscal_year,
+                     "ratePct": str(payment.tds_rate if payment.tds_rate is not None else invoice.tds_rate) if (payment.tds_rate or invoice.tds_rate) is not None else None,
+                     "baseMinor": invoice.tds_base_minor, "tdsMinor": payment.tds_minor, "tdsInrMinor": tds_inr, "currency": payment.currency,
+                     "returnForm": nonresident_tax.return_form(invoice.tds_section), "basis": (payment.tax_detail or {}).get("basis"),
+                     "valueDate": payment.value_date.isoformat(), "fiscalYear": invoice.fiscal_year,
                      "panOnFile": sup.pan_hash is not None})
         key = f"{sup.code}|{invoice.tds_section}"
-        totals[key] = totals.get(key, 0) + payment.tds_minor
+        totals[key] = totals.get(key, 0) + tds_inr
     return {"fiscalYear": fiscal_year, "items": rows, "totalTdsMinor": sum(totals.values()),
             "bySupplierSection": [{"supplier": k.split("|")[0], "section": k.split("|")[1], "tdsMinor": v} for k, v in sorted(totals.items())]}
 
@@ -708,9 +723,10 @@ def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26
     import io
     from app.pic.models import DebitNote, Payment
     from app.pic.platform import crypto
+    from app.pic.services import nonresident_tax
     kind = (kind or "26Q").upper()
-    if kind not in ("26Q", "16A"):
-        raise Problem(422, "VALIDATION_FAILED", "format must be 26Q or 16A")
+    if kind not in ("26Q", "27Q", "16A"):
+        raise Problem(422, "VALIDATION_FAILED", "format must be 26Q, 27Q or 16A")
     first, last = quarter_range(fiscal_year, quarter)
     rows = session.execute(
         select(Payment, Invoice, Supplier).join(Invoice, Invoice.id == Payment.invoice_id).join(Supplier, Supplier.id == Payment.supplier_id)
@@ -720,14 +736,22 @@ def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26
         .order_by(Supplier.code, Payment.value_date, Payment.number)).all()
     lines = []
     for payment, invoice, supplier in rows:
-        gstin = supplier_gstin(session, supplier)
-        pan = gstin[2:12] if len(gstin) == 15 else "PANNOTAVBL"
-        base = int(payment.tds_base_minor or 0)
+        form = nonresident_tax.return_form(invoice.tds_section)
+        if kind in ("26Q", "27Q") and form != kind:  # residents go to 26Q, non-residents (section 195) to 27Q; 16A carries both
+            continue
+        residency = nonresident_tax.residency_of(session, supplier.id) if form == "27Q" else None
+        gstin = supplier_gstin(session, supplier) if form == "26Q" else ""
+        pan = (gstin[2:12] if len(gstin) == 15 else None) or nonresident_tax.pan_of(residency) or "PANNOTAVBL"
+        detail = payment.tax_detail or {}
+        base = int(payment.tds_base_inr_minor) if payment.tds_base_inr_minor is not None else int(payment.tds_base_minor or 0)
+        tds = int(payment.tds_inr_minor) if payment.tds_inr_minor is not None else int(payment.tds_minor)
         note = session.get(DebitNote, payment.debit_note_id) if payment.debit_note_id else None
         lines.append({"payment": payment.number, "invoice": note.number if note else invoice.number, "supplier": supplier.code, "name": supplier.legal_name,
                       "pan": pan, "code": "02" if pan[3:4] == "P" else "01", "section": invoice.tds_section, "date": payment.value_date,
-                      "base": base, "rate": payment.tds_rate if payment.tds_rate is not None else invoice.tds_rate, "tds": int(payment.tds_minor),
-                      "certificate": payment.tds_certificate})
+                      "base": base, "rate": payment.tds_rate if payment.tds_rate is not None else invoice.tds_rate, "tds": tds,
+                      "certificate": payment.tds_certificate, "form": form, "detail": detail,
+                      "country": residency.country if residency is not None else supplier.country, "currency": payment.currency,
+                      "foreignTds": int(payment.tds_minor), "borne": int(payment.tax_borne_minor or 0)})
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\r\n")
     money = lambda minor: f"{minor / 100:.2f}"  # noqa: E731
@@ -739,6 +763,21 @@ def tds_export(session: Session, fiscal_year: str, quarter: str, kind: str = "26
             writer.writerow([_safe(x) for x in (n, l["code"], l["pan"], l["name"], l["section"], l["date"].isoformat(), money(l["base"]), l["rate"],
                                                 money(l["tds"]), "0.00", "0.00", money(l["tds"]), l["date"].isoformat(), l["certificate"] or "",
                                                 l["payment"], l["invoice"], l["supplier"], quarter, fiscal_year)])
+    elif kind == "27Q":
+        writer.writerow(["Sr No", "Deductee Code", "PAN", "Name of Deductee", "Country of Residence", "Section", "Nature of Remittance",
+                         "Date of Payment/Credit", "Amount Paid/Credited (INR)", "Rate of TDS %", "Basis (DTAA / Act / 206AA)", "DTAA Article",
+                         "Act Rate %", "Surcharge %", "Health and Education Cess %", "Total Tax Deducted (INR)", "Grossed Up", "Tax Borne by Deductor",
+                         "Currency", "Tax in Currency", "FX Rate", "FX Date", "Date of Deduction", "Certificate u/s 197", "Payment", "Invoice / Debit note",
+                         "Supplier Code", "Quarter", "Fiscal Year"])
+        for n, l in enumerate(lines, start=1):
+            d = l["detail"]
+            writer.writerow([_safe(x) for x in (n, "01" if d.get("payeeType", "COMPANY") == "COMPANY" else "02", l["pan"], l["name"], l["country"],
+                                                d.get("sectionLabel") or "195", d.get("natureLabel") or l["section"], l["date"].isoformat(), money(l["base"]),
+                                                l["rate"], d.get("basis") or "", (d.get("treaty") or {}).get("article") or "", d.get("actRatePct") or "",
+                                                d.get("surchargePct") or "", d.get("cessPct") or "", money(l["tds"]), "Y" if d.get("grossUp") else "N",
+                                                money(l["borne"]) if l["borne"] else "0.00", l["currency"], money(l["foreignTds"]), d.get("fxRate") or "",
+                                                d.get("fxDate") or "", l["date"].isoformat(), l["certificate"] or "", l["payment"], l["invoice"],
+                                                l["supplier"], quarter, fiscal_year)])
     else:
         grouped: dict[tuple, dict] = {}
         for l in lines:

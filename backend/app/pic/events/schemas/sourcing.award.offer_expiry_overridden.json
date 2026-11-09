@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pic-event:sourcing.award.offer_expiry_overridden",
+  "title": "sourcing.award.offer_expiry_overridden",
+  "description": "Payload (outbox_event.payload) of sourcing.award.offer_expiry_overridden on SOURCING_EVENT. Produced by services/sourcing.py. An award was proposed on a bid whose offer validity had ended: the block (409 BID_OFFER_EXPIRED, D5) was lifted by the written override of a user allowed by SOURCING-POLICY.expiredOfferOverride; the award decision carries it as exception BID_OFFER_EXPIRED.",
+  "type": "object",
+  "properties": {
+    "decisionId": {
+      "type": "string"
+    },
+    "scenarioId": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "round": {
+      "type": "integer"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "overriddenBy": {
+      "type": "string"
+    },
+    "overriddenAt": {
+      "type": "string"
+    },
+    "bids": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "supplier": {
+            "type": "string"
+          },
+          "validUntil": {
+            "type": "string"
+          },
+          "daysExpired": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "supplier",
+          "validUntil",
+          "daysExpired"
+        ]
+      }
+    },
+    "annualValueMinor": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "decisionId",
+    "scenarioId",
+    "category",
+    "round",
+    "reason",
+    "overriddenBy",
+    "overriddenAt",
+    "bids",
+    "annualValueMinor"
+  ],
+  "additionalProperties": true
+}

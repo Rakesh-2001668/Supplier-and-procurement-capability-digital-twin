@@ -1,0 +1,9 @@
+BLART,LTEXT,NUMKR,PIC_USE
+KA,Vendor document,17,SCF_FINANCING journal entry (default)
+KR,Vendor invoice,19,
+KG,Vendor credit memo,17,SUPPLIER_CREDIT_MEMO (logistics invoice verification)
+KZ,Vendor payment,15,PAYMENT
+SA,G/L account document,01,SCF_FINANCING alternative
+AB,Accounting document,01,reversal documents
+RE,Invoice - gross,51,SUPPLIER_INVOICE (logistics invoice verification)
+WE,Goods receipt,49,GOODS_RECEIPT

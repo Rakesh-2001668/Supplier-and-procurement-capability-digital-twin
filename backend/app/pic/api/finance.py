@@ -12,6 +12,7 @@ from sqlalchemy import select
 
 from app.pic.api.deps import idempotency_key, idempotent, uow
 from app.pic.api.pagination import Page, paginate
+from app.pic.api.order_pay import PaymentRunIn, partial_map
 from app.pic.config import get_settings
 from app.pic.models import Invoice, Payment, Supplier
 from app.pic.platform import audit, crypto
@@ -32,6 +33,14 @@ def proposal(run_date: date, include_not_due: bool = False, supplier: list[str] 
     """What a payment run on run_date would pay and skip (and why); nothing is written and no ERP is called."""
     with uow(p) as s:
         return payables.payment_proposal(s, run_date, include_not_due, supplier or None, invoice or None)
+
+
+@router.post("/payments/proposal")
+def proposal_with_partials(data: PaymentRunIn, p: Principal = Depends(require("payment:run"))):
+    """The proposal with partial amounts (body as POST /v1/payments/runs: run_date, include_not_due, supplier_codes, invoice_numbers, partials);
+    nothing is written."""
+    with uow(p) as s:
+        return payables.payment_proposal(s, data.run_date, data.include_not_due, data.supplier_codes, data.invoice_numbers, partial_map(data.partials))
 
 
 @router.get("/payments")
@@ -240,7 +249,7 @@ def revoke_certificate(code: str, certificate_no: str, body: RevokeIn, p: Princi
 
 
 @router.get("/finance/tds-export")
-def tds_export(fiscal_year: str = Query(pattern=r"^\d{4}-\d{2}$"), quarter: str = Query(pattern="^Q[1-4]$"), format: str = Query("26Q", pattern="^(26Q|16A)$"),
+def tds_export(fiscal_year: str = Query(pattern=r"^\d{4}-\d{2}$"), quarter: str = Query(pattern="^Q[1-4]$"), format: str = Query("26Q", pattern="^(26Q|27Q|16A)$"),
                p: Principal = Depends(require("payment:run"))):
     """Form 26Q / 16A style CSV of the TDS deducted in a quarter (finance only; every export is audited with its hash)."""
     with uow(p) as s:
@@ -346,3 +355,146 @@ def msme_interest(supplier: Optional[str] = None, p: Principal = Depends(require
     """Interest accrued on late payments to MSME suppliers (recorded when the tenant publishes the bank rate in rule MSME)."""
     with uow(p) as s:
         return finance_controls.msme_interest_register(s, supplier, company_codes=finance_scope.companies(s))
+
+
+# ---------------------------------------------------------------- section 195: tax residency, payment nature, Form 15CA / 15CB
+class TaxResidencyIn(BaseModel):
+    residency: str = Field(pattern="^(RESIDENT|NON_RESIDENT)$")
+    country: str = Field(pattern="^[A-Z]{2}$")
+    payeeType: str = Field(default="COMPANY", pattern="^(COMPANY|NON_COMPANY)$")
+    pan: Optional[str] = Field(default=None, max_length=10, description="PAN in India (encrypted); omitted keeps the stored one")
+    taxId: Optional[str] = Field(default=None, max_length=40, description="Tax identification number in the country of residence (encrypted)")
+    trcNumber: Optional[str] = Field(default=None, max_length=40, description="Tax Residency Certificate number (encrypted)")
+    trcValidFrom: Optional[date] = None
+    trcValidTo: Optional[date] = None
+    trcDocumentRef: Optional[str] = Field(default=None, max_length=200)
+    form10fAcknowledgement: Optional[str] = Field(default=None, max_length=40, description="Form 10F acknowledgement (encrypted)")
+    form10fFiledOn: Optional[date] = None
+    form10fValidFrom: Optional[date] = None
+    form10fValidTo: Optional[date] = None
+    noPeDeclared: bool = False
+    noPeValidFrom: Optional[date] = None
+    noPeValidTo: Optional[date] = None
+    grossUp: bool = Field(default=False, description="s.195A: the company bears the tax (grossed up)")
+    defaultNature: Optional[str] = Field(default=None, max_length=20, description="ROYALTY | FTS | INTEREST | OTHER (rule TDS-195)")
+    note: Optional[str] = Field(default=None, max_length=500)
+    clear: list[str] = Field(default_factory=list, max_length=4, description="Stored identifiers to remove: pan, tax_id, trc_no, form10f_ack")
+    reason: str = Field(min_length=5, max_length=500)
+
+
+@router.get("/suppliers/{code}/tax-residency")
+def get_tax_residency(code: str, on: Optional[date] = None, p: Principal = Depends(require(READ))):
+    """Tax residency of the supplier (masked identifiers) and which treaty documents are valid on the given day (today)."""
+    from app.pic.services import nonresident_tax
+    with uow(p) as s:
+        supplier = supplier_ref(s, code)
+        return nonresident_tax.view(s, nonresident_tax.residency_of(s, supplier.id), supplier, on)
+
+
+@router.put("/suppliers/{code}/tax-residency")
+def set_tax_residency(code: str, body: TaxResidencyIn, p: Principal = Depends(require_any("supplier:manage", "payment:run")),
+                      key: Optional[str] = Depends(idempotency_key)):
+    """Resident / non-resident, country, PAN, TRC, Form 10F, no-PE declaration and s.195A gross-up of the supplier (audited, identifiers encrypted)."""
+    from app.pic.services import nonresident_tax
+    with uow(p) as s:
+        idem = idempotent(s, f"PUT /v1/suppliers/{code}/tax-residency", key, body)
+        if idem.replay:
+            return idem.replay
+        supplier = supplier_ref(s, code)
+        s.refresh(supplier, with_for_update=True)
+        row_ = nonresident_tax.set_residency(
+            s, supplier, residency=body.residency, country=body.country, payee_type=body.payeeType, reason=body.reason, pan=body.pan, tax_id=body.taxId,
+            trc_no=body.trcNumber, trc_valid_from=body.trcValidFrom, trc_valid_to=body.trcValidTo, trc_document_ref=body.trcDocumentRef,
+            form10f_ack=body.form10fAcknowledgement, form10f_filed_on=body.form10fFiledOn, form10f_valid_from=body.form10fValidFrom,
+            form10f_valid_to=body.form10fValidTo, no_pe_declared=body.noPeDeclared, no_pe_valid_from=body.noPeValidFrom, no_pe_valid_to=body.noPeValidTo,
+            gross_up=body.grossUp, default_nature=body.defaultNature, note=body.note, clear=tuple(body.clear))
+        return idem.store(nonresident_tax.view(s, row_, supplier))
+
+
+def _finance_invoice(s, ref: str, lock: bool = False) -> Invoice:
+    from app.pic.services.common import by_ref
+    return finance_scope.guard_invoice_read(s, by_ref(s, Invoice, ref, lock=lock), ref)
+
+
+@router.get("/invoices/{ref}/withholding-195")
+def invoice_withholding_195(ref: str, on: Optional[date] = None, p: Principal = Depends(require_any("invoice:post", "payment:run"))):
+    """What a payment of the invoice on the given day (today) withholds under section 195: Act rate, surcharge, cess, treaty rate, basis,
+    gross-up, INR amounts, and the Form 15CA / 15CB records."""
+    from app.pic.services import nonresident_tax
+    with uow(p) as s:
+        return nonresident_tax.invoice_preview(s, _finance_invoice(s, ref), on)
+
+
+class InvoiceTaxIn(BaseModel):
+    nature: Optional[str] = Field(default=None, max_length=20)
+    grossUp: Optional[bool] = Field(default=None, description="s.195A override for this invoice; null uses the contract's, else the supplier's")
+    reason: str = Field(min_length=5, max_length=500)
+
+
+@router.put("/invoices/{ref}/withholding-195")
+def set_invoice_withholding_195(ref: str, body: InvoiceTaxIn, p: Principal = Depends(require_any("invoice:post", "payment:run"))):
+    """Payment nature and gross-up of a non-resident invoice before it is paid (a posted invoice is re-determined at once)."""
+    from app.pic.services import nonresident_tax
+    with uow(p) as s:
+        invoice = _finance_invoice(s, ref, lock=True)
+        nonresident_tax.set_invoice_tax(s, invoice, nature=body.nature, gross_up=body.grossUp, reason=body.reason)
+        return nonresident_tax.invoice_preview(s, invoice)
+
+
+class Form15In(BaseModel):
+    part: str = Field(pattern="^[ABCD]$")
+    acknowledgement: str = Field(min_length=8, max_length=20)
+    filedOn: date
+    amountMinor: int = Field(gt=0, description="Remittance the Form 15CA covers, in the invoice currency (minor units)")
+    form15cbCertificateNo: Optional[str] = Field(default=None, max_length=40)
+    form15cbDate: Optional[date] = None
+    caName: Optional[str] = Field(default=None, max_length=200)
+    caMembershipNo: Optional[str] = Field(default=None, max_length=10)
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/invoices/{ref}/form15", status_code=201)
+def record_form15(ref: str, body: Form15In, p: Principal = Depends(require("payment:run")), key: Optional[str] = Depends(idempotency_key)):
+    """Record the Form 15CA acknowledgement (and the Form 15CB CA certificate) of a remittance to a non-resident; until one covers the remittance the
+    payment run does not release it (409 FORM_15CA_REQUIRED / FORM_15CB_REQUIRED)."""
+    from app.pic.services import nonresident_tax
+    with uow(p) as s:
+        idem = idempotent(s, f"POST /v1/invoices/{ref}/form15", key, body)
+        if idem.replay:
+            return idem.replay
+        invoice = _finance_invoice(s, ref, lock=True)
+        row_ = nonresident_tax.record_form15(s, invoice, part=body.part, acknowledgement=body.acknowledgement, filed_on=body.filedOn,
+                                             amount_minor=body.amountMinor, form15cb_certificate_no=body.form15cbCertificateNo,
+                                             form15cb_date=body.form15cbDate, ca_name=body.caName, ca_membership_no=body.caMembershipNo, note=body.note)
+        return idem.store(nonresident_tax.form15_view(row_), 201)
+
+
+class VoidForm15In(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
+
+@router.post("/invoices/{ref}/form15/{form_id}/void")
+def void_form15(ref: str, form_id: uuid.UUID, body: VoidForm15In, p: Principal = Depends(require("payment:run"))):
+    from app.pic.services import nonresident_tax
+    with uow(p) as s:
+        invoice = _finance_invoice(s, ref, lock=True)
+        return nonresident_tax.form15_view(nonresident_tax.void_form15(s, invoice, form_id, body.reason))
+
+
+@router.get("/finance/tds-certificates/pdf")
+def tds_certificate_pdf(fiscal_year: str = Query(pattern=r"^\d{4}-\d{2}$"), quarter: str = Query(pattern="^Q[1-4]$"),
+                        supplier: str = Query(min_length=1, max_length=20), p: Principal = Depends(require("payment:run"))):
+    """Form 16A INFORMATION COPY of one deductee and quarter as PDF, from the certificate data (company codes of the user's ABAC scope only). The
+    statutory Form 16A is downloaded from TRACES. Every download is audited."""
+    import hashlib
+    with uow(p) as s:
+        data = tds_returns.certificate_data(s, fiscal_year, quarter, supplier, company_codes=finance_scope.companies(s))
+        content = tds_returns.certificate_pdf(data, supplier)
+        digest = hashlib.sha256(content).hexdigest()
+        audit.record(s, "TDS_EXPORT", uuid.uuid5(uuid.NAMESPACE_URL, f"tds-16a-pdf:{p.tenant_id}:{fiscal_year}:{quarter}:{supplier}"), "EXPORTED",
+                     object_ref=f"{fiscal_year}/{quarter}/16A-PDF/{supplier}",
+                     after={"supplier": supplier, "certificates": sum(1 for c in data["certificates"] if c["deductee"]["supplier"] == supplier),
+                            "sha256": digest, "format": "pdf"})
+        name = re.sub(r"[^A-Za-z0-9_-]", "_", f"FORM16A_INFO_{supplier}_{fiscal_year}_{quarter}")
+        return Response(content=content, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"', "X-Content-SHA256": digest})

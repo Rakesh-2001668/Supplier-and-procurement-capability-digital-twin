@@ -22,7 +22,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Decide', items: [
     { href: '/pic', label: 'Command centre' },
     { href: '/pic/copilot', label: 'Copilot' },
-    { href: '/pic/spend', label: 'Spend', roles: ['CATEGORY_MANAGER', 'FINANCE_CONTROLLER', 'PROCUREMENT_HEAD', 'CPO'] },
+    { href: '/pic/spend', label: 'Spend', roles: ['CATEGORY_MANAGER', 'FINANCE_CONTROLLER', 'CFO', 'PROCUREMENT_HEAD', 'CPO'] },
     { href: '/pic/savings', label: 'Savings' },
     { href: '/pic/kpis', label: 'KPI explorer' },
   ] },
@@ -50,7 +50,7 @@ const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
     { href: '/pic/inventory', label: 'Inventory' },
     { href: '/pic/invoices', label: 'Invoices & payments' },
     { href: '/pic/invoices/reconciliation', label: 'Posting & reconciliation', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
-    { href: '/pic/invoices/insights', label: 'Payables insights', roles: ['AP_CLERK', 'FINANCE_CONTROLLER', 'CPO', 'PROCUREMENT_HEAD'] },
+    { href: '/pic/invoices/insights', label: 'Payables insights', roles: ['AP_CLERK', 'FINANCE_CONTROLLER', 'CFO', 'CPO', 'PROCUREMENT_HEAD'] },
     { href: '/pic/invoices/tax', label: 'TDS, Form 16A & MSME', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
     { href: '/pic/industry', label: 'Industry controls' },
   ] },
