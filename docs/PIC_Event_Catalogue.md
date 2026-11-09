@@ -17,12 +17,12 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `cold_chain.excursion` | COLD_CHAIN_READING | `services/ind_healthcare.py:126` | stream only | `material`, `object`, `minutes`, `minSeen`, `maxSeen` |
 | `cold_chain.rejected` | COLD_CHAIN_READING | `services/ind_healthcare.py:239` | stream only | `material`, `valueMinor` |
 | `consignment.withdrawn` | MATERIAL | `services/receiving.py:1014` | `par-level-replenishment` | `material`, `plant`, `qty`, `purpose`, `usageRef`, `costObject`, `liabilityMinor`, `lots` |
-| `contract.activated` | CONTRACT | `services/contract.py:688` | `erp-contract-posting`, `savings-contracted`, `sourcing-source-list` | `supplierId`, `sourceEventId`, `validFrom`, `validTo` |
+| `contract.activated` | CONTRACT | `services/contract.py:690` | `erp-contract-posting`, `savings-contracted`, `sourcing-source-list` | `supplierId`, `sourceEventId`, `validFrom`, `validTo` |
 | `contract.amended` | CONTRACT | `services/amendments.py:445` | `erp-contract-posting`, `notify-contract-amended` | (see schema) |
-| `contract.consumption.threshold` | CONTRACT | `services/contract.py:783` | `notify-contract-consumption` | `threshold`, `consumedPct`, `line`, `description`, `releasedQty`, `targetQty`, `ownerId` |
-| `contract.expiring` | CONTRACT | `services/contract.py:945` | `notify-contract-expiring` | `validTo`, `daysToExpiry`, `ownerId`, `supplierId`, `targetValueMinor` |
-| `contract.renewed` | CONTRACT | `services/contract.py:1103` | stream only | `successor`, `successorId`, `validFrom`, `validTo`, `supplierId`, `ownerId` |
-| `contract.terminated` | CONTRACT | `services/amendments.py:442` | `notify-contract-terminated` | `forCause`, `openPurchaseOrders` |
+| `contract.consumption.threshold` | CONTRACT | `services/contract.py:785` | `notify-contract-consumption` | `threshold`, `consumedPct`, `line`, `description`, `releasedQty`, `targetQty`, `ownerId` |
+| `contract.expiring` | CONTRACT | `services/contract.py:947` | `notify-contract-expiring` | `validTo`, `daysToExpiry`, `ownerId`, `supplierId`, `targetValueMinor` |
+| `contract.renewed` | CONTRACT | `services/contract.py:1105` | `erp-contract-close` | `successor`, `successorId`, `validFrom`, `validTo`, `supplierId`, `ownerId` |
+| `contract.terminated` | CONTRACT | `services/amendments.py:442` | `erp-contract-close`, `notify-contract-terminated` | `forCause`, `openPurchaseOrders` |
 | `credit_note.received` | CREDIT_NOTE | `services/payables.py:710` | `spend-cube-credit` | `creditNoteId`, `invoiceId`, `invoice`, `grossMinor`, `noteDate` |
 | `debit_note.posted` | DEBIT_NOTE | `services/debit_notes.py:392` | `spend-cube-debit` | `invoice`, `erpDocument`, `grossMinor` |
 | `debit_note.received` | DEBIT_NOTE | `services/debit_notes.py:202` | stream only | `invoice`, `supplier`, `grossMinor` |
@@ -30,8 +30,8 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `delegation.created` | DELEGATION | `services/delegation.py:120` | `notify-delegation-created` | `delegationId`, `delegatorId`, `delegateId`, `validFrom`, `validTo`, `roles`, `valueLimitMinor`, `createdByAdmin` |
 | `delegation.revoked` | DELEGATION | `services/delegation.py:156` | `notify-delegation-revoked` | `delegationId`, `delegatorId`, `delegateId`, `revokedBy`, `reason` |
 | `erp.sync.finished` | ERP_SYNC | `services/erp_sync.py:446` | stream only | `kind`, `status`, `counts` |
-| `finance.period.closed` | POSTING_PERIOD | `services/finance_controls.py:581` | stream only | `companyCode`, `period`, `unpostedInvoices`, `grirAccrualMinor` |
-| `finance.period.reopened` | POSTING_PERIOD | `services/finance_controls.py:625` | stream only | `companyCode`, `period`, `reason` |
+| `finance.period.closed` | POSTING_PERIOD | `services/finance_controls.py:592` | stream only | `companyCode`, `period`, `unpostedInvoices`, `grirAccrualMinor` |
+| `finance.period.reopened` | POSTING_PERIOD | `services/finance_controls.py:636` | stream only | `companyCode`, `period`, `reason` |
 | `goods_receipt.posted` | GOODS_RECEIPT | `services/receiving.py:343` | `kanban-refill`, `supplier-scorecard` | `grId`, `po`, `qualityHold`, `lines` |
 | `goods_receipt.reversed` | GOODS_RECEIPT | `services/receiving.py:544` | `supplier-scorecard` | `grId`, `po`, `from`, `reason` |
 | `guarantee.expired` | BANK_GUARANTEE | `services/ind_construction.py:196` | stream only | `po`, `expiry` |
@@ -39,13 +39,13 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `guarantee.verified` | BANK_GUARANTEE | `services/ind_construction.py:102` | stream only | `po`, `kind`, `expiry` |
 | `index.updated` | INDEX | `services/ind_logistics.py:255` | stream only | `index`, `inserted`, `revised` |
 | `integration.batch.imported` | INTEGRATION_BATCH | `services/erp_import.py:227` | `notify-batch-imported` | `sourceSystem`, `kind`, `batchRef`, `accepted`, `rejected`, `mrpRuns` |
-| `invoice.captured` | INVOICE | `services/ind_manufacturing.py:126`, `services/payables.py:307`, `services/payables.py:1872` | `notify-invoice-captured` | `supplier`, `grossMinor`, `channel` |
+| `invoice.captured` | INVOICE | `services/ind_manufacturing.py:126`, `services/payables.py:307`, `services/payables.py:2038` | `notify-invoice-captured` | `supplier`, `grossMinor`, `channel` |
 | `invoice.disputed` | INVOICE | `services/payables.py:765` | `notify-invoice-disputed` | `exception`, `delta`, `note` |
 | `invoice.early_payment.accepted` | INVOICE | `services/early_payment.py:181` | stream only | `offer`, `discountMinor`, `payOn` |
 | `invoice.early_payment.offered` | INVOICE | `services/early_payment.py:165` | stream only | `offer`, `source`, `discountMinor`, `payOn` |
-| `invoice.exception.raised` | INVOICE | `services/payables.py:369`, `services/payables.py:596`, `services/payables.py:1096` | `notify-invoice-exception` | `exceptions` |
+| `invoice.exception.raised` | INVOICE | `services/payables.py:369`, `services/payables.py:596`, `services/payables.py:1101` | `notify-invoice-exception` | `exceptions` |
 | `invoice.paid_in_erp` | INVOICE | `services/erp_sync.py:382` | stream only | `erpDocument`, `clearingDocument`, `clearingDate` |
-| `invoice.posted` | INVOICE | `services/payables.py:1245` | `rebate-accrual`, `savings-realised`, `spend-cube`, `supplier-scorecard` | `invoiceId`, `erpDocument`, `supplier`, `grossMinor` |
+| `invoice.posted` | INVOICE | `services/payables.py:1250` | `rebate-accrual`, `savings-realised`, `spend-cube`, `supplier-scorecard` | `invoiceId`, `erpDocument`, `supplier`, `grossMinor` |
 | `invoice.scf.elected` | INVOICE | `services/early_payment.py:269` | stream only | `offer`, `maturity`, `grossMinor` |
 | `kanban.signalled` | KANBAN_CARD | `services/ind_manufacturing.py:238` | `kanban-replenishment` | `material`, `plant`, `binQty` |
 | `licence.unused_flagged` | LICENCE | `services/ind_it.py:130` | stream only | `utilisationPct`, `unusedQty`, `potentialSavingMinor`, `termEnd` |
@@ -58,10 +58,10 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `ml.drift.alert` | ML_MODEL | `services/ml_registry.py:225` | stream only | `code`, `version`, `alerts` |
 | `ml.model.activated` | ML_MODEL | `services/ml_registry.py:131` | stream only | `code`, `version` |
 | `ml.model.suspended` | ML_MODEL | `services/ml_registry.py:157` | stream only | `code`, `version`, `reason`, `fallbackTo` |
-| `mrp.run.completed` | MRP_RUN | `services/erp_import.py:219`, `services/planning.py:577` | `notify-mrp-run` | `plant`, `mode`, `plannedOrders`, `exceptions` |
+| `mrp.run.completed` | MRP_RUN | `services/erp_import.py:219`, `services/planning.py:609` | `notify-mrp-run` | `plant`, `mode`, `plannedOrders`, `exceptions` |
 | `msme.interest.accrued` | INVOICE | `services/finance_controls.py:144` | stream only | `supplier`, `payment`, `interestMinor`, `daysLate` |
-| `payment.completed` | INVOICE | `services/payables.py:1271` | `notify-payment-completed`, `advance-paid` | `payment`, `amountMinor`, `clearingDocument` |
-| `payment.returned` | INVOICE | `services/payables.py:1307` | stream only | `payment`, `amountMinor`, `reason`, `clearingDocument` |
+| `payment.completed` | INVOICE | `services/payables.py:1285`, `services/payables.py:1279` | `notify-payment-completed`, `advance-paid` | `payment`, `amountMinor`, `clearingDocument` |
+| `payment.returned` | INVOICE | `services/payables.py:1332` | stream only | `payment`, `amountMinor`, `reason`, `clearingDocument` |
 | `payment_file.acknowledged` | PAYMENT_FILE | `services/bank_files.py:292` | stream only | `run`, `status`, `bankRef`, `totalMinor` |
 | `payment_file.generated` | PAYMENT_FILE | `services/bank_files.py:253` | `notify-payment-file` | (see schema) |
 | `payment_file.rejected` | PAYMENT_FILE | `services/bank_files.py:292` | stream only | `run`, `status`, `bankRef`, `totalMinor` |
@@ -69,19 +69,20 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `payment_file.sent` | PAYMENT_FILE | `services/bank_files.py:292` | stream only | `run`, `status`, `bankRef`, `totalMinor` |
 | `pcard.transaction_disallowed` | PCARD_TRANSACTION | `services/ind_general.py:286` | stream only | `card`, `amountMinor`, `reasons` |
 | `physical_inventory.posted` | PHYSICAL_INVENTORY | `services/inventory.py:772` | stream only | `inventory`, `plant`, `storageLocation`, `lines`, `differences`, `gainMinor`, `lossMinor`, `accuracyPct`, `erpDocument` |
-| `planned_order.cancelled` | PLANNED_ORDER | `services/planning.py:652` | stream only | `qty`, `needDate`, `previousStatus`, `reason` |
-| `planned_order.firmed` | PLANNED_ORDER | `services/planning.py:695` | `notify-planned-order-firmed` | `qty`, `needDate` |
-| `planned_order.unfirmed` | PLANNED_ORDER | `services/planning.py:668` | stream only | `qty`, `needDate`, `reason` |
+| `planned_order.cancelled` | PLANNED_ORDER | `services/planning.py:684` | stream only | `qty`, `needDate`, `previousStatus`, `reason` |
+| `planned_order.firmed` | PLANNED_ORDER | `services/planning.py:727` | `notify-planned-order-firmed` | `qty`, `needDate` |
+| `planned_order.unfirmed` | PLANNED_ORDER | `services/planning.py:700` | stream only | `qty`, `needDate`, `reason` |
 | `process.definition.published` | PROCESS_DEFINITION | `platform/definitions.py:294` | stream only | `key`, `version`, `baseVersion` |
 | `punchout.cart.returned` | PUNCHOUT_SESSION | `services/punchout.py:376` | stream only | `supplier`, `items`, `totalMinor`, `protocol` |
-| `purchase_order.cancelled` | PURCHASE_ORDER | `services/order.py:1336` | `contract-consumption`, `notify-po-cancelled`, `erp-po-posting`, `po-transmission-delivery` | `version`, `from`, `reason`, `supplier`, `transmissions` |
-| `purchase_order.changed` | PURCHASE_ORDER | `services/order.py:1067` | `contract-consumption`, `erp-po-posting` | `version`, `changes` |
-| `purchase_order.closed` | PURCHASE_ORDER | `services/order.py:1388`, `services/order.py:1452` | `contract-consumption` | `from`, `reason` |
-| `purchase_order.confirmed` | PURCHASE_ORDER | `services/order.py:856` | `notify-po-confirmed` | `version`, `hours` |
-| `purchase_order.released` | PURCHASE_ORDER | `services/order.py:739` | `contract-consumption`, `erp-po-posting` | `supplier`, `totalMinor`, `version`, `touchless` |
+| `purchase_order.cancelled` | PURCHASE_ORDER | `services/order.py:1340` | `contract-consumption`, `notify-po-cancelled`, `erp-po-posting`, `po-transmission-delivery` | `version`, `from`, `reason`, `supplier`, `transmissions` |
+| `purchase_order.changed` | PURCHASE_ORDER | `services/order.py:1071` | `contract-consumption`, `erp-po-posting` | `version`, `changes` |
+| `purchase_order.closed` | PURCHASE_ORDER | `services/order.py:1392`, `services/order.py:1456` | `contract-consumption` | `from`, `reason` |
+| `purchase_order.confirmed` | PURCHASE_ORDER | `services/order.py:860` | `notify-po-confirmed` | `version`, `hours` |
+| `purchase_order.released` | PURCHASE_ORDER | `services/order.py:743` | `contract-consumption`, `erp-po-posting` | `supplier`, `totalMinor`, `version`, `touchless` |
 | `purchase_order.transmitted` | PURCHASE_ORDER | `services/transmission.py:354` | `notify-po-transmitted`, `po-transmission-delivery` | `version`, `channels`, `transmissions` |
 | `quality.usage_decision` | GOODS_RECEIPT | `services/receiving.py:427` | `capa-on-rejection`, `supplier-scorecard` | `grId`, `lot`, `accepted`, `rejected`, `defect`, `po`, `lots` |
 | `rebate.settled` | REBATE_SETTLEMENT | `services/rebates.py:263` | stream only | `supplierId`, `supplier`, `agreement`, `period`, `amountMinor`, `companyCode`, `erpKey` |
+| `remittance.form15.recorded` | INVOICE | `services/nonresident_tax.py:640` | stream only | (see schema) |
 | `requisition.approved` | REQUISITION | `services/requisition.py:727` | `notify-requisition-approved` | `origin`, `totalMinor`, `lines` |
 | `requisition.cancelled` | REQUISITION | `services/requisition.py:903` | `notify-requisition-cancelled` | `reason`, `previousStatus` |
 | `requisition.submitted` | REQUISITION | `services/requisition.py:429` | stream only | `origin`, `totalMinor`, `chain` |
@@ -93,15 +94,16 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `service_entry.approved` | SERVICE_ENTRY | `services/receiving.py:1273` | `notify-service-entry-approved`, `accessorial-approved` | `po`, `totalMinor` |
 | `service_entry.revoked` | SERVICE_ENTRY | `services/receiving.py:1245` | stream only | `po`, `totalMinor`, `reason` |
 | `sod.mitigation.decided` | SOD_MITIGATION | `platform/sod.py:263` | stream only | `mitigationId`, `rule`, `action`, `status`, `requester`, `validUntil` |
-| `sourcing.award.regret` | SOURCING_EVENT | `services/sourcing.py:2298` | `notify-award-regret` | `supplier`, `supplierId`, `reason`, `detail`, `round`, `rank`, `bidders` |
+| `sourcing.award.offer_expiry_overridden` | SOURCING_EVENT | `services/sourcing.py:2304` | stream only | `decisionId`, `scenarioId`, `category`, `round`, `reason`, `overriddenBy`, `overriddenAt`, `bids`, `annualValueMinor` |
+| `sourcing.award.regret` | SOURCING_EVENT | `services/sourcing.py:2401` | `notify-award-regret` | `supplier`, `supplierId`, `reason`, `detail`, `round`, `rank`, `bidders` |
 | `sourcing.bid.disqualified` | SOURCING_EVENT | `services/sourcing.py:1292` | `notify-bid-disqualified` | `supplier`, `supplierId`, `reason`, `round`, `ownerId` |
 | `sourcing.bid.submitted` | SOURCING_EVENT | `services/sourcing.py:647` | `scorecard-responsiveness` | `supplier`, `round` |
 | `sourcing.bid.withdrawn` | SOURCING_EVENT | `services/sourcing.py:668` | stream only | `supplier`, `round` |
 | `sourcing.bids.unsealed` | SOURCING_EVENT | `services/sourcing.py:877` | stream only | `round`, `bids`, `competitive`, `minBidders` |
 | `sourcing.clarification.answered` | SOURCING_EVENT | `services/auction.py:109` | `notify-clarification` | `seq`, `kind`, `question`, `answer`, `ownerId`, `inviteeSupplierIds`, `askedBySupplierId` |
 | `sourcing.deadline.extended` | SOURCING_EVENT | `services/sourcing.py:1389` | `notify-sourcing-extended` | `round`, `previousCloseAt`, `closeAt`, `reason`, `inviteeSupplierIds` |
-| `sourcing.event.awarded` | SOURCING_EVENT | `services/sourcing.py:2319` | `contract-from-award`, `notify-sourcing-awarded`, `savings-negotiated` | (see schema) |
-| `sourcing.event.cancelled` | SOURCING_EVENT | `services/sourcing.py:2379` | `notify-sourcing-cancelled`, `savings-lost` | `from`, `reason`, `round`, `category`, `ownerId`, `inviteeSupplierIds` |
+| `sourcing.event.awarded` | SOURCING_EVENT | `services/sourcing.py:2422` | `contract-from-award`, `notify-sourcing-awarded`, `savings-negotiated` | (see schema) |
+| `sourcing.event.cancelled` | SOURCING_EVENT | `services/sourcing.py:2482` | `notify-sourcing-cancelled`, `savings-lost` | `from`, `reason`, `round`, `category`, `ownerId`, `inviteeSupplierIds` |
 | `sourcing.event.published` | SOURCING_EVENT | `services/sourcing.py:538` | `savings-identify`, `notify-sourcing-invited` | `category`, `baselineMinor`, `closeAt`, `lines`, `type`, `openAt`, `inviteeSupplierIds` |
 | `sourcing.round.opened` | SOURCING_EVENT | `services/sourcing.py:1356` | `notify-sourcing-round` | `round`, `closeAt`, `note`, `inviteeSupplierIds` |
 | `spend.cube.refreshed` | SPEND_CUBE | `services/spend_cube.py:399` | stream only | `mode`, `periods`, `lines` |
@@ -121,9 +123,9 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 | `supplier.registered` | SUPPLIER | `services/invitations.py:239` | `notify-supplier-registered` | `supplierCode`, `channel`, `categories`, `screening` |
 | `supplier.segment.changed` | SUPPLIER | `services/supplier_mgmt.py:108` | stream only | `supplier`, `from`, `to`, `method` |
 | `supplier.status.changed` | SUPPLIER | `services/supplier.py:850`, `services/supplier.py:60` | `supplier-status-flags` | `supplierCode`, `from`, `to`, `reason` |
-| `task.assigned` | TASK | `platform/workflow.py:238` | `notify-task-assigned` | `taskId`, `kind`, `name`, `role`, `objectType`, `objectId`, `objectRef`, `due` |
-| `task.escalated` | TASK | `platform/workflow.py:481` | `notify-task-escalated` | `taskId`, `kind`, `name`, `role`, `level`, `objectType`, `objectId`, `objectRef`, `due`, `escalatedTo`, `candidates`, `mode`, `reassignedFrom` |
-| `tds.challan.recorded` | TDS_CHALLAN | `services/tds_returns.py:68` | stream only | `companyCode`, `fiscalYear`, `quarter`, `section`, `amountMinor` |
+| `task.assigned` | TASK | `platform/workflow.py:243` | `notify-task-assigned` | `taskId`, `kind`, `name`, `role`, `objectType`, `objectId`, `objectRef`, `due` |
+| `task.escalated` | TASK | `platform/workflow.py:489` | `notify-task-escalated` | `taskId`, `kind`, `name`, `role`, `level`, `objectType`, `objectId`, `objectRef`, `due`, `escalatedTo`, `candidates`, `mode`, `reassignedFrom` |
+| `tds.challan.recorded` | TDS_CHALLAN | `services/tds_returns.py:79` | stream only | `companyCode`, `fiscalYear`, `quarter`, `section`, `amountMinor` |
 
 ## Events without an internal consumer
 
@@ -131,7 +133,6 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 - `advance.approved`: read by the real-time stream and external subscribers only.
 - `cold_chain.excursion`: read by the real-time stream and external subscribers only.
 - `cold_chain.rejected`: read by the real-time stream and external subscribers only.
-- `contract.renewed`: A successor contract took over (TD 6 Renewed): the predecessor no longer prices orders; the successor's own contract.activated drives the ERP posting and source determination, subscribers (BI, renewals calendar) read the stream.
 - `debit_note.received`: read by the real-time stream and external subscribers only.
 - `debit_note.rejected`: read by the real-time stream and external subscribers only.
 - `erp.sync.finished`: read by the real-time stream and external subscribers only.
@@ -166,12 +167,14 @@ Delivery: at least once, in order per tenant; consumers are idempotent (`process
 - `process.definition.published`: read by the real-time stream and external subscribers only.
 - `punchout.cart.returned`: The requester's browser session receives the cart; nothing else reacts.
 - `rebate.settled`: read by the real-time stream and external subscribers only.
+- `remittance.form15.recorded`: A Form 15CA (with Form 15CB where required) was recorded for a remittance to a non-resident (section 195): the payment run reads the record itself; treasury and the tax team read the stream.
 - `requisition.submitted`: Approval tasks and the audit trail already carry it; subscribers use it for cycle-time metrics.
 - `return_delivery.closed`: An open return delivery was closed by hand with a reason (nothing more due); the audit trail holds who and why.
 - `return_delivery.credited`: A return delivery was settled by the supplier's credit note(s) and closed; the audit trail holds the notes; subscribers (supplier scorecard, BI) read the stream.
 - `return_delivery.replaced`: A return delivery was settled by the replacement receipt(s) and closed; the receipt's own events drive stock and the GR/IR.
 - `service_entry.revoked`: The approval of a service entry sheet was revoked; its value left the PO line again and the audit trail holds the reason.
 - `sod.mitigation.decided`: read by the real-time stream and external subscribers only.
+- `sourcing.award.offer_expiry_overridden`: An award was proposed on a bid whose offer validity had ended, with the written override of a category manager (D5, SOURCING-POLICY.expiredOfferOverride); the decision carries it as exception BID_OFFER_EXPIRED and goes to the approvers; subscribers (audit analytics, BI) read the stream.
 - `sourcing.bid.withdrawn`: A supplier withdrew its sealed bid before the close; the content is destroyed unread and the audit trail holds the reason; nothing else reacts.
 - `sourcing.bids.unsealed`: The sealed bids of a round were opened (TD 6.1 bids.unsealed): the audit trail holds who opened them; subscribers (BI, the Bid Analysis Agent) read the stream.
 - `spend.cube.refreshed`: read by the real-time stream and external subscribers only.

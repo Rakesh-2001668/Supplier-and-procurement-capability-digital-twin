@@ -138,6 +138,7 @@ The 22 built-in roles and their permissions (scopes). Tenants can also define cu
 | SERVICE_OWNER | `ses:approve` | M09 (service entry) |
 | AP_CLERK | `invoice:capture`, `invoice:resolve`, `invoice:approve`, `invoice:post` | M10 |
 | FINANCE_CONTROLLER | `payment:run`, `savings:validate`, `invoice:approve`, `spend:read`, `period:close`, `inventory:approve` | M10, M11, M09 approvals |
+| CFO | `invoice:approve`, `spend:read` | M10 last approver of the 1 crore invoice band (rule `INVOICE-APPROVAL`, docs/PIC_Default_Decisions.md) |
 | PROCUREMENT_HEAD | `spend:read` | M01, approvals |
 | CPO | `spend:read`, `agents:manage` | M01, M12, top approval bands |
 | CAPEX_COMMITTEE | none (approves capex in the inbox) | M04, M08 approvals |
@@ -1774,6 +1775,7 @@ M10 (Blueprint §16, flow F7 "Invoice → match → post → pay", process key `
 | AP_CLERK | Captures invoices, re-runs the match, resolves exceptions, rejects, approves and posts invoices, raises debit notes for the supplier, records bank results with finance | `invoice:capture`, `invoice:resolve`, `invoice:approve`, `invoice:post` | SOD-08: whoever captured an invoice may not approve it. SOD-04: the PO creator may not resolve exceptions on that PO |
 | BUYER | Decides price-variance acceptance tasks (`PRICE_VARIANCE`) and the buyer chain of debit notes | (task chain role) | Excluded from tasks on POs they created |
 | FINANCE_CONTROLLER | Approves invoices, runs payment proposals and runs, generates bank files, records bank results, imports bank statements, lifts payment blocks, closes and reopens periods, maintains supplier finance data and TDS challans, validates savings | `invoice:approve`, `payment:run`, `period:close`, `savings:validate` | SOD-09: whoever approved an invoice may not release its payment. SOD-02/02a: whoever changed the supplier's bank details may not pay or post its invoices |
+| CFO | Approves invoices of 1 crore and above after the finance controller (default bands of rule `INVOICE-APPROVAL`); never the AP approver or an earlier approver of the same chain | `invoice:approve` | SOD-08 / SOD-09 per invoice; four-eyes exclusions of the chain |
 | SUPPLIER_MANAGER | Maintains supplier finance data (MSME class, Udyam, PAN, TDS section, s.197 certificates) and bank changes | `supplier:manage`, `supplier:bank` | SOD-02: `supplier:bank` and `payment:run` never on one person |
 | PROCUREMENT_HEAD | Second step of the debit-note buyer chain above ₹1 L (default rule) | (task chain role) | |
 
@@ -2145,7 +2147,7 @@ The platform layer (Blueprint M13 §19, screens ADM-01..ADM-06; TD §3-§4 tenan
 | PROCUREMENT_HEAD, CPO | Approve SoD mitigation requests (rule `SOD-MITIGATION`: Low/Medium PROCUREMENT_HEAD; High PROCUREMENT_HEAD then CPO; Critical never) | `tasks:work` |
 | Every internal user | Works the task inbox; requests an SoD mitigation; delegates their own approvals; reads organisation, permission matrix, notifications | `pic:read`, `tasks:work` |
 
-Built-in roles (22, read-only, `platform/auth.py ROLE_SCOPES`): REQUESTER, COST_OBJECT_OWNER, DEPT_HEAD, MRP_CONTROLLER, BUYER, CATEGORY_MANAGER, SUPPLIER_MANAGER, CONTRACT_MANAGER, LEGAL, MDM_STEWARD, RECEIVER, INVENTORY_CONTROLLER, QUALITY_INSPECTOR, SERVICE_OWNER, AP_CLERK, FINANCE_CONTROLLER, PROCUREMENT_HEAD, CPO, CAPEX_COMMITTEE, CLINICAL_LEAD, TENANT_ADMIN, SUPPLIER_USER.
+Built-in roles (23, read-only, `platform/auth.py ROLE_SCOPES`): REQUESTER, COST_OBJECT_OWNER, DEPT_HEAD, MRP_CONTROLLER, BUYER, CATEGORY_MANAGER, SUPPLIER_MANAGER, CONTRACT_MANAGER, LEGAL, MDM_STEWARD, RECEIVER, INVENTORY_CONTROLLER, QUALITY_INSPECTOR, SERVICE_OWNER, AP_CLERK, FINANCE_CONTROLLER, CFO, PROCUREMENT_HEAD, CPO, CAPEX_COMMITTEE, CLINICAL_LEAD, TENANT_ADMIN, SUPPLIER_USER.
 
 ### 3. Screens
 
