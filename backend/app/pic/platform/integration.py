@@ -124,10 +124,14 @@ class SapS4Connector:
             last = session.execute(select(func.max(ErpDocument.doc_no)).where(ErpDocument.system == self.system,
                                                                              ErpDocument.doc_type == doc_type)).scalar()
             doc_no = str(int(last) + 1) if last else str(start)
+        # The simulated ERP document records what PIC sent (``payload``, the field-mapped form when the tenant has a mapping), but its own
+        # columns come from the canonical payload: a mapping may rename the company code or turn grossMinor into "8400.00" (minor_to_major).
+        canonical = canonical_payload(message)
+        amount = canonical.get("grossMinor")
         session.add(ErpDocument(
             tenant_id=current_tenant(session), system=self.system, doc_type=doc_type, doc_no=doc_no,
-            external_ref=message.idempotency_key, company_code=message.payload.get("companyCode", "1000"),
-            amount_minor=message.payload.get("grossMinor"),
+            external_ref=message.idempotency_key, company_code=canonical.get("companyCode") or "1000",
+            amount_minor=amount if isinstance(amount, int) and not isinstance(amount, bool) else None,
             payload=message.payload if request is None else {**message.payload, "sapRequest": request},
         ))
         session.flush()
@@ -184,10 +188,17 @@ def _as_sent(session: Session, message: IntegrationMessage):
         return
     original = message.payload
     set_committed_value(message, "payload", outbound)
+    message._pic_canonical_payload = original  # plain attribute (not mapped): the simulator reads its own bookkeeping from it
     try:
         yield
     finally:
         set_committed_value(message, "payload", original)
+        message.__dict__.pop("_pic_canonical_payload", None)
+
+
+def canonical_payload(message: IntegrationMessage) -> dict:
+    """The payload the services built, also while the connector is shown the field-mapped one (``_as_sent``)."""
+    return message.__dict__.get("_pic_canonical_payload") or message.payload
 
 
 def _find_quietly(connector, session: Session, message: IntegrationMessage):

@@ -9,7 +9,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.pic.config import get_settings
 from app.pic.db import system_tx, tenant_tx
@@ -692,6 +692,33 @@ def test_a_failing_mapping_retries_and_never_posts(tid):
         integration.process(s, msg)
         assert msg.status == "RETRY" and "field mapping failed" in msg.last_error
         assert s.execute(select(ErpDocument).where(ErpDocument.external_ref == "wv1e-fail")).first() is None
+        s.rollback()
+
+
+def test_simulator_books_canonical_amount_and_company_under_a_mapping_that_reshapes_them(tid):
+    """The turnkey onboarding mappings (SAP S/4HANA invoice verification) turn grossMinor into "8400.00" (minor_to_major) and can rename the
+    company code. The ERP simulator must still record its own columns from the canonical payload: amount_minor is a bigint, and a mapped
+    "8400.00" made every invoice posting fail on a tenant with that mapping (Neon, pack D23)."""
+    with tenant_tx(tid) as s:
+        _principal(s, tid, "admin")
+        version = (s.execute(select(func.max(IntegrationFieldMapping.version)).where(
+            IntegrationFieldMapping.target_system == "SAP_S4", IntegrationFieldMapping.message_type == "SUPPLIER_CREDIT_MEMO")).scalar() or 0) + 1
+        s.add(IntegrationFieldMapping(tenant_id=tid, target_system="SAP_S4", message_type="SUPPLIER_CREDIT_MEMO", version=version, status="ACTIVE",
+                                      rules=[{"op": "constant", "to": "SourceSystem", "value": "PIC"},
+                                             {"op": "format", "field": "grossMinor", "kind": "minor_to_major", "decimals": 2},
+                                             {"op": "rename", "from": "companyCode", "to": "BUKRS"}]))
+        s.flush()
+        msg = integration.enqueue(s, target_system="SAP_S4", message_type="SUPPLIER_CREDIT_MEMO", idempotency_key="wv1e-canonical",
+                                  object_type="CREDIT_NOTE", object_id=uuid.uuid4(), object_ref="CN-C1",
+                                  payload={"invoice": "INV-C1", "grossMinor": 840000, "companyCode": "2000"})
+        integration.process(s, msg)
+        assert msg.status == "POSTED", msg.last_error
+        assert msg.outbound_payload["grossMinor"] == "8400.00" and msg.outbound_payload["BUKRS"] == "2000"
+        assert msg.payload["grossMinor"] == 840000 and "SourceSystem" not in msg.payload, "the canonical payload stays"
+        assert "_pic_canonical_payload" not in msg.__dict__
+        doc = s.execute(select(ErpDocument).where(ErpDocument.external_ref == "wv1e-canonical")).scalar_one()
+        assert (doc.amount_minor, doc.company_code) == (840000, "2000")
+        assert doc.payload["grossMinor"] == "8400.00" and doc.payload["SourceSystem"] == "PIC", "the document keeps what was sent"
         s.rollback()
 
 
