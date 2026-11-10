@@ -141,7 +141,8 @@ def test_lot_bidding_published_scheduled_opening_and_baseline_methods(packs):
         methods = Counter(e.baseline_method for e in found.values())
         bundles = [e for e in found.values() if e.bundle]
     assert len(lot_events) >= 2
-    assert len(published) == 2 and all(e.open_at is not None and e.open_at > clock.now() and e.published_at is not None for e in published)
+    # a scheduled opening: after publication and before the close (the pack's dates are fixed, so "after today" would expire with the calendar)
+    assert len(published) == 2 and all(e.open_at is not None and e.published_at is not None and e.published_at < e.open_at < e.close_at for e in published)
     for method in ("LAST_PRICE", "WEIGHTED_AVG", "SHOULD_COST", "MARKET_INDEX", "BUDGET"):
         assert methods[method] >= 1, (method, methods)
     assert len(bundles) >= 2
