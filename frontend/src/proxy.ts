@@ -4,9 +4,11 @@ import { legacyDemoAllowed } from '@/lib/pic/deployment';
 // Pages that work without a session: sign-in, supplier self-registration from an invitation link (F8-01), and account activation / password reset from an administrator's link.
 const PUBLIC_PAGES = ['/pic/login', '/pic/register', '/pic/activate'];
 
+// Organisation registration (buyer / supplier) and its e-mail confirmation: public in every environment.
+const PUBLIC_PLATFORM_PAGES = ['/register', '/register/verify'];
+
 // One platform, one sign-in: the earlier entry points of the Supplier Capability Digital Twin lead to the platform pages.
-// `/register` leads to sign-in until organisation registration (buyer / supplier) is released.
-const ENTRY_REDIRECTS: Record<string, string> = { '/': '/pic', '/login': '/pic/login', '/signin': '/pic/login', '/register': '/pic/login' };
+const ENTRY_REDIRECTS: Record<string, string> = { '/': '/pic', '/login': '/pic/login', '/signin': '/pic/login' };
 
 function isWorkspace(pathname: string): boolean {
   return pathname === '/pic' || pathname.startsWith('/pic/');
@@ -24,7 +26,7 @@ function signIn(request: NextRequest): NextResponse {
   return redirect(request, '/pic/login', `?next=${encodeURIComponent(pathname + search)}`);
 }
 
-// 1. Entry points: `/`, `/login`, `/register` → the platform pages.
+// 1. Entry points: `/`, `/login`, `/signin` → the platform pages; `/register` and `/register/verify` are public.
 // 2. Twin screens (everything outside /pic): retired in production (PIC_ENV=production or NEXT_PUBLIC_PIC_ENV=production, unless
 //    PIC_ENABLE_LEGACY_DEMO=true): they redirect to /pic. Where they are on, they need the platform session like every other page.
 // 3. PIC workspace: no session cookie → sign-in page.
@@ -33,6 +35,7 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const entry = ENTRY_REDIRECTS[pathname];
   if (entry) return redirect(request, entry);
+  if (PUBLIC_PLATFORM_PAGES.includes(pathname)) return NextResponse.next();
   if (!isWorkspace(pathname)) {
     if (!legacyDemoAllowed()) return redirect(request, '/pic');
     return request.cookies.get('pic_session') ? NextResponse.next() : signIn(request);

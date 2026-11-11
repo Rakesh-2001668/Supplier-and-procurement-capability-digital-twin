@@ -21,7 +21,7 @@ const LiveContext = createContext<Live>({ connected: false, openTasks: null, eve
 export const useLive = () => useContext(LiveContext);
 
 // Pages without the platform chrome: sign-in, account activation, and the public registration pages.
-const PUBLIC_PAGES = ['/pic/login', '/pic/activate', '/pic/register', '/login', '/register'];
+const PUBLIC_PAGES = ['/pic/login', '/pic/activate', '/pic/register', '/login', '/register', '/register/verify'];
 
 function useLiveStream(enabled: boolean): Live {
   const client = useQueryClient();
@@ -180,7 +180,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
             </header>
             {/* Twin screens bring their own page layout; PIC pages use the workspace container. */}
             <main id="main" className={twinPage ? 'min-w-0' : 'mx-auto max-w-[1400px] px-4 py-6 md:px-8'}>{children}</main>
-            {!supplier && !twinPage && <footer><LifecycleStrip pathname={pathname} /></footer>}
+            {!supplier && !twinPage && !user?.roles.includes('PLATFORM_OPERATOR') && <footer><LifecycleStrip pathname={pathname} /></footer>}
           </div>
         </div>
       </ToastProvider>

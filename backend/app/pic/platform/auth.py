@@ -49,6 +49,9 @@ ROLE_SCOPES: dict[str, set[str]] = {
     "TENANT_ADMIN": {READ, TASKS, "admin:rules", "admin:audit", "admin:integration", "agents:manage", "admin:ops", "admin:workflow"},
     # External supplier users: only supplier-side commands on their own documents.
     "SUPPLIER_USER": {"supplier:portal", "bid:submit", "po:confirm", "asn:create", "invoice:submit", "ses:create"},
+    # Platform operators (users of the PLATFORM organisation only): review and decide organisation registrations. Never assignable by a
+    # customer organisation (roles.PLATFORM_ROLES), never part of a custom role (roles.PLATFORM_SCOPES).
+    "PLATFORM_OPERATOR": {"platform:registrations"},
 }
 
 

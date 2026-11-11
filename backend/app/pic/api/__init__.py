@@ -15,6 +15,7 @@ from app.pic.api import admin_enterprise  # noqa: E402  (M13 enterprise administ
 from app.pic.api import finance  # noqa: E402  (M10 finance completion: periods, TDS, bank results, payment proposal)
 from app.pic.api import inventory  # noqa: E402  (M09 inventory: stock reads, stock postings, physical inventory, reservations)
 from app.pic.api import spend_ops  # noqa: E402  (M01 spend second pass: analytics, drill, export, quality, steward queue, maverick lifecycle, plans)
+from app.pic.api import registration  # noqa: E402  (unified platform phase 3: organisation registration and the operator console)
 from app.pic.platform import errors, http
 
 
@@ -33,3 +34,4 @@ def install(app: FastAPI) -> None:
     app.include_router(finance.router)
     app.include_router(inventory.router)
     app.include_router(spend_ops.router)
+    app.include_router(registration.router)

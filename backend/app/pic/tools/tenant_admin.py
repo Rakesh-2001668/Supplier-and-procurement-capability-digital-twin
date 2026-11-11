@@ -111,6 +111,17 @@ def reissue(args) -> dict:
             "emailStatus": result["emailStatus"]}
 
 
+def create_operator(args) -> dict:
+    """A platform operator in the platform organisation (created on first use); signs in with e-mail, password and mandatory MFA."""
+    from app.pic.platform.errors import Problem
+    from app.pic.services import registration
+    try:
+        result = registration.create_operator(args.email, args.name)
+    except Problem as exc:
+        raise ToolError(exc.detail if hasattr(exc, "detail") else str(exc))
+    return {**result, "organisation": registration.PLATFORM_CODE}
+
+
 def list_tenants(_args) -> list[dict]:
     with system_tx() as s:
         return [{"code": t.code, "name": t.name, "template": t.industry_template, "mfaEnforce": t.mfa_enforce, "createdAt": t.created_at.isoformat()}
@@ -136,11 +147,14 @@ def main(argv=None) -> int:
     r.add_argument("--code", required=True)
     r.add_argument("--admin-email", required=True)
     sub.add_parser("list", help="list tenants")
-    for p in (c, r, sub.choices["list"]):
+    o = sub.add_parser("create-operator", help="platform operator account (reviews organisation registrations); MFA is mandatory")
+    o.add_argument("--email", required=True)
+    o.add_argument("--name", required=True)
+    for p in (c, r, sub.choices["list"], o):
         p.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args(argv)
     try:
-        result = {"create": create, "reissue": reissue, "list": list_tenants}[args.command](args)
+        result = {"create": create, "reissue": reissue, "list": list_tenants, "create-operator": create_operator}[args.command](args)
     except ToolError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -149,6 +163,9 @@ def main(argv=None) -> int:
     elif args.command == "list":
         for t in result:
             print(f"{t['code']:<12} {t['template']:<14} mfa={t['mfaEnforce']}  {t['name']}")
+    elif args.command == "create-operator":
+        print(f"Platform operator {result['operator']} created in organisation {result['organisation']}.")
+        print(f"Activation link (shown once, valid until {result['expiresAt']}; e-mail: {result['emailStatus']}):\n  {result['activationUrl']}")
     else:
         print(f"Tenant {result['tenant']} ready.")
         print(f"First administrator: {result['admin']}")

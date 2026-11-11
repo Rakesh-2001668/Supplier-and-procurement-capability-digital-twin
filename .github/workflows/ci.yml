@@ -106,7 +106,7 @@ jobs:
         # Scope: every PIC screen and component, plus the proxy, config and BFF routes (no exclusions since 30 Oct 2026).
         run: >-
           npx eslint
-          src/app/pic src/components/pic src/components/nav src/lib/pic src/app/api src/app/layout.tsx src/proxy.ts next.config.ts
+          src/app/pic src/app/register src/components/pic src/components/nav src/lib/pic src/app/api src/app/layout.tsx src/proxy.ts next.config.ts
       - name: npm audit (production dependencies, fails on high/critical)
         run: npm audit --omit=dev --audit-level=high
       - name: npm audit (all dependencies, report only)

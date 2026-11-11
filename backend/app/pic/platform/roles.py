@@ -17,7 +17,9 @@ from app.pic.platform.auth import READ, ROLE_SCOPES, TASKS
 
 ROLE_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,39}$")
 # Platform-level authority that only the built-in TENANT_ADMIN role carries.
-PLATFORM_SCOPES = {"admin:rules", "admin:audit", "admin:integration", "admin:ops", "admin:workflow", "agents:manage"}
+PLATFORM_SCOPES = {"admin:rules", "admin:audit", "admin:integration", "admin:ops", "admin:workflow", "agents:manage", "platform:registrations"}
+# Built-in roles that exist only in the platform's own organisation: no customer organisation can assign them (UNKNOWN_ROLE).
+PLATFORM_ROLES = {"PLATFORM_OPERATOR"}
 
 SCOPE_DESCRIPTIONS = {
     READ: "Read documents and master data the user is assigned to",
@@ -121,4 +123,5 @@ def effective_scopes(session: Session, roles: Iterable[str]) -> set[str]:
 
 
 def known_roles(session: Session) -> set[str]:
-    return set(ROLE_SCOPES) | {c for c, d in definitions(session).items() if d.active}
+    """Roles an organisation may assign: built-in roles except the platform's own, plus its active custom roles."""
+    return (set(ROLE_SCOPES) - PLATFORM_ROLES) | {c for c, d in definitions(session).items() if d.active}

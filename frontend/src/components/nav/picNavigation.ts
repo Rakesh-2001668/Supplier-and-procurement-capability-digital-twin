@@ -125,8 +125,17 @@ export const TWIN_SUPPLIER_NAV: PicNavGroup[] = [
   ] },
 ];
 
+// The platform's own organisation: operators review organisation registrations and see nothing of any customer organisation.
+export const PLATFORM_NAV: PicNavGroup[] = [
+  { group: 'Platform', items: [
+    { href: '/pic/platform/registrations', label: 'Organisation registrations', icon: ClipboardList },
+    { href: '/pic/account', label: 'My account & security', icon: UserCog },
+  ] },
+];
+
 /** The menu of one person: PIC groups, then the twin group, filtered by role; twin groups only where the twin screens are on. */
 export function navigationFor(roles: readonly string[], twinEnabled: boolean): PicNavGroup[] {
+  if (roles.includes('PLATFORM_OPERATOR')) return PLATFORM_NAV;
   const supplier = roles.includes('SUPPLIER_USER');
   const groups = supplier ? [...PIC_SUPPLIER_NAV, ...TWIN_SUPPLIER_NAV] : [...PIC_INTERNAL_NAV, ...TWIN_BUYER_NAV];
   return groups

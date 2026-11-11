@@ -74,7 +74,8 @@ function LoginForm() {
   }, [email]);
 
   function done(user: SessionUser) {
-    const fallback = user.roles.includes('SUPPLIER_USER') ? '/pic/portal' : '/pic';
+    const fallback = user.roles.includes('PLATFORM_OPERATOR') ? '/pic/platform/registrations'
+      : user.roles.includes('SUPPLIER_USER') ? '/pic/portal' : '/pic';
     const next = params.get('next');
     router.replace(next && safeNext(next) ? next : fallback);
   }
@@ -176,6 +177,9 @@ function LoginForm() {
                 </a>
               </>
             )}
+            <p className="text-center text-xs text-slate-600">
+              New to the platform? <a href="/register" className="font-medium text-[#1A56DB] hover:underline">Register your organisation</a>
+            </p>
             <details className="text-xs text-slate-600">
               <summary className="cursor-pointer select-none">Demo users (Axion Mobility)</summary>
               <div className="mt-2 grid grid-cols-2 gap-1">

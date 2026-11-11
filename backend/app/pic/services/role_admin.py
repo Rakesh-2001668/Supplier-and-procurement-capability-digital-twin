@@ -36,7 +36,7 @@ def role_view(r: RoleDef, holder_count: int = 0) -> dict:
 
 def list_roles(session: Session) -> list[dict]:
     out = [{"code": code, "name": BUILTIN_NAMES[code], "description": None, "kind": "BUILT_IN", "scopes": sorted(scopes), "active": True,
-            "version": None, "holders": None, "id": None} for code, scopes in ROLE_SCOPES.items()]
+            "version": None, "holders": None, "id": None} for code, scopes in ROLE_SCOPES.items() if code not in roles_mod.PLATFORM_ROLES]
     counts: dict = {}
     for user_roles in session.execute(select(AppUser.roles)).scalars():
         for code in user_roles or []:

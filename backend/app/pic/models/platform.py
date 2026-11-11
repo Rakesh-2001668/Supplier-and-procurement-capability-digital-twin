@@ -27,8 +27,42 @@ class Tenant(Base):
     # the bundled demo tenants stay false until the operator flips them.
     mfa_enforce: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # One platform for buyers and suppliers: what the organisation is, and where it is in its registration (sign-in needs ACTIVE).
-    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="BUYER", server_default="BUYER")  # BUYER | SUPPLIER
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="BUYER", server_default="BUYER")  # BUYER | SUPPLIER | PLATFORM
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE", server_default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class OrgRegistration(Base):
+    """Self-service organisation registration request (migration 0030). Global and not granted to the application role: the public
+    registration endpoints and the platform operator console use it as the owner, after their own checks (services/registration.py)."""
+    __tablename__ = "org_registration"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_id)
+    number: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    kind: Mapped[str] = mapped_column(String(10), nullable=False)  # BUYER | SUPPLIER
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    company_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    country: Mapped[str] = mapped_column(String(2), nullable=False)
+    state_code: Mapped[Optional[str]] = mapped_column(String(2))
+    industry_template: Mapped[str] = mapped_column(String(40), nullable=False)
+    gstin: Mapped[Optional[str]] = mapped_column(String(15))
+    org_email: Mapped[str] = mapped_column(String(200), nullable=False)       # the company's shared mailbox: verification and decisions
+    org_domain: Mapped[str] = mapped_column(String(200), nullable=False)
+    admin_name: Mapped[str] = mapped_column(String(200), nullable=False)      # the named first administrator (the sign-in account)
+    admin_email: Mapped[str] = mapped_column(String(200), nullable=False)
+    admin_phone: Mapped[Optional[str]] = mapped_column(String(20))
+    authorised_by_name: Mapped[Optional[str]] = mapped_column(String(200))    # optional senior person who vouches (e.g. CEO, director)
+    authorised_by_designation: Mapped[Optional[str]] = mapped_column(String(120))
+    expected_users: Mapped[Optional[int]] = mapped_column(Integer)
+    verify_token_hash: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    verify_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    screening: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    organisation_code: Mapped[Optional[str]] = mapped_column(String(20))
+    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.tenant.id"))
+    decided_by: Mapped[Optional[str]] = mapped_column(String(200))
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[Optional[str]] = mapped_column(Text)
+    request_ip: Mapped[Optional[str]] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

@@ -91,7 +91,8 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION IF EXISTS pic.sync_login_directory()")
     op.drop_index("ix_login_directory_email", table_name="login_directory", schema="pic")
     op.drop_table("login_directory", schema="pic")
-    op.drop_constraint("ck_tenant_status", "tenant", schema="pic")
-    op.drop_constraint("ck_tenant_kind", "tenant", schema="pic")
+    # upgrade() named them through the naming convention (ck_tenant_ck_tenant_*): drop by the exact names
+    op.execute("ALTER TABLE pic.tenant DROP CONSTRAINT IF EXISTS ck_tenant_ck_tenant_status")
+    op.execute("ALTER TABLE pic.tenant DROP CONSTRAINT IF EXISTS ck_tenant_ck_tenant_kind")
     op.drop_column("tenant", "status", schema="pic")
     op.drop_column("tenant", "kind", schema="pic")
