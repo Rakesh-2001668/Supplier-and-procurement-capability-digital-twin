@@ -129,11 +129,13 @@ def test_cron_next_after():
             cron.Cron(bad)
 
 
-def test_registry_has_the_platform_jobs_and_vercel_cron_runs_every_minute():
+def test_registry_has_the_platform_jobs_and_vercel_cron_ticks_the_worker():
     assert {"payment-due", "erp-reconciliation", "mrp-schedule", "scorecard-monthly", "retention-purge", "audit-archive",
             "idempotency-purge"} <= set(jobs.REGISTRY)
     config = json.loads((BACKEND / "vercel.json").read_text(encoding="utf-8"))
-    assert {"path": "/internal/worker/tick", "schedule": "* * * * *"} in config["crons"]
+    ticks = [c for c in config["crons"] if c["path"] == "/internal/worker/tick"]
+    # Hobby allows one run a day (the committed default); Pro runs it every minute (docs/PIC_Vercel_Deployment.md §5).
+    assert len(ticks) == 1 and ticks[0]["schedule"] in {"0 3 * * *", "* * * * *"}
 
 
 # ================================================================ scheduler
