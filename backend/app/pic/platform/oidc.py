@@ -50,6 +50,20 @@ class OidcConfig:
     scopes: str
 
 
+def tenant_for_domain(domain: str) -> Optional[str]:
+    """The organisation code whose single sign-on covers this e-mail domain (sign-in by e-mail, no organisation code typed).
+    Configured per organisation: PIC_OIDC_<TENANT>_EMAIL_DOMAINS=axion.example,axion-mobility.example. One domain, one organisation."""
+    domain = (domain or "").strip().lower()
+    if not domain:
+        return None
+    prefix, suffix = "PIC_OIDC_", "_EMAIL_DOMAINS"
+    for key, value in os.environ.items():
+        if key.startswith(prefix) and key.endswith(suffix) and len(key) > len(prefix) + len(suffix):
+            if domain in {d.strip().lower() for d in (value or "").split(",") if d.strip()}:
+                return key[len(prefix):-len(suffix)]
+    return None
+
+
 def config(tenant_code: str) -> Optional[OidcConfig]:
     code = "".join(ch for ch in (tenant_code or "").upper() if ch.isalnum() or ch == "_")
 

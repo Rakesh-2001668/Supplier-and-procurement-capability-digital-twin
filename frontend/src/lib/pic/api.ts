@@ -101,7 +101,11 @@ export async function signOut() {
   window.location.href = '/pic/login';
 }
 
-export type SessionUser = { id: string; name: string; email: string; tenant: string; roles: string[]; supplierId: string | null };
+export type SessionUser = {
+  id: string; name: string; email: string; tenant: string; roles: string[]; supplierId: string | null;
+  // Organisation name and type (BUYER | SUPPLIER); absent in a session started before the unified sign-in.
+  tenantName?: string; tenantKind?: 'BUYER' | 'SUPPLIER';
+};
 
 export function readSessionUser(): SessionUser | null {
   if (typeof document === 'undefined') return null;

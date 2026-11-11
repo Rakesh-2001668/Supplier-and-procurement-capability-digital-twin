@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import Shell from "@/components/layout/Shell";
+import WorkspaceShell from "@/components/pic/WorkspaceShell";
 import Providers from "@/components/Providers";
 
 export const metadata: Metadata = {
-  title: "Supplier Capability Digital Twin",
+  title: "AlphaHelion Purchasing Intelligence Cloud",
 };
 
+// One shell for the whole platform: the Purchasing Intelligence Cloud workspace and the Supplier Capability Digital Twin screens
+// share the same sidebar, header and sign-in session.
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -16,7 +18,7 @@ export default function RootLayout({
     <html lang="en">
       <body className="antialiased">
         <Providers>
-          <Shell>{children}</Shell>
+          <WorkspaceShell>{children}</WorkspaceShell>
         </Providers>
       </body>
     </html>

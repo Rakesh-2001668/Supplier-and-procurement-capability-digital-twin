@@ -2,9 +2,14 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, Suspense, useEffect, useState } from 'react';
+import { Building2, Factory } from 'lucide-react';
 import { ApiError, SessionUser } from '@/lib/pic/api';
 import { Button, Input, ProblemBox } from '@/components/pic/ui';
 import { AuthenticatorSetup, Enrolment } from '../account/_authenticator';
+import { safeNext } from '@/lib/pic/nextPath';
+
+// One sign-in for the whole platform (buyers and suppliers): e-mail and password; the organisation is found from the e-mail.
+// A person in several organisations picks one (and can switch later from the header). MFA and single sign-on stay.
 
 const DEMO = [
   ['buyer', 'Buyer'], ['requester', 'Requester'], ['plant.controller', 'Cost-object owner'], ['category.manager', 'Category manager'],
@@ -22,7 +27,9 @@ const SSO_ERRORS: Record<string, string> = {
   IDP_ACCESS_DENIED: 'Sign-in was cancelled at the identity provider.',
 };
 
-type Step = 'password' | 'mfa' | 'enrol';
+type Step = 'password' | 'choose' | 'mfa' | 'enrol';
+type Organisation = { code: string; name: string; kind: 'BUYER' | 'SUPPLIER'; roles: string[]; supplierUser: boolean };
+type StepAnswer = { user?: SessionUser; mfaRequired?: boolean; organisationChoice?: boolean; organisations?: Organisation[] };
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -31,40 +38,45 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+function roleText(roles: string[]): string {
+  return roles.map((r) => r.replace(/_/g, ' ').toLowerCase()).join(', ');
+}
+
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const [tenant, setTenant] = useState('AXN');
   const [email, setEmail] = useState('buyer@axion.example');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
-  const [step, setStep] = useState<Step>('password');
+  const [step, setStep] = useState<Step>(params.get('step') === 'mfa' ? 'mfa' : 'password');
+  const [organisations, setOrganisations] = useState<Organisation[]>([]);
   const [enrolment, setEnrolment] = useState<Enrolment | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
-  const [sso, setSso] = useState(false);
+  const [ssoTenant, setSsoTenant] = useState<string | null>(null);
   const ssoError = params.get('sso');
 
+  // Single sign-on is offered when the e-mail's domain belongs to an organisation that signs in with its identity provider.
   useEffect(() => {
-    const code_ = tenant.trim().toUpperCase();
-    if (!/^[A-Z0-9_]{2,20}$/.test(code_)) return;
+    const value = email.trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) return;
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const response = await fetch(`/api/pic/v1/auth/oidc/${encodeURIComponent(code_)}`, { cache: 'no-store' });
+        const response = await fetch(`/api/pic/v1/auth/sso?email=${encodeURIComponent(value)}`, { cache: 'no-store' });
         const data = await response.json();
-        if (!cancelled) setSso(!!data?.enabled);
+        if (!cancelled) setSsoTenant(data?.enabled ? String(data.tenant) : null);
       } catch {
-        if (!cancelled) setSso(false);
+        if (!cancelled) setSsoTenant(null);
       }
-    }, 350);
+    }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [tenant]);
+  }, [email]);
 
   function done(user: SessionUser) {
     const fallback = user.roles.includes('SUPPLIER_USER') ? '/pic/portal' : '/pic';
     const next = params.get('next');
-    router.replace(next && next.startsWith('/pic') && !next.startsWith('/pic/login') ? next : fallback);
+    router.replace(next && safeNext(next) ? next : fallback);
   }
 
   async function run(fn: () => Promise<void>) {
@@ -73,40 +85,42 @@ function LoginForm() {
     try {
       await fn();
     } catch (err) {
+      if ((err as ApiError).problem?.code === 'MFA_ENROLMENT_REQUIRED') {
+        setStep('enrol');
+        return;
+      }
       setError(err as ApiError);
     } finally {
       setBusy(false);
     }
   }
 
+  function next(answer: StepAnswer) {
+    if (answer.organisationChoice) {
+      setOrganisations(answer.organisations ?? []);
+      setStep('choose');
+      return;
+    }
+    if (answer.mfaRequired) {
+      setCode('');
+      setStep('mfa');
+      return;
+    }
+    if (answer.user) done(answer.user);
+  }
+
   function submitPassword(e: FormEvent) {
     e.preventDefault();
-    run(async () => {
-      try {
-        const data = await post<{ user?: SessionUser; mfaRequired?: boolean }>('/api/auth/login',
-          { tenant: tenant.trim(), email: email.trim().toLowerCase(), password });
-        if (data.mfaRequired) {
-          setCode('');
-          setStep('mfa');
-          return;
-        }
-        if (data.user) done(data.user);
-      } catch (err) {
-        if ((err as ApiError).problem?.code === 'MFA_ENROLMENT_REQUIRED') {
-          setStep('enrol');
-          return;
-        }
-        throw err;
-      }
-    });
+    run(async () => next(await post<StepAnswer>('/api/auth/login', { email: email.trim().toLowerCase(), password })));
+  }
+
+  function choose(organisation: string) {
+    run(async () => next(await post<StepAnswer>('/api/auth/organisation', { organisation })));
   }
 
   function submitCode(e: FormEvent) {
     e.preventDefault();
-    run(async () => {
-      const data = await post<{ user: SessionUser }>('/api/auth/mfa', { code });
-      done(data.user);
-    });
+    run(async () => done((await post<{ user: SessionUser }>('/api/auth/mfa', { code })).user));
   }
 
   function startEnrolment() {
@@ -114,15 +128,13 @@ function LoginForm() {
   }
 
   function confirmEnrolment(value: string) {
-    run(async () => {
-      const data = await post<{ user: SessionUser }>('/api/auth/mfa/enrol', { action: 'confirm', code: value });
-      done(data.user);
-    });
+    run(async () => done((await post<{ user: SessionUser }>('/api/auth/mfa/enrol', { action: 'confirm', code: value })).user));
   }
 
   function restart() {
     setStep('password');
     setEnrolment(null);
+    setOrganisations([]);
     setCode('');
     setError(null);
   }
@@ -132,18 +144,14 @@ function LoginForm() {
       <div className="w-full max-w-md">
         <div className="mb-6 text-center">
           <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#1A56DB] text-xl font-bold text-white">α</span>
-          <h1 className="mt-3 text-xl font-semibold text-white">Purchasing Intelligence Cloud</h1>
-          <p className="text-sm text-slate-400">AI recommends. Humans decide.</p>
+          <h1 className="mt-3 text-xl font-semibold text-white">AlphaHelion Purchasing Intelligence Cloud</h1>
+          <p className="text-sm text-slate-400">One sign-in for buyers and suppliers</p>
         </div>
 
         {step === 'password' && (
           <form onSubmit={submitPassword} className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
             <div className="space-y-1">
-              <label htmlFor="tenant" className="text-xs font-medium text-slate-700">Organisation code</label>
-              <Input id="tenant" value={tenant} onChange={(e) => setTenant(e.target.value)} autoComplete="organization" required />
-            </div>
-            <div className="space-y-1">
-              <label htmlFor="email" className="text-xs font-medium text-slate-700">Work email</label>
+              <label htmlFor="email" className="text-xs font-medium text-slate-700">Work e-mail</label>
               <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
             </div>
             <div className="space-y-1">
@@ -157,14 +165,14 @@ function LoginForm() {
             )}
             <ProblemBox error={error} />
             <Button type="submit" variant="primary" busy={busy} className="w-full py-2">Sign in</Button>
-            {sso && (
+            {ssoTenant && (
               <>
                 <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-slate-400">
                   <span className="h-px flex-1 bg-slate-200" />or<span className="h-px flex-1 bg-slate-200" />
                 </div>
-                <a href={`/api/auth/oidc/start?tenant=${encodeURIComponent(tenant.trim().toUpperCase())}&next=${encodeURIComponent(params.get('next') ?? '')}`}
+                <a href={`/api/auth/oidc/start?tenant=${encodeURIComponent(ssoTenant)}&next=${encodeURIComponent(params.get('next') ?? '')}`}
                   className="flex w-full items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50">
-                  Sign in with SSO
+                  Continue with single sign-on
                 </a>
               </>
             )}
@@ -180,11 +188,41 @@ function LoginForm() {
           </form>
         )}
 
+        {step === 'choose' && (
+          <div className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Choose an organisation</h2>
+              <p className="mt-1 text-sm text-slate-600">{email} has an account in more than one organisation. You can switch later from the header.</p>
+            </div>
+            <ul className="space-y-2">
+              {organisations.map((o) => {
+                const Icon = o.kind === 'SUPPLIER' || o.supplierUser ? Factory : Building2;
+                return (
+                  <li key={o.code}>
+                    <button type="button" disabled={busy} onClick={() => choose(o.code)}
+                      className="flex w-full items-center gap-3 rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-[#1A56DB] hover:bg-slate-50 disabled:opacity-60">
+                      <Icon size={20} className="shrink-0 text-[#1A56DB]" aria-hidden />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium text-slate-900">{o.name}</span>
+                        <span className="block truncate text-xs text-slate-500">
+                          {o.code} · {o.kind === 'SUPPLIER' ? 'Supplier' : 'Buyer'} organisation · {roleText(o.roles)}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <ProblemBox error={error} />
+            <button type="button" onClick={restart} className="w-full text-center text-xs text-slate-500 hover:text-slate-800">Use a different account</button>
+          </div>
+        )}
+
         {step === 'mfa' && (
           <form onSubmit={submitCode} className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
             <div>
               <h2 className="text-base font-semibold text-slate-900">Two-step verification</h2>
-              <p className="mt-1 text-sm text-slate-600">Enter the 6-digit code from the authenticator app registered for {email}.</p>
+              <p className="mt-1 text-sm text-slate-600">Enter the 6-digit code from your authenticator app.</p>
             </div>
             <div className="space-y-1">
               <label htmlFor="code" className="text-xs font-medium text-slate-700">Authentication code</label>

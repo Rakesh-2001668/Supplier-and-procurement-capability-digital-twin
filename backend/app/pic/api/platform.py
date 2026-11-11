@@ -19,6 +19,7 @@ from app.pic.platform.auth import (
     MFA_CHALLENGE, MFA_ENROLMENT, READ, TASKS, Principal, current_principal, require, token_response, user_challenge, verify_password,
 )
 from app.pic.platform.core import lineage
+from app.pic.services import signin
 from app.pic.platform.errors import Problem, not_found
 from app.pic.platform.serialize import row, rows
 
@@ -50,16 +51,28 @@ def resolve_document(session, object_type: str, ref: str):
 
 # ---------------------------------------------------------------- identity
 class TokenRequest(BaseModel):
-    tenant: str = Field(description="Tenant code, e.g. AXN")
+    tenant: Optional[str] = Field(default=None, description="Organisation code, e.g. AXN. Leave out to sign in by e-mail: the organisation "
+                                                            "is found from the e-mail (several: the answer asks which one)")
     email: str
     password: str
 
 
+class OrganisationChoice(BaseModel):
+    challenge: str = Field(min_length=1, max_length=8192)
+    organisation: str = Field(min_length=1, max_length=20)
+
+
+class OrganisationSwitch(BaseModel):
+    organisation: str = Field(min_length=1, max_length=20)
+
+
 @router.post("/auth/token", tags=["Identity"])
 def token(body: TokenRequest, request: Request):
+    if not (body.tenant or "").strip():
+        return signin.sign_in(body.email, body.password, request)
     with system_tx() as s:
         tenant = s.execute(select(Tenant).where(Tenant.code == body.tenant)).scalar_one_or_none()
-    if tenant is None:
+    if tenant is None or tenant.status != "ACTIVE":
         http.record_login_failure(request)
         raise Problem(401, "INVALID_CREDENTIALS", "Unknown tenant, email or password")
     with tenant_tx(tenant.id) as s:
@@ -80,12 +93,30 @@ def token(body: TokenRequest, request: Request):
         return token_response(user, tenant)
 
 
+@router.post("/auth/organisation", tags=["Identity"])
+def choose_organisation(body: OrganisationChoice, request: Request):
+    """Sign-in by e-mail, second step when the e-mail belongs to several organisations: continue in the chosen one."""
+    return signin.choose(body.challenge, body.organisation, request)
+
+
+@router.post("/auth/switch", tags=["Identity"])
+def switch_organisation(body: OrganisationSwitch, request: Request, p: Principal = Depends(current_principal)):
+    """Header organisation switcher: a new session in another organisation proved at sign-in (MFA of that organisation still applies)."""
+    with uow(p):  # the current session must still be valid
+        pass
+    return signin.switch(p, body.organisation, request)
+
+
 @router.get("/me", tags=["Identity"])
 def me(p: Principal = Depends(current_principal)):
     with uow(p):  # refuses a deactivated user, outdated roles or a revoked session (401) like every other call
         pass
+    with system_tx() as s:
+        tenant = s.execute(select(Tenant).where(Tenant.code == p.tenant_code)).scalar_one_or_none()
     return {"userId": str(p.user_id), "user": p.email, "name": p.name, "tenant": p.tenant_code, "roles": p.roles, "scopes": sorted(p.scopes),
-            "attributes": p.attributes, "supplierId": str(p.supplier_id) if p.supplier_id else None}
+            "attributes": p.attributes, "supplierId": str(p.supplier_id) if p.supplier_id else None,
+            "tenantName": tenant.name if tenant else p.tenant_code, "tenantKind": tenant.kind if tenant else "BUYER",
+            "organisations": signin.organisations_of(p)}
 
 
 # ---------------------------------------------------------------- tasks (REQ-03 approval inbox)

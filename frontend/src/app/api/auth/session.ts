@@ -6,6 +6,7 @@ import { apiBase, clientIp, SESSION_COOKIE, SESSION_MAX_AGE, USER_COOKIE } from 
 
 export const MFA_COOKIE = 'pic_mfa';
 export const ENROL_COOKIE = 'pic_mfa_enrol';
+export const CHOICE_COOKIE = 'pic_org_choice';
 export const OIDC_STATE_COOKIE = 'pic_oidc_state';
 export const OIDC_NEXT_COOKIE = 'pic_oidc_next';
 
@@ -44,12 +45,39 @@ export function setStepCookie(response: NextResponse, request: NextRequest, name
 export async function establishSession(request: NextRequest, accessToken: string, response?: NextResponse) {
   const meResponse = await fetch(`${apiBase()}/v1/me`, { headers: { authorization: `Bearer ${accessToken}` }, cache: 'no-store' });
   const me = await meResponse.json();
-  const user = { id: me.userId, name: me.name, email: me.user, tenant: me.tenant, roles: me.roles, supplierId: me.supplierId };
+  const user = { id: me.userId, name: me.name, email: me.user, tenant: me.tenant, tenantName: me.tenantName, tenantKind: me.tenantKind,
+    roles: me.roles, supplierId: me.supplierId };
   const out = response ?? NextResponse.json({ user });
   const secure = isSecure(request);
   out.cookies.set(SESSION_COOKIE, accessToken, { httpOnly: true, sameSite: 'lax', secure, path: '/', maxAge: SESSION_MAX_AGE });
   // Display-only profile (no secrets) so the shell can render names and roles without a round trip.
   out.cookies.set(USER_COOKIE, encodeURIComponent(JSON.stringify(user)), { httpOnly: false, sameSite: 'lax', secure, path: '/', maxAge: SESSION_MAX_AGE });
-  for (const name of [MFA_COOKIE, ENROL_COOKIE, OIDC_STATE_COOKIE, OIDC_NEXT_COOKIE]) out.cookies.delete(name);
+  for (const name of [MFA_COOKIE, ENROL_COOKIE, CHOICE_COOKIE, OIDC_STATE_COOKIE, OIDC_NEXT_COOKIE]) out.cookies.delete(name);
   return { response: out, user };
+}
+
+/** Every sign-in step (password, organisation choice, organisation switch) ends the same way: an error, the organisation choice,
+ *  the MFA second step, MFA enrolment, or the session. Challenges stay in httpOnly cookies; the page only learns what to show next. */
+export async function finishSignInStep(request: NextRequest, result: { ok: boolean; status: number; data: Record<string, unknown> }) {
+  const data = result.data ?? {};
+  if (!result.ok) {
+    const { enrolmentChallenge, ...problem } = data;
+    const response = NextResponse.json(problem, { status: result.status });
+    if (data.code === 'MFA_ENROLMENT_REQUIRED' && typeof enrolmentChallenge === 'string') {
+      setStepCookie(response, request, ENROL_COOKIE, enrolmentChallenge, 15 * 60);
+    }
+    return response;
+  }
+  if (data.organisationChoice && typeof data.challenge === 'string') {
+    const response = NextResponse.json({ organisationChoice: true, organisations: data.organisations ?? [] });
+    setStepCookie(response, request, CHOICE_COOKIE, data.challenge, Number(data.expiresIn ?? 300));
+    return response;
+  }
+  if (data.mfaRequired && typeof data.challenge === 'string') {
+    const response = NextResponse.json({ mfaRequired: true, methods: data.methods ?? ['TOTP'] });
+    setStepCookie(response, request, MFA_COOKIE, data.challenge, Number(data.expiresIn ?? 300));
+    return response;
+  }
+  const { response } = await establishSession(request, String(data.access_token));
+  return response;
 }

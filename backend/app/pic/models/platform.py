@@ -26,7 +26,21 @@ class Tenant(Base):
     # New tenants start with MFA enforced for approver / finance / admin roles (bootstrap writes rule MFA with enforce=true);
     # the bundled demo tenants stay false until the operator flips them.
     mfa_enforce: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # One platform for buyers and suppliers: what the organisation is, and where it is in its registration (sign-in needs ACTIVE).
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="BUYER", server_default="BUYER")  # BUYER | SUPPLIER
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE", server_default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LoginDirectory(Base):
+    """E-mail -> (organisation, user) for sign-in by e-mail (migration 0029). Global, not row-level secured, and not granted to the
+    application role: only the sign-in code reads it, as the owner. A database trigger on app_user maintains it; never written by services."""
+    __tablename__ = "login_directory"
+    org_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey(f"{SCHEMA}.tenant.id", ondelete="CASCADE"), primary_key=True)
+    app_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    email: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class CompanyCode(TenantScoped, Base):

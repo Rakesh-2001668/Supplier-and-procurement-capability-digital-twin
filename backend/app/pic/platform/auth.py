@@ -65,6 +65,9 @@ class Principal:
     supplier_id: Optional[uuid.UUID] = None
     agent_code: Optional[str] = None
     session_version: int = 1  # the user's app_user.session_version when the token was issued (revocation)
+    # Organisation codes in which this person proved the password at sign-in (sign-in by e-mail): the organisations they may switch to
+    # without signing in again. Empty for tokens issued with an organisation code or by single sign-on.
+    organisations: tuple[str, ...] = ()
 
     @property
     def actor(self) -> str:
@@ -115,7 +118,7 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
-def issue_token(user, tenant, amr: Optional[list[str]] = None, session=None) -> str:
+def issue_token(user, tenant, amr: Optional[list[str]] = None, session=None, organisations: Optional[list[str]] = None) -> str:
     settings = get_settings()
     # Token lifetime follows the wall clock even when the business clock is pinned.
     issued = datetime.now(timezone.utc)
@@ -136,11 +139,14 @@ def issue_token(user, tenant, amr: Optional[list[str]] = None, session=None) -> 
         # Authentication methods used for this session (RFC 8176): pwd, otp, or the identity provider's amr after SSO.
         "amr": list(amr or ["pwd"]),
     }
+    if organisations:
+        claims["orgs"] = sorted(set(organisations) | {tenant.code})
     return jwt.encode(claims, settings.jwt_secret, algorithm=ALGORITHM)
 
 
-def token_response(user, tenant, amr: Optional[list[str]] = None, session=None) -> dict:
-    return {"access_token": issue_token(user, tenant, amr, session), "token_type": "bearer", "roles": user.roles, "tenant": tenant.code}
+def token_response(user, tenant, amr: Optional[list[str]] = None, session=None, organisations: Optional[list[str]] = None) -> dict:
+    return {"access_token": issue_token(user, tenant, amr, session, organisations), "token_type": "bearer", "roles": user.roles,
+            "tenant": tenant.code}
 
 
 # ---------------------------------------------------------------- short-lived signed challenges (MFA, enrolment, OIDC state)
@@ -164,9 +170,11 @@ def read_challenge(token: str, purpose: str, code: str = "CHALLENGE_INVALID") ->
         raise Problem(401, code, f"The sign-in step has expired or is not valid ({exc}); sign in again")
 
 
-def user_challenge(purpose: str, user, tenant, ttl_seconds: int = 300) -> str:
-    return issue_challenge(purpose, {"sub": str(user.id), "tid": str(tenant.id), "tcode": tenant.code, "email": user.email,
-                                     "name": user.full_name}, ttl_seconds)
+def user_challenge(purpose: str, user, tenant, ttl_seconds: int = 300, organisations: Optional[list[str]] = None) -> str:
+    claims = {"sub": str(user.id), "tid": str(tenant.id), "tcode": tenant.code, "email": user.email, "name": user.full_name}
+    if organisations:
+        claims["orgs"] = list(organisations)  # carried to the token issued after the second step
+    return issue_challenge(purpose, claims, ttl_seconds)
 
 
 def principal_from_token(token: str) -> Principal:
@@ -190,6 +198,7 @@ def principal_from_token(token: str) -> Principal:
         attributes=claims.get("attrs") or {},
         supplier_id=uuid.UUID(claims["sup"]) if claims.get("sup") else None,
         session_version=int(claims.get("sv") or 1),
+        organisations=tuple(str(c) for c in claims.get("orgs") or ()),
     )
 
 
@@ -214,7 +223,7 @@ def enrolment_principal(authorization: Optional[str] = Header(default=None)) -> 
     claims = read_challenge(token, MFA_ENROLMENT)
     return Principal(user_id=uuid.UUID(claims["sub"]), tenant_id=uuid.UUID(claims["tid"]), tenant_code=claims.get("tcode", ""),
                      email=claims.get("email", ""), name=claims.get("name", ""), roles=[], scopes=set(),
-                     attributes={"mfa_enrolment": True})
+                     attributes={"mfa_enrolment": True}, organisations=tuple(str(c) for c in claims.get("orgs") or ()))
 
 
 def require(*scopes: str):

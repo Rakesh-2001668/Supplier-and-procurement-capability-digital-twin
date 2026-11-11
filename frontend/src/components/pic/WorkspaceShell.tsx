@@ -11,56 +11,17 @@ import { legacyDemoEnabled } from '@/lib/pic/deployment';
 import { dateTime } from '@/lib/pic/format';
 import { NotificationBell } from '@/app/pic/notifications/_notifications';
 import { ToastProvider } from './toast';
+import { isTwinPage, navigationFor } from '@/components/nav/picNavigation';
+import IndustrySwitcher from '@/components/layout/IndustrySwitcher';
+import OrganisationSwitcher from './OrganisationSwitcher';
 
 type LiveEvent = { id: string; type: string; ref: string; objectType: string; actor: string; at: string };
 type Live = { connected: boolean; openTasks: number | null; events: LiveEvent[] };
 const LiveContext = createContext<Live>({ connected: false, openTasks: null, events: [] });
 export const useLive = () => useContext(LiveContext);
 
-type NavItem = { href: string; label: string; roles?: string[] };
-const INTERNAL_NAV: { group: string; items: NavItem[] }[] = [
-  { group: 'Decide', items: [
-    { href: '/pic', label: 'Command centre' },
-    { href: '/pic/copilot', label: 'Copilot' },
-    { href: '/pic/spend', label: 'Spend', roles: ['CATEGORY_MANAGER', 'FINANCE_CONTROLLER', 'CFO', 'PROCUREMENT_HEAD', 'CPO'] },
-    { href: '/pic/savings', label: 'Savings' },
-    { href: '/pic/kpis', label: 'KPI explorer' },
-  ] },
-  { group: 'My work', items: [{ href: '/pic/tasks', label: 'Task inbox' }, { href: '/pic/notifications', label: 'Notifications' }, { href: '/pic/account', label: 'My account & security' }] },
-  { group: 'Plan & request', items: [
-    { href: '/pic/mrp', label: 'MRP & planning' },
-    { href: '/pic/mrp/forecast', label: 'Demand forecast', roles: ['MRP_CONTROLLER', 'TENANT_ADMIN'] },
-    { href: '/pic/requisitions', label: 'Requisitions' },
-    { href: '/pic/buyer', label: 'Buyer workbench', roles: ['BUYER'] },
-    { href: '/pic/materials', label: 'Materials & MDM' },
-  ] },
-  { group: 'Source & contract', items: [
-    { href: '/pic/sourcing', label: 'Sourcing events' },
-    { href: '/pic/contracts', label: 'Contracts' },
-    { href: '/pic/contracts/obligations', label: 'Obligations & renewals' },
-    { href: '/pic/suppliers', label: 'Suppliers' },
-    { href: '/pic/suppliers/performance', label: 'Supplier performance' },
-    { href: '/pic/suppliers/risk', label: 'Supplier risk' },
-  ] },
-  { group: 'Order to pay', items: [
-    { href: '/pic/purchase-orders', label: 'Purchase orders' },
-    { href: '/pic/purchase-orders/changes', label: 'Confirmations & changes' },
-    { href: '/pic/purchase-orders/expediting', label: 'Expediting' },
-    { href: '/pic/receiving', label: 'Receiving & quality' },
-    { href: '/pic/inventory', label: 'Inventory' },
-    { href: '/pic/invoices', label: 'Invoices & payments' },
-    { href: '/pic/invoices/reconciliation', label: 'Posting & reconciliation', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
-    { href: '/pic/invoices/insights', label: 'Payables insights', roles: ['AP_CLERK', 'FINANCE_CONTROLLER', 'CFO', 'CPO', 'PROCUREMENT_HEAD'] },
-    { href: '/pic/invoices/tax', label: 'TDS, Form 16A & MSME', roles: ['AP_CLERK', 'FINANCE_CONTROLLER'] },
-    { href: '/pic/industry', label: 'Industry controls' },
-  ] },
-  { group: 'Govern', items: [
-    { href: '/pic/processes', label: 'Process monitor' },
-    { href: '/pic/agents', label: 'AI agents' },
-    { href: '/pic/admin', label: 'Administration', roles: ['TENANT_ADMIN'] },
-  ] },
-];
-const SUPPLIER_NAV: { group: string; items: NavItem[] }[] = [{ group: 'Supplier portal', items: [{ href: '/pic/portal', label: 'Overview' }, { href: '/pic/copilot', label: 'Ask about my documents' }, { href: '/pic/notifications', label: 'Notifications' }, { href: '/pic/account', label: 'My account & security' }] }];
+// Pages without the platform chrome: sign-in, account activation, and the public registration pages.
+const PUBLIC_PAGES = ['/pic/login', '/pic/activate', '/pic/register', '/login', '/register'];
 
 function useLiveStream(enabled: boolean): Live {
   const client = useQueryClient();
@@ -126,17 +87,27 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
   const profileCookie = useSyncExternalStore(subscribeNothing, readCookies, () => '');
   const user = useMemo<SessionUser | null>(() => (profileCookie ? readSessionUser() : null), [profileCookie]);
   const [menuOpen, setMenuOpen] = useState(false);
-  // Sign-in and the public supplier registration page render without the workspace chrome.
-  const isLogin = pathname === '/pic/login' || pathname === '/pic/activate' || pathname === '/pic/register' || pathname.startsWith('/pic/register/');
+  // Sign-in and the public registration and activation pages render without the platform chrome.
+  const isLogin = PUBLIC_PAGES.includes(pathname) || pathname.startsWith('/pic/register/');
   const live = useLiveStream(!isLogin && !!user);
   const tenant = useApi<{ name: string; templateLabel: string }>(!isLogin && user ? '/tenant' : null);
+  const supplier = !!user?.roles.includes('SUPPLIER_USER');
+  const twinPage = isTwinPage(pathname);
+
+  // The twin screens read their demonstration persona from the browser; the signed-in user decides it (no persona switch).
+  useEffect(() => {
+    if (!user || !twinPage) return;
+    try {
+      localStorage.setItem('app_role', supplier ? 'supplier' : 'buyer');
+      localStorage.setItem('tenant_id', supplier ? 'supplier-mock' : 'buyer-mock');
+    } catch {
+      // storage blocked: the twin screens fall back to their buyer defaults
+    }
+  }, [user, supplier, twinPage]);
 
   if (isLogin) return <ToastProvider>{children}</ToastProvider>;
 
-  const supplier = user?.roles.includes('SUPPLIER_USER');
-  const nav = (supplier ? SUPPLIER_NAV : INTERNAL_NAV).map((g) => ({
-    ...g, items: g.items.filter((i) => !i.roles || i.roles.some((r) => user?.roles.includes(r))),
-  })).filter((g) => g.items.length);
+  const nav = navigationFor(user?.roles ?? [], legacyDemoEnabled);
 
   return (
     <LiveContext.Provider value={live}>
@@ -153,18 +124,22 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
             </div>
             <nav aria-label="Workspace" className="px-3 pb-6">
               {nav.map((g) => (
-                <div key={g.group} className="mt-4">
-                  <p className="px-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">{g.group}</p>
+                <div key={g.group} className={g.twin ? 'mt-6 border-t border-white/10 pt-4' : 'mt-4'}>
+                  <p className={`px-2 text-[10px] font-semibold uppercase tracking-widest ${g.twin ? 'text-sky-400' : 'text-slate-500'}`}>{g.group}</p>
                   <ul className="mt-1 space-y-0.5">
                     {g.items.map((item) => {
                       // The most specific matching entry is active (e.g. /pic/suppliers/risk, not /pic/suppliers).
                       const matches = (href: string) => (href === '/pic' ? pathname === '/pic' : pathname === href || !!pathname?.startsWith(`${href}/`));
                       const active = matches(item.href) && !nav.some((o) => o.items.some((x) => x.href.length > item.href.length && x.href.startsWith(item.href) && matches(x.href)));
+                      const Icon = item.icon;
                       return (
                         <li key={item.href}>
                           <Link href={item.href} prefetch={false} onClick={() => setMenuOpen(false)} aria-current={active ? 'page' : undefined}
                             className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${active ? 'bg-[#1A56DB] text-white' : 'hover:bg-white/5 hover:text-white'}`}>
-                            {item.label}
+                            <span className="flex items-center gap-2.5">
+                              <Icon size={16} aria-hidden className={active ? 'text-white' : 'text-slate-400'} />
+                              {item.label}
+                            </span>
                             {item.href === '/pic/tasks' && !!live.openTasks && (
                               <span className="rounded-full bg-[#F59E0B] px-1.5 text-[11px] font-bold text-[#0B1020]">{live.openTasks}</span>
                             )}
@@ -175,21 +150,17 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                   </ul>
                 </div>
               ))}
-              {legacyDemoEnabled && (
-                <div className="mt-6 border-t border-white/10 pt-3">
-                  <Link href="/command-centre" className="block rounded-md px-2 py-1.5 text-xs text-slate-500 hover:text-slate-300">Legacy demo screens ↗</Link>
-                </div>
-              )}
             </nav>
           </aside>
           <div className="min-w-0 flex-1">
             <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur md:px-8">
               <div className="flex items-center gap-3">
                 <button type="button" className="rounded p-1.5 text-slate-600 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu" aria-expanded={menuOpen} aria-controls="workspace-nav">☰</button>
-                <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">{user?.tenant ?? '…'}</span>
+                {user ? <OrganisationSwitcher fallbackCode={user.tenant} /> : <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">…</span>}
                 <span className="hidden text-xs text-slate-500 sm:inline" title={tenant.data?.name}>{tenant.data ? `${tenant.data.templateLabel} template` : ""}</span>
               </div>
               <div className="flex items-center gap-4">
+                {twinPage && legacyDemoEnabled && !supplier && <IndustrySwitcher />}
                 <span className="flex items-center gap-1.5 text-xs text-slate-600" title={live.connected ? 'Receiving live updates' : 'Reconnecting…'}>
                   <span className={`h-2 w-2 rounded-full ${live.connected ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden />
                   {live.connected ? 'Live' : 'Offline'}
@@ -207,8 +178,9 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                 <button onClick={signOut} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-50">Sign out</button>
               </div>
             </header>
-            <main id="main" className="mx-auto max-w-[1400px] px-4 py-6 md:px-8">{children}</main>
-            {!supplier && <footer><LifecycleStrip pathname={pathname} /></footer>}
+            {/* Twin screens bring their own page layout; PIC pages use the workspace container. */}
+            <main id="main" className={twinPage ? 'min-w-0' : 'mx-auto max-w-[1400px] px-4 py-6 md:px-8'}>{children}</main>
+            {!supplier && !twinPage && <footer><LifecycleStrip pathname={pathname} /></footer>}
           </div>
         </div>
       </ToastProvider>

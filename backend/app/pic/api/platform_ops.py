@@ -207,7 +207,7 @@ def mfa_confirm(body: CodeIn, request: Request, p: Principal = Depends(enrolment
             if p.attr("mfa_enrolment"):  # enrolment during sign-in: finish the sign-in
                 with system_tx() as ts:
                     tenant = ts.get(Tenant, p.tenant_id)
-                result.update(token_response(user, tenant, amr=["pwd", "otp"]))
+                result.update(token_response(user, tenant, amr=["pwd", "otp"], organisations=list(p.organisations)))
                 http.clear_login_failures(request)
             return result
     except Problem as exc:
@@ -260,7 +260,7 @@ def mfa_login(body: MfaLogin, request: Request):
         if ok:
             mfa.record_success(s, user)
             http.clear_login_failures(request)
-            return token_response(user, tenant, amr=["pwd", "otp"])
+            return token_response(user, tenant, amr=["pwd", "otp"], organisations=claims.get("orgs"))
         if user is not None:
             mfa.record_failure(s, user, "login", http._client_ip(request))  # committed with this transaction
     attempts = _count_failure(request, claims)
@@ -277,6 +277,17 @@ class OidcCallback(BaseModel):
 def _tenant_by_code(code: str) -> Optional[Tenant]:
     with system_tx() as s:
         return s.execute(select(Tenant).where(Tenant.code == code.upper())).scalar_one_or_none()
+
+
+@router.get("/auth/sso", tags=["Identity"])
+def sso_for_email(email: str = ""):
+    """Public: the sign-in page asks, once the e-mail is typed, whether its domain signs in with an identity provider.
+    Answers per domain only (never whether the e-mail has an account). Domains come from PIC_OIDC_<TENANT>_EMAIL_DOMAINS."""
+    domain = email.rsplit("@", 1)[-1].strip().lower() if "@" in email else ""
+    code = oidc.tenant_for_domain(domain) if domain else None
+    found = _tenant_by_code(code) if code else None
+    enabled = bool(found and found.status == "ACTIVE" and oidc.config(found.code))
+    return {"enabled": enabled, "tenant": found.code if enabled else None}
 
 
 @router.get("/auth/oidc/{tenant}", tags=["Identity"])
