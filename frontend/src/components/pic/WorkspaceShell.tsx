@@ -14,6 +14,8 @@ import { ToastProvider } from './toast';
 import { isTwinPage, navigationFor } from '@/components/nav/picNavigation';
 import IndustrySwitcher from '@/components/layout/IndustrySwitcher';
 import OrganisationSwitcher from './OrganisationSwitcher';
+import ThemeToggle from '@/components/ThemeToggle';
+import { LogOut } from 'lucide-react';
 
 type LiveEvent = { id: string; type: string; ref: string; objectType: string; actor: string; at: string };
 type Live = { connected: boolean; openTasks: number | null; events: LiveEvent[] };
@@ -105,28 +107,41 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
     }
   }, [user, supplier, twinPage]);
 
-  if (isLogin) return <ToastProvider>{children}</ToastProvider>;
+  if (isLogin) {
+    return (
+      <ToastProvider>
+        <div className="fixed right-4 top-4 z-50"><ThemeToggle showLabels={false} /></div>
+        {children}
+      </ToastProvider>
+    );
+  }
 
   const nav = navigationFor(user?.roles ?? [], legacyDemoEnabled);
+
+  const initials = (user?.name ?? '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join('') || '·';
+  const roles = user?.roles.map((r) => r.replace(/_/g, ' ').toLowerCase()).join(', ');
 
   return (
     <LiveContext.Provider value={live}>
       <ToastProvider>
-        <div className="min-h-screen bg-[#F4F6FB] text-slate-900 md:flex">
-          <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2">Skip to content</a>
-          <aside id="workspace-nav" aria-label="Navigation" className={`${menuOpen ? 'block' : 'hidden'} w-full shrink-0 bg-[#0B1020] text-slate-300 md:sticky md:top-0 md:block md:h-screen md:w-60 md:overflow-y-auto`}>
-            <div className="flex items-center gap-2 px-5 py-4">
-              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#1A56DB] font-bold text-white">α</span>
-              <div>
-                <p className="text-sm font-semibold text-white">Purchasing Intelligence</p>
-                <p className="text-[11px] text-slate-400">AlphaHelion Cloud</p>
-              </div>
-            </div>
-            <nav aria-label="Workspace" className="px-3 pb-6">
+        <div className="min-h-screen bg-canvas text-ink md:flex">
+          <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-surface focus:px-3 focus:py-2">Skip to content</a>
+          {/* The sidebar keeps its own dark design in both themes (theme-fixed: the dark-theme overrides leave it alone). */}
+          <aside id="workspace-nav" aria-label="Navigation"
+            className={`theme-fixed ${menuOpen ? 'block' : 'hidden'} relative w-full shrink-0 bg-gradient-to-b from-[#0B1020] via-[#0C1430] to-[#0B1020] text-slate-300 md:sticky md:top-0 md:block md:h-screen md:w-64 md:overflow-y-auto`}>
+            <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(300px_140px_at_20%_0%,rgba(59,118,240,0.25),transparent_70%)]" />
+            <Link href="/pic" prefetch={false} className="relative flex items-center gap-3 px-5 pb-4 pt-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[#3B76F0] to-[#7C3AED] text-lg font-bold text-white shadow-lg shadow-blue-900/40">α</span>
+              <span>
+                <span className="block text-sm font-semibold tracking-tight text-white">Purchasing Intelligence</span>
+                <span className="block text-[11px] text-slate-400">AlphaHelion Cloud</span>
+              </span>
+            </Link>
+            <nav aria-label="Workspace" className="relative px-3 pb-8">
               {nav.map((g) => (
-                <div key={g.group} className={g.twin ? 'mt-6 border-t border-white/10 pt-4' : 'mt-4'}>
-                  <p className={`px-2 text-[10px] font-semibold uppercase tracking-widest ${g.twin ? 'text-sky-400' : 'text-slate-500'}`}>{g.group}</p>
-                  <ul className="mt-1 space-y-0.5">
+                <div key={g.group} className={g.twin ? 'mt-6 border-t border-white/10 pt-4' : 'mt-5'}>
+                  <p className={`px-3 text-[10px] font-semibold uppercase tracking-[0.14em] ${g.twin ? 'text-sky-400' : 'text-slate-500'}`}>{g.group}</p>
+                  <ul className="mt-1.5 space-y-0.5">
                     {g.items.map((item) => {
                       // The most specific matching entry is active (e.g. /pic/suppliers/risk, not /pic/suppliers).
                       const matches = (href: string) => (href === '/pic' ? pathname === '/pic' : pathname === href || !!pathname?.startsWith(`${href}/`));
@@ -135,13 +150,15 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                       return (
                         <li key={item.href}>
                           <Link href={item.href} prefetch={false} onClick={() => setMenuOpen(false)} aria-current={active ? 'page' : undefined}
-                            className={`flex items-center justify-between rounded-md px-2 py-1.5 text-sm ${active ? 'bg-[#1A56DB] text-white' : 'hover:bg-white/5 hover:text-white'}`}>
+                            className={`group relative flex items-center justify-between rounded-lg px-3 py-1.5 text-[13px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                              active ? 'bg-white/[0.09] font-medium text-white' : 'text-slate-300 hover:bg-white/[0.05] hover:text-white'}`}>
+                            {active && <span aria-hidden className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-gradient-to-b from-[#60A5FA] to-[#A78BFA]" />}
                             <span className="flex items-center gap-2.5">
-                              <Icon size={16} aria-hidden className={active ? 'text-white' : 'text-slate-400'} />
+                              <Icon size={16} aria-hidden className={active ? 'text-sky-300' : 'text-slate-500 transition-colors group-hover:text-slate-300'} />
                               {item.label}
                             </span>
                             {item.href === '/pic/tasks' && !!live.openTasks && (
-                              <span className="rounded-full bg-[#F59E0B] px-1.5 text-[11px] font-bold text-[#0B1020]">{live.openTasks}</span>
+                              <span className="rounded-full bg-amber-400 px-1.5 text-[11px] font-bold leading-[18px] text-[#0B1020]">{live.openTasks}</span>
                             )}
                           </Link>
                         </li>
@@ -153,33 +170,54 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
             </nav>
           </aside>
           <div className="min-w-0 flex-1">
-            <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur md:px-8">
-              <div className="flex items-center gap-3">
-                <button type="button" className="rounded p-1.5 text-slate-600 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu" aria-expanded={menuOpen} aria-controls="workspace-nav">☰</button>
-                {user ? <OrganisationSwitcher fallbackCode={user.tenant} /> : <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">…</span>}
-                <span className="hidden text-xs text-slate-500 sm:inline" title={tenant.data?.name}>{tenant.data ? `${tenant.data.templateLabel} template` : ""}</span>
+            <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-line bg-surface/80 px-4 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-surface/70 md:px-8">
+              <div className="flex min-w-0 items-center gap-3">
+                <button type="button" className="rounded-lg p-1.5 text-ink-2 hover:bg-surface-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-label="Menu" aria-expanded={menuOpen} aria-controls="workspace-nav">☰</button>
+                {user ? <OrganisationSwitcher fallbackCode={user.tenant} /> : <span className="rounded bg-surface-3 px-2 py-0.5 font-mono text-xs text-ink-2">…</span>}
+                {tenant.data && (
+                  <span className="hidden truncate rounded-full border border-line bg-surface-2 px-2.5 py-0.5 text-[11px] font-medium text-ink-3 sm:inline" title={tenant.data.name}>
+                    {tenant.data.templateLabel} template
+                  </span>
+                )}
               </div>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3">
                 {twinPage && legacyDemoEnabled && !supplier && <IndustrySwitcher />}
-                <span className="flex items-center gap-1.5 text-xs text-slate-600" title={live.connected ? 'Receiving live updates' : 'Reconnecting…'}>
-                  <span className={`h-2 w-2 rounded-full ${live.connected ? 'bg-emerald-500' : 'bg-slate-300'}`} aria-hidden />
+                <span className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold sm:flex ${live.connected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-surface-3 text-ink-3'}`}
+                  title={live.connected ? 'Receiving live updates' : 'Reconnecting…'}>
+                  <span className="relative flex h-2 w-2" aria-hidden>
+                    {live.connected && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />}
+                    <span className={`relative inline-flex h-2 w-2 rounded-full ${live.connected ? 'bg-emerald-500' : 'bg-ink-3'}`} />
+                  </span>
                   {live.connected ? 'Live' : 'Offline'}
                 </span>
                 {live.events[0] && (
-                  <span className="hidden max-w-xs truncate text-xs text-slate-500 lg:inline">
+                  <span className="hidden max-w-xs truncate text-xs text-ink-3 2xl:inline">
                     {live.events[0].type} · {live.events[0].ref} · {dateTime(live.events[0].at)}
                   </span>
                 )}
+                <ThemeToggle />
                 {user && <NotificationBell />}
-                <Link href="/pic/account" prefetch={false} className="rounded-md px-1 text-right hover:bg-slate-50" title="My account & security">
-                  <p className="text-sm font-medium leading-tight">{user?.name ?? ''}</p>
-                  <p className="text-[11px] leading-tight text-slate-500">{user?.roles.map((r) => r.replace(/_/g, ' ').toLowerCase()).join(', ')}</p>
+                <Link href="/pic/account" prefetch={false} className="flex items-center gap-2.5 rounded-xl px-1.5 py-1 hover:bg-surface-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand" title="My account & security">
+                  <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#3B76F0] to-[#7C3AED] text-xs font-semibold text-white shadow-sm">{initials}</span>
+                  <span className="hidden text-left lg:block">
+                    <span className="block max-w-[180px] truncate text-sm font-medium leading-tight text-ink">{user?.name ?? ''}</span>
+                    <span className="block max-w-[180px] truncate text-[11px] capitalize leading-tight text-ink-3">{roles}</span>
+                  </span>
                 </Link>
-                <button onClick={signOut} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-50">Sign out</button>
+                <button onClick={signOut} title="Sign out" className="flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-medium text-ink-2 transition hover:border-line-strong hover:bg-surface-3 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+                  <LogOut size={14} aria-hidden /><span className="hidden sm:inline">Sign out</span>
+                </button>
               </div>
             </header>
-            {/* Twin screens bring their own page layout; PIC pages use the workspace container. */}
-            <main id="main" className={twinPage ? 'min-w-0' : 'mx-auto max-w-[1400px] px-4 py-6 md:px-8'}>{children}</main>
+            {/* Twin screens bring their own page layout and dark design (theme-fixed); PIC pages use the workspace container. */}
+            {twinPage
+              ? <main id="main" className="theme-fixed min-w-0">{children}</main>
+              : (
+                <main id="main" className="relative">
+                  <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[420px] [background:var(--glow)]" />
+                  <div className="relative mx-auto max-w-[1400px] animate-rise px-4 py-6 md:px-8 md:py-8">{children}</div>
+                </main>
+              )}
             {!supplier && !twinPage && !user?.roles.includes('PLATFORM_OPERATOR') && <footer><LifecycleStrip pathname={pathname} /></footer>}
           </div>
         </div>

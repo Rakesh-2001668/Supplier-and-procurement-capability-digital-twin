@@ -33,7 +33,7 @@ export function SavedViews({ screen, filters, onApply }: { screen: string; filte
 
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Saved views">
-      <label htmlFor={`views-${screen}`} className="text-xs font-medium text-slate-700">Saved views</label>
+      <label htmlFor={`views-${screen}`} className="text-xs font-medium text-ink-2">Saved views</label>
       <div className="w-56">
         <Select id={`views-${screen}`} value={chosen} onChange={(e) => {
           setChosen(e.target.value);
@@ -65,11 +65,11 @@ function SaveViewDialog({ screen, filters, onClose, onSaved }: { screen: string;
     <Dialog open title="Save current filters" onClose={onClose}>
       <form onSubmit={(e) => { e.preventDefault(); if (name.trim()) save.mutate(); }} className="space-y-3">
         <Field label="Name" required hint="Up to 80 characters, unique on this screen">{(id, d) => <Input id={id} aria-describedby={d} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} autoFocus />}</Field>
-        <p className="text-xs text-slate-600">
+        <p className="text-xs text-ink-2">
           {shown.length ? <>Saves: {shown.map(([k, v]) => `${k} = ${Array.isArray(v) ? v.join(', ') : String(v)}`).join('; ')}</> : 'No filter is set: the view will show everything.'}
         </p>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-[#1A56DB]" checked={shared} onChange={(e) => setShared(e.target.checked)} /> Share with everyone in my organisation</label>
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-[#1A56DB]" checked={asDefault} onChange={(e) => setAsDefault(e.target.checked)} /> Open this view by default</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-brand" checked={shared} onChange={(e) => setShared(e.target.checked)} /> Share with everyone in my organisation</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-brand" checked={asDefault} onChange={(e) => setAsDefault(e.target.checked)} /> Open this view by default</label>
         {save.error && <ProblemBox error={save.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
@@ -89,10 +89,10 @@ export type BulkResult = { results: BulkRowResult[]; succeeded: number; failed: 
 export function BulkResults({ result, onClose }: { result: BulkResult; onClose: () => void }) {
   return (
     <Dialog open title={`Bulk decision: ${result.succeeded} done, ${result.failed} refused`} onClose={onClose}>
-      <ul className="divide-y divide-slate-100 text-sm" aria-label="Result per task">
+      <ul className="divide-y divide-line text-sm" aria-label="Result per task">
         {result.results.map((r) => (
           <li key={r.taskId} className="flex flex-wrap items-start justify-between gap-2 py-2">
-            <span><span className="font-medium">{r.objectRef ?? r.taskId.slice(0, 8)}</span>{r.name ? <span className="text-slate-500"> · {r.name}</span> : null}</span>
+            <span><span className="font-medium">{r.objectRef ?? r.taskId.slice(0, 8)}</span>{r.name ? <span className="text-ink-3"> · {r.name}</span> : null}</span>
             {r.ok
               ? <span className="text-emerald-700">✓ {r.decision.toLowerCase()}d</span>
               : <span className="max-w-md text-right text-red-700"><span className="font-mono text-xs">{r.error?.code}</span> {r.error?.detail}</span>}

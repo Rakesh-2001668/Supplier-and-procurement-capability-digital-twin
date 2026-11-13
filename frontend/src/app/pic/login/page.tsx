@@ -141,22 +141,51 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0B1020] px-4">
-      <div className="w-full max-w-md">
-        <div className="mb-6 text-center">
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-[#1A56DB] text-xl font-bold text-white">α</span>
-          <h1 className="mt-3 text-xl font-semibold text-white">AlphaHelion Purchasing Intelligence Cloud</h1>
-          <p className="text-sm text-slate-400">One sign-in for buyers and suppliers</p>
+    <div className="grid min-h-screen bg-canvas lg:grid-cols-[1.05fr_1fr]">
+      {/* Brand panel: keeps its dark design in both themes. */}
+      <aside className="theme-fixed relative hidden overflow-hidden bg-[#0B1020] lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <div aria-hidden className="pointer-events-none absolute inset-0 bg-[radial-gradient(600px_380px_at_15%_10%,rgba(59,118,240,0.35),transparent_65%),radial-gradient(520px_360px_at_90%_85%,rgba(124,58,237,0.30),transparent_65%)]" />
+        <div aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.07] [background-image:linear-gradient(rgba(255,255,255,.6)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.6)_1px,transparent_1px)] [background-size:44px_44px]" />
+        <div className="relative flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#3B76F0] to-[#7C3AED] text-xl font-bold text-white shadow-lg shadow-blue-900/40">α</span>
+          <span className="text-sm font-semibold tracking-tight text-white">AlphaHelion Cloud</span>
+        </div>
+        <div className="relative max-w-lg">
+          <h2 className="text-4xl font-semibold leading-tight tracking-tight text-white">
+            Purchasing intelligence,<br />
+            <span className="bg-gradient-to-r from-sky-300 via-blue-300 to-violet-300 bg-clip-text text-transparent">from plan to payment.</span>
+          </h2>
+          <p className="mt-4 text-base leading-relaxed text-slate-300">
+            One platform for buyers and suppliers: sourcing, contracts, orders, receiving, invoices and supplier capability, with live data and controls built in.
+          </p>
+          <ul className="mt-8 grid grid-cols-2 gap-3 text-sm text-slate-200">
+            {['Live spend & savings', 'Supplier capability twin', 'Three-way match', 'Audit-ready controls'].map((f) => (
+              <li key={f} className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 backdrop-blur">
+                <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-sky-300 to-violet-300" />{f}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="relative text-xs text-slate-500">© AlphaHelion · Purchasing Intelligence Cloud</p>
+      </aside>
+
+      <div className="relative flex items-center justify-center px-4 py-12">
+        <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-80 [background:var(--glow)]" />
+      <div className="relative w-full max-w-md animate-rise">
+        <div className="mb-7">
+          <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#3B76F0] to-[#7C3AED] text-xl font-bold text-white shadow-lg shadow-blue-900/30 lg:hidden">α</span>
+          <h1 className="mt-3 text-2xl font-semibold tracking-tight text-ink lg:mt-0">Sign in</h1>
+          <p className="mt-1 text-sm text-ink-3">AlphaHelion Purchasing Intelligence Cloud · one sign-in for buyers and suppliers</p>
         </div>
 
         {step === 'password' && (
-          <form onSubmit={submitPassword} className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
+          <form onSubmit={submitPassword} className="space-y-4 rounded-2xl border border-line bg-surface p-7 shadow-raised">
             <div className="space-y-1">
-              <label htmlFor="email" className="text-xs font-medium text-slate-700">Work e-mail</label>
+              <label htmlFor="email" className="text-xs font-medium text-ink-2">Work e-mail</label>
               <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" required />
             </div>
             <div className="space-y-1">
-              <label htmlFor="password" className="text-xs font-medium text-slate-700">Password</label>
+              <label htmlFor="password" className="text-xs font-medium text-ink-2">Password</label>
               <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required />
             </div>
             {ssoError && (
@@ -168,24 +197,24 @@ function LoginForm() {
             <Button type="submit" variant="primary" busy={busy} className="w-full py-2">Sign in</Button>
             {ssoTenant && (
               <>
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-slate-400">
-                  <span className="h-px flex-1 bg-slate-200" />or<span className="h-px flex-1 bg-slate-200" />
+                <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-ink-3">
+                  <span className="h-px flex-1 bg-line" />or<span className="h-px flex-1 bg-line" />
                 </div>
                 <a href={`/api/auth/oidc/start?tenant=${encodeURIComponent(ssoTenant)}&next=${encodeURIComponent(params.get('next') ?? '')}`}
-                  className="flex w-full items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50">
+                  className="flex w-full items-center justify-center rounded-lg border border-line-strong px-3 py-2 text-sm font-medium text-ink hover:bg-surface-2">
                   Continue with single sign-on
                 </a>
               </>
             )}
-            <p className="text-center text-xs text-slate-600">
-              New to the platform? <a href="/register" className="font-medium text-[#1A56DB] hover:underline">Register your organisation</a>
+            <p className="text-center text-xs text-ink-2">
+              New to the platform? <a href="/register" className="font-medium text-brand-ink hover:underline">Register your organisation</a>
             </p>
-            <details className="text-xs text-slate-600">
+            <details className="text-xs text-ink-2">
               <summary className="cursor-pointer select-none">Demo users (Axion Mobility)</summary>
               <div className="mt-2 grid grid-cols-2 gap-1">
                 {DEMO.map(([local, role]) => (
                   <button type="button" key={local} onClick={() => setEmail(`${local}@axion.example`)}
-                    className="rounded border border-slate-200 px-2 py-1 text-left hover:bg-slate-50">{role}</button>
+                    className="rounded-lg border border-line px-2 py-1 text-left transition hover:border-brand hover:bg-brand-soft">{role}</button>
                 ))}
               </div>
             </details>
@@ -193,10 +222,10 @@ function LoginForm() {
         )}
 
         {step === 'choose' && (
-          <div className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
+          <div className="space-y-4 rounded-2xl border border-line bg-surface p-7 shadow-raised">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Choose an organisation</h2>
-              <p className="mt-1 text-sm text-slate-600">{email} has an account in more than one organisation. You can switch later from the header.</p>
+              <h2 className="text-base font-semibold text-ink">Choose an organisation</h2>
+              <p className="mt-1 text-sm text-ink-2">{email} has an account in more than one organisation. You can switch later from the header.</p>
             </div>
             <ul className="space-y-2">
               {organisations.map((o) => {
@@ -204,11 +233,11 @@ function LoginForm() {
                 return (
                   <li key={o.code}>
                     <button type="button" disabled={busy} onClick={() => choose(o.code)}
-                      className="flex w-full items-center gap-3 rounded-lg border border-slate-200 px-3 py-2.5 text-left hover:border-[#1A56DB] hover:bg-slate-50 disabled:opacity-60">
-                      <Icon size={20} className="shrink-0 text-[#1A56DB]" aria-hidden />
+                      className="flex w-full items-center gap-3 rounded-lg border border-line px-3 py-2.5 text-left hover:border-brand hover:bg-surface-2 disabled:opacity-60">
+                      <Icon size={20} className="shrink-0 text-brand-ink" aria-hidden />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-slate-900">{o.name}</span>
-                        <span className="block truncate text-xs text-slate-500">
+                        <span className="block truncate text-sm font-medium text-ink">{o.name}</span>
+                        <span className="block truncate text-xs text-ink-3">
                           {o.code} · {o.kind === 'SUPPLIER' ? 'Supplier' : 'Buyer'} organisation · {roleText(o.roles)}
                         </span>
                       </span>
@@ -218,32 +247,32 @@ function LoginForm() {
               })}
             </ul>
             <ProblemBox error={error} />
-            <button type="button" onClick={restart} className="w-full text-center text-xs text-slate-500 hover:text-slate-800">Use a different account</button>
+            <button type="button" onClick={restart} className="w-full text-center text-xs text-ink-3 hover:text-ink">Use a different account</button>
           </div>
         )}
 
         {step === 'mfa' && (
-          <form onSubmit={submitCode} className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
+          <form onSubmit={submitCode} className="space-y-4 rounded-2xl border border-line bg-surface p-7 shadow-raised">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Two-step verification</h2>
-              <p className="mt-1 text-sm text-slate-600">Enter the 6-digit code from your authenticator app.</p>
+              <h2 className="text-base font-semibold text-ink">Two-step verification</h2>
+              <p className="mt-1 text-sm text-ink-2">Enter the 6-digit code from your authenticator app.</p>
             </div>
             <div className="space-y-1">
-              <label htmlFor="code" className="text-xs font-medium text-slate-700">Authentication code</label>
+              <label htmlFor="code" className="text-xs font-medium text-ink-2">Authentication code</label>
               <Input id="code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,8}" maxLength={8} autoFocus required
                 value={code} onChange={(e) => setCode(e.target.value)} className="font-mono tracking-[0.3em]" />
             </div>
             <ProblemBox error={error} />
             <Button type="submit" variant="primary" busy={busy} className="w-full py-2">Verify</Button>
-            <button type="button" onClick={restart} className="w-full text-center text-xs text-slate-500 hover:text-slate-800">Use a different account</button>
+            <button type="button" onClick={restart} className="w-full text-center text-xs text-ink-3 hover:text-ink">Use a different account</button>
           </form>
         )}
 
         {step === 'enrol' && (
-          <div className="space-y-4 rounded-xl bg-white p-6 shadow-xl">
+          <div className="space-y-4 rounded-2xl border border-line bg-surface p-7 shadow-raised">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Set up two-step verification</h2>
-              <p className="mt-1 text-sm text-slate-600">
+              <h2 className="text-base font-semibold text-ink">Set up two-step verification</h2>
+              <p className="mt-1 text-sm text-ink-2">
                 Your role requires multi-factor authentication. Register an authenticator app (Microsoft Authenticator, Google Authenticator,
                 1Password or similar) to finish signing in.
               </p>
@@ -254,9 +283,10 @@ function LoginForm() {
               <Button variant="primary" busy={busy} className="w-full py-2" onClick={startEnrolment}>Set up authenticator</Button>
             )}
             <ProblemBox error={error} />
-            <button type="button" onClick={restart} className="w-full text-center text-xs text-slate-500 hover:text-slate-800">Back to sign-in</button>
+            <button type="button" onClick={restart} className="w-full text-center text-xs text-ink-3 hover:text-ink">Back to sign-in</button>
           </div>
         )}
+      </div>
       </div>
     </div>
   );

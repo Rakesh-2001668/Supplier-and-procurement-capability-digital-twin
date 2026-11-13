@@ -32,10 +32,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       {children}
       <div className="fixed bottom-4 right-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-2" role="status" aria-live="polite">
         {toasts.map((t) => (
-          <div key={t.id} role={t.kind === 'error' ? 'alert' : undefined} className={`rounded-lg border px-4 py-3 shadow-lg ${t.kind === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-red-200 bg-red-50 text-red-900'}`}>
-            <p className="text-sm font-semibold">{t.title}</p>
-            {t.detail && <p className="mt-0.5 text-sm">{t.detail}</p>}
-            {t.meta && <p className="mt-1 font-mono text-[11px] opacity-70">{t.meta}</p>}
+          <div key={t.id} role={t.kind === 'error' ? 'alert' : undefined}
+            className="relative flex animate-pop gap-3 overflow-hidden rounded-xl border border-line bg-surface/95 py-3 pl-4 pr-4 text-ink shadow-raised backdrop-blur">
+            <span aria-hidden className={`absolute inset-y-0 left-0 w-1 ${t.kind === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`} />
+            <span aria-hidden className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white ${t.kind === 'success' ? 'bg-emerald-500' : 'bg-red-500'}`}>
+              {t.kind === 'success' ? '✓' : '!'}
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">{t.title}</p>
+              {t.detail && <p className="mt-0.5 text-sm text-ink-2">{t.detail}</p>}
+              {t.meta && <p className="mt-1 font-mono text-[11px] text-ink-3">{t.meta}</p>}
+            </div>
           </div>
         ))}
       </div>

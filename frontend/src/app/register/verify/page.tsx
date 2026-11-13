@@ -12,10 +12,10 @@ type Result = { status: string; number: string; company: string; detail: string 
 
 export default function VerifyRegistrationPage() {
   return (
-    <div className="min-h-screen bg-[#F4F6FB] text-slate-900">
+    <div className="min-h-screen bg-canvas text-ink">
       <div className="mx-auto max-w-xl px-4 py-16">
         <div className="mb-6 flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[#1A56DB] font-bold text-white">α</span>
+          <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand font-bold text-white">α</span>
           <p className="text-sm font-semibold">AlphaHelion Purchasing Intelligence Cloud</p>
         </div>
         <Suspense fallback={<Loading />}><Confirm /></Suspense>
@@ -53,7 +53,7 @@ function Box({ tone, title, text, link }: { tone: 'good' | 'warn'; title: string
     <div role="status" className={`rounded-xl border p-6 ${styles}`}>
       <p className="text-lg font-semibold">{title}</p>
       <p className="mt-1 text-sm">{text}</p>
-      {link && <Link href={link.href} className="mt-3 inline-block text-sm font-medium text-[#1A56DB] hover:underline">{link.label} →</Link>}
+      {link && <Link href={link.href} className="mt-3 inline-block text-sm font-medium text-brand-ink hover:underline">{link.label} →</Link>}
     </div>
   );
 }

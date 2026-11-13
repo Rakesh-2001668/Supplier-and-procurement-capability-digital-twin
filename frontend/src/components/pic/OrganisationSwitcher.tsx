@@ -47,32 +47,32 @@ export default function OrganisationSwitcher({ fallbackCode }: { fallbackCode: s
     }
   }
 
-  const label = <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700" title={current?.name ?? me.data?.tenantName}>{current?.code ?? fallbackCode}</span>;
+  const label = <span className="rounded bg-surface-3 px-2 py-0.5 font-mono text-xs text-ink-2" title={current?.name ?? me.data?.tenantName}>{current?.code ?? fallbackCode}</span>;
   if (organisations.length < 2) return label;
 
   return (
     <div className="relative" ref={box}>
       <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
-        className="flex items-center gap-1.5 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+        className="flex items-center gap-1.5 rounded-md border border-line px-2 py-1 text-xs text-ink-2 hover:bg-surface-2">
         <span className="font-mono">{current?.code ?? fallbackCode}</span>
         <span className="hidden max-w-[12rem] truncate sm:inline">{current?.name}</span>
         <ChevronDown size={14} aria-hidden />
       </button>
       {open && (
-        <div role="menu" className="absolute left-0 z-50 mt-1 w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-slate-400">Switch organisation</p>
+        <div role="menu" className="absolute left-0 z-50 mt-1 w-72 rounded-lg border border-line bg-surface py-1 shadow-lg">
+          <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-ink-3">Switch organisation</p>
           {organisations.map((o) => {
             const Icon = o.kind === 'SUPPLIER' ? Factory : Building2;
             return (
               <button key={o.code} type="button" role="menuitem" disabled={o.current || busy !== null} onClick={() => switchTo(o.code)}
-                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-slate-50 disabled:cursor-default disabled:hover:bg-white">
-                <Icon size={16} className="shrink-0 text-[#1A56DB]" aria-hidden />
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm hover:bg-surface-2 disabled:cursor-default disabled:hover:bg-surface">
+                <Icon size={16} className="shrink-0 text-brand-ink" aria-hidden />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-slate-900">{o.name}</span>
-                  <span className="block text-xs text-slate-500">{o.code} · {o.kind === 'SUPPLIER' ? 'Supplier' : 'Buyer'}</span>
+                  <span className="block truncate text-ink">{o.name}</span>
+                  <span className="block text-xs text-ink-3">{o.code} · {o.kind === 'SUPPLIER' ? 'Supplier' : 'Buyer'}</span>
                 </span>
                 {o.current && <Check size={16} className="text-emerald-600" aria-label="Current organisation" />}
-                {busy === o.code && <span className="text-xs text-slate-500">Opening…</span>}
+                {busy === o.code && <span className="text-xs text-ink-3">Opening…</span>}
               </button>
             );
           })}

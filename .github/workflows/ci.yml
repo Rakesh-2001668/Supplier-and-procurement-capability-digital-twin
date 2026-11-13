@@ -107,6 +107,10 @@ jobs:
         run: >-
           npx eslint
           src/app/pic src/app/register src/components/pic src/components/nav src/lib/pic src/app/api src/app/layout.tsx src/proxy.ts next.config.ts
+          src/components/ThemeToggle.tsx src/lib/theme.ts scripts/gen-dark-theme.mjs
+      - name: Dark theme stylesheet is current
+        # src/app/theme-dark.css is generated from the colour classes in src/; a new fixed colour class needs a regenerate.
+        run: node scripts/gen-dark-theme.mjs --check
       - name: npm audit (production dependencies, fails on high/critical)
         run: npm audit --omit=dev --audit-level=high
       - name: npm audit (all dependencies, report only)

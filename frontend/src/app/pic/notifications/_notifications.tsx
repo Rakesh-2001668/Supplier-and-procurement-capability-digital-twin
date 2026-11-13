@@ -22,7 +22,7 @@ export const KIND_TONE: Record<string, string> = {
 
 export function KindChip({ kind }: { kind: string }) {
   return (
-    <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${KIND_TONE[kind] ?? 'bg-slate-50 text-slate-700 ring-slate-200'}`}>
+    <span className={`inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset ${KIND_TONE[kind] ?? 'bg-surface-2 text-ink-2 ring-slate-200'}`}>
       {label(kind)}
     </span>
   );
@@ -72,7 +72,7 @@ export function NotificationBell() {
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen((o) => !o)} aria-haspopup="true" aria-expanded={open}
         aria-label={unread ? `Notifications, ${unread} unread` : 'Notifications'}
-        className="relative rounded-md p-1.5 text-slate-600 hover:bg-slate-100">
+        className="relative rounded-md p-1.5 text-ink-2 hover:bg-surface-3">
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
           <path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" strokeLinecap="round" strokeLinejoin="round" />
@@ -84,33 +84,33 @@ export function NotificationBell() {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 z-40 mt-2 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
+        <div className="absolute right-0 z-40 mt-2 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-line bg-surface shadow-xl">
+          <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
             <p className="text-sm font-semibold">Notifications</p>
             {unread > 0 && (
-              <button className="text-xs font-medium text-[#1A56DB] hover:underline" onClick={() => markAllRead(client)}>Mark all read</button>
+              <button className="text-xs font-medium text-brand-ink hover:underline" onClick={() => markAllRead(client)}>Mark all read</button>
             )}
           </div>
-          <ul className="max-h-[26rem] divide-y divide-slate-100 overflow-y-auto">
-            {latest.isLoading && <li className="px-4 py-6 text-center text-sm text-slate-500">Loading…</li>}
+          <ul className="max-h-[26rem] divide-y divide-line overflow-y-auto">
+            {latest.isLoading && <li className="px-4 py-6 text-center text-sm text-ink-3">Loading…</li>}
             {latest.error && <li className="px-4 py-6 text-center text-sm text-red-700">{latest.error.message}</li>}
-            {latest.data && !latest.data.items.length && <li className="px-4 py-6 text-center text-sm text-slate-500">You are all caught up.</li>}
+            {latest.data && !latest.data.items.length && <li className="px-4 py-6 text-center text-sm text-ink-3">You are all caught up.</li>}
             {latest.data?.items.map((n) => (
               <li key={n.id}>
                 <button onClick={() => { setOpen(false); openNotification(n); }}
-                  className={`block w-full px-4 py-2.5 text-left hover:bg-slate-50 ${n.read_at ? '' : 'bg-blue-50/40'}`}>
+                  className={`block w-full px-4 py-2.5 text-left hover:bg-surface-2 ${n.read_at ? '' : 'bg-blue-50/40'}`}>
                   <div className="flex items-center justify-between gap-2">
                     <KindChip kind={n.kind} />
-                    <span className="text-[11px] text-slate-500">{dateTime(n.created_at)}</span>
+                    <span className="text-[11px] text-ink-3">{dateTime(n.created_at)}</span>
                   </div>
-                  <p className={`mt-1 text-sm ${n.read_at ? 'text-slate-700' : 'font-semibold text-slate-900'}`}>{n.title}</p>
-                  <p className="line-clamp-2 text-xs text-slate-600">{n.body}</p>
+                  <p className={`mt-1 text-sm ${n.read_at ? 'text-ink-2' : 'font-semibold text-ink'}`}>{n.title}</p>
+                  <p className="line-clamp-2 text-xs text-ink-2">{n.body}</p>
                 </button>
               </li>
             ))}
           </ul>
           <Link href="/pic/notifications" prefetch={false} onClick={() => setOpen(false)}
-            className="block border-t border-slate-100 px-4 py-2 text-center text-xs font-medium text-[#1A56DB] hover:bg-slate-50">
+            className="block border-t border-line px-4 py-2 text-center text-xs font-medium text-brand-ink hover:bg-surface-2">
             See all notifications
           </Link>
         </div>

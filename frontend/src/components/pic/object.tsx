@@ -35,18 +35,18 @@ export function ProcessPath({ type, objectRef }: { type: string; objectRef: stri
               done={p.path.filter((s) => s.status !== 'ACTIVE').map((s) => s.step)}
               active={p.status === 'RUNNING' ? (p.path.find((s) => s.status === 'ACTIVE')?.step ?? p.currentStep) : null} />
           </div>
-          <ol className="relative ml-3 border-l-2 border-slate-200">
+          <ol className="relative ml-3 border-l-2 border-line">
             {p.path.map((s, i) => (
               <li key={`${s.step}-${i}`} className="mb-3 ml-5">
                 <span className={`absolute -left-[9px] mt-1 flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-white ${s.status === 'ACTIVE' ? 'bg-amber-400' : s.status === 'SKIPPED' ? 'bg-slate-300' : 'bg-emerald-500'}`} aria-hidden />
                 <div className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="font-mono text-xs text-slate-500">{s.step}</span>
+                  <span className="font-mono text-xs text-ink-3">{s.step}</span>
                   <span className="text-sm font-medium">{s.name}</span>
-                  <span className="text-xs text-slate-500">· {s.lane}</span>
+                  <span className="text-xs text-ink-3">· {s.lane}</span>
                   {s.status !== 'COMPLETED' && <StatusChip status={s.status === 'ACTIVE' ? 'ACTIVE_STEP' : s.status} />}
                 </div>
-                {s.outcome && <p className="text-sm text-slate-700">{s.outcome}</p>}
-                <p className="text-xs text-slate-500">{s.actor} · {dateTime(s.at)}</p>
+                {s.outcome && <p className="text-sm text-ink-2">{s.outcome}</p>}
+                <p className="text-xs text-ink-3">{s.actor} · {dateTime(s.at)}</p>
               </li>
             ))}
           </ol>
@@ -122,15 +122,15 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
   return (
     <div className="space-y-4">
       {/* View Switcher & Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Document Flow:</span>
-          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-medium">
+          <span className="text-xs font-semibold uppercase tracking-wider text-ink-3">Document Flow:</span>
+          <div className="inline-flex rounded-lg border border-line bg-surface-3 p-0.5 text-xs font-medium">
             <button
               type="button"
               onClick={() => setViewMode('graph')}
               className={`rounded-md px-2.5 py-1 transition ${
-                viewMode === 'graph' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                viewMode === 'graph' ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink'
               }`}
             >
               Visual Flow Diagram
@@ -139,7 +139,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
               type="button"
               onClick={() => setViewMode('list')}
               className={`rounded-md px-2.5 py-1 transition ${
-                viewMode === 'list' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                viewMode === 'list' ? 'bg-surface text-ink shadow-sm' : 'text-ink-2 hover:text-ink'
               }`}
             >
               Audit Trace List ({edges.length})
@@ -147,7 +147,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-slate-500">
+        <div className="flex items-center gap-3 text-xs text-ink-3">
           <span>{data.nodes.length} documents linked</span>
           <span>·</span>
           <span>{edges.length} relationships</span>
@@ -160,23 +160,23 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
           {activeNode && (
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-white to-blue-50/30 p-3.5 shadow-sm">
               <div className="flex items-center gap-2.5">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#1A56DB] text-xs font-bold text-white shadow-sm">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-brand text-xs font-bold text-white shadow-sm">
                   {activeNode.ref === objectRef ? '★' : '•'}
                 </span>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-bold text-slate-900">{activeNode.ref}</span>
+                    <span className="font-mono text-sm font-bold text-ink">{activeNode.ref}</span>
                     <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
                       {TYPE_LABEL[activeNode.type] ?? label(activeNode.type)}
                     </span>
                     {activeNode.ref === objectRef && (
                       <span className="flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-surface" />
                         CURRENT DOCUMENT
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 flex items-center gap-3 text-xs text-slate-600">
+                  <div className="mt-0.5 flex items-center gap-3 text-xs text-ink-2">
                     <span>{incomingEdges.length} upstream predecessor(s)</span>
                     <span>·</span>
                     <span>{outgoingEdges.length} downstream dependent(s)</span>
@@ -189,7 +189,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                   <button
                     type="button"
                     onClick={() => setSelectedRef(objectRef)}
-                    className="text-xs font-semibold text-[#1A56DB] hover:underline"
+                    className="text-xs font-semibold text-brand-ink hover:underline"
                   >
                     Reset to current ({objectRef})
                   </button>
@@ -197,7 +197,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                 {docHref(activeNode.type, activeNode.ref, activeNode.id) && (
                   <Link
                     href={docHref(activeNode.type, activeNode.ref, activeNode.id)!}
-                    className="rounded-lg bg-[#1A56DB] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#1747b8] shadow-sm transition"
+                    className="rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-strong shadow-sm transition"
                   >
                     Open Document →
                   </Link>
@@ -218,15 +218,15 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                         <span className="text-lg font-bold">→</span>
                       </div>
                     )}
-                    <div className="flex-1 rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-                      <div className="mb-3 flex items-center justify-between border-b border-slate-200/70 pb-2">
+                    <div className="flex-1 rounded-xl border border-line bg-surface-2/60 p-3">
+                      <div className="mb-3 flex items-center justify-between border-b border-line/70 pb-2">
                         <div className="flex items-center gap-1.5">
                           <span className="text-sm">{group.stage.icon}</span>
-                          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                          <h4 className="text-xs font-bold uppercase tracking-wider text-ink-2">
                             {group.stage.label}
                           </h4>
                         </div>
-                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-700">
+                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-ink-2">
                           {group.nodes.length}
                         </span>
                       </div>
@@ -251,16 +251,16 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                                   setSelectedRef(n.ref);
                                 }
                               }}
-                              className={`group relative cursor-pointer rounded-lg border p-2.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${
+                              className={`group relative cursor-pointer rounded-lg border p-2.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
                                 isSelected
-                                  ? 'border-[#1A56DB] bg-white ring-2 ring-[#1A56DB] shadow-md'
+                                  ? 'border-brand bg-surface ring-2 ring-brand shadow-md'
                                   : isCurrent
-                                  ? 'border-blue-300 bg-blue-50/50 hover:border-[#1A56DB]'
-                                  : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+                                  ? 'border-blue-300 bg-blue-50/50 hover:border-brand'
+                                  : 'border-line bg-surface hover:border-line-strong hover:shadow-sm'
                               }`}
                             >
                               <div className="flex items-center justify-between gap-1">
-                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700">
+                                <span className="rounded bg-surface-3 px-1.5 py-0.5 text-[10px] font-semibold text-ink-2">
                                   {TYPE_LABEL[n.type] ?? label(n.type)}
                                 </span>
                                 {isCurrent && (
@@ -268,7 +268,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                                 )}
                               </div>
 
-                              <p className="mt-1 font-mono text-xs font-bold text-slate-900 group-hover:text-[#1A56DB]">
+                              <p className="mt-1 font-mono text-xs font-bold text-ink group-hover:text-brand-ink">
                                 {n.ref}
                               </p>
 
@@ -277,7 +277,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                                 {nodeIncoming.map((edge, eIdx) => (
                                   <span
                                     key={eIdx}
-                                    className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[9px] text-slate-600"
+                                    className="rounded bg-surface-3 px-1 py-0.5 font-mono text-[9px] text-ink-2"
                                     title={`From ${edge.from}`}
                                   >
                                     ← {edge.type.replace(/_/g, ' ').toLowerCase()}
@@ -295,12 +295,12 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                               </div>
 
                               {href && (
-                                <div className="mt-2 flex justify-end border-t border-slate-100 pt-1.5 text-[10px]">
+                                <div className="mt-2 flex justify-end border-t border-line pt-1.5 text-[10px]">
                                   <Link
                                     href={href}
                                     prefetch={false}
                                     onClick={(e) => e.stopPropagation()}
-                                    className="font-medium text-[#1A56DB] hover:underline"
+                                    className="font-medium text-brand-ink hover:underline"
                                   >
                                     View details ↗
                                   </Link>
@@ -318,18 +318,18 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
           </div>
 
           {/* Trace Relationship Cards */}
-          <div className="rounded-xl border border-slate-200 bg-white p-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-600 mb-3">
+          <div className="rounded-xl border border-line bg-surface p-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-2 mb-3">
               Direct Relationships for {activeNode?.ref}
             </h4>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {/* Predecessors */}
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+              <div className="rounded-lg border border-line bg-surface-2/50 p-3">
+                <span className="text-[11px] font-semibold text-ink-3 uppercase tracking-wide">
                   Upstream Predecessors ({incomingEdges.length})
                 </span>
                 {!incomingEdges.length ? (
-                  <p className="mt-2 text-xs text-slate-400 italic">No upstream documents (origin in lineage)</p>
+                  <p className="mt-2 text-xs text-ink-3 italic">No upstream documents (origin in lineage)</p>
                 ) : (
                   <ul className="mt-2 space-y-1.5">
                     {incomingEdges.map((e, idx) => {
@@ -337,10 +337,10 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                       return (
                         <li key={idx} className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-slate-400">←</span>
+                            <span className="font-mono text-ink-3">←</span>
                             <DocLink node={fromNode} line={e.fromLine} />
                           </div>
-                          <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-slate-700">
+                          <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-ink-2">
                             {e.type.replace(/_/g, ' ').toLowerCase()}
                           </span>
                         </li>
@@ -351,12 +351,12 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
               </div>
 
               {/* Successors */}
-              <div className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
-                <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+              <div className="rounded-lg border border-line bg-surface-2/50 p-3">
+                <span className="text-[11px] font-semibold text-ink-3 uppercase tracking-wide">
                   Downstream Successors ({outgoingEdges.length})
                 </span>
                 {!outgoingEdges.length ? (
-                  <p className="mt-2 text-xs text-slate-400 italic">No downstream documents yet</p>
+                  <p className="mt-2 text-xs text-ink-3 italic">No downstream documents yet</p>
                 ) : (
                   <ul className="mt-2 space-y-1.5">
                     {outgoingEdges.map((e, idx) => {
@@ -367,7 +367,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                             {e.type.replace(/_/g, ' ').toLowerCase()}
                           </span>
                           <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-slate-400">→</span>
+                            <span className="font-mono text-ink-3">→</span>
                             <DocLink node={toNode} line={e.toLine} />
                           </div>
                         </li>
@@ -388,16 +388,16 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
               placeholder="Filter trace by reference or relation…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="max-w-sm rounded-lg border border-slate-300 px-3 py-1.5 text-xs focus:border-[#1A56DB] focus:outline-none focus:ring-1 focus:ring-[#1A56DB]"
+              className="max-w-sm rounded-lg border border-line-strong px-3 py-1.5 text-xs focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand"
             />
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-ink-3">
               Showing {filteredEdges.length} of {edges.length} link(s)
             </span>
           </div>
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="min-w-full divide-y divide-slate-200 text-xs">
-              <thead className="bg-slate-50 text-left uppercase tracking-wider text-slate-500">
+          <div className="overflow-x-auto rounded-lg border border-line">
+            <table className="min-w-full divide-y divide-line text-xs">
+              <thead className="bg-surface-2 text-left uppercase tracking-wider text-ink-3">
                 <tr>
                   <th className="px-3 py-2.5">Origin Document</th>
                   <th className="px-3 py-2.5 text-center">Relationship</th>
@@ -405,7 +405,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                   <th className="px-3 py-2.5 text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 bg-white">
+              <tbody className="divide-y divide-line bg-surface">
                 {filteredEdges.map((e, idx) => {
                   const fromNode = nodes[e.from];
                   const toNode = nodes[e.to];
@@ -414,7 +414,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                   return (
                     <tr
                       key={idx}
-                      className={`hover:bg-slate-50/60 ${involvesCurrent ? 'bg-blue-50/30' : ''}`}
+                      className={`hover:bg-surface-2/60 ${involvesCurrent ? 'bg-blue-50/30' : ''}`}
                     >
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
@@ -427,7 +427,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                         </div>
                       </td>
                       <td className="px-3 py-2 text-center">
-                        <span className="inline-block rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-700">
+                        <span className="inline-block rounded bg-surface-3 px-2 py-0.5 font-mono text-[10px] text-ink-2">
                           {e.type.replace(/_/g, ' ').toLowerCase()} →
                         </span>
                       </td>
@@ -448,7 +448,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                             setSelectedRef(e.from === objectRef ? e.to : e.from);
                             setViewMode('graph');
                           }}
-                          className="font-medium text-[#1A56DB] hover:underline"
+                          className="font-medium text-brand-ink hover:underline"
                         >
                           View in diagram
                         </button>
@@ -469,7 +469,7 @@ function DocLink({ node, line }: { node?: { type: string; id: string; ref: strin
   if (!node) return null;
   const href = docHref(node.type, node.ref, node.id);
   const text = `${TYPE_LABEL[node.type] ?? label(node.type)} ${node.ref}${line ? ` / ${line}` : ''}`;
-  return href ? <Link href={href} className="font-medium text-[#1A56DB] hover:underline">{text}</Link> : <span className="font-medium">{text}</span>;
+  return href ? <Link href={href} className="font-medium text-brand-ink hover:underline">{text}</Link> : <span className="font-medium">{text}</span>;
 }
 
 // ---------------------------------------------------------------- audit trail
@@ -482,21 +482,21 @@ export function AuditTrail({ type, objectRef }: { type: string; objectRef: strin
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-sm">
-        <thead><tr className="text-left text-xs uppercase tracking-wide text-slate-500">
+        <thead><tr className="text-left text-xs uppercase tracking-wide text-ink-3">
           <th className="py-1 pr-4">When</th><th className="py-1 pr-4">Action</th><th className="py-1 pr-4">Actor</th><th className="py-1 pr-4">Detail</th><th className="py-1">Hash</th>
         </tr></thead>
-        <tbody className="divide-y divide-slate-100">
+        <tbody className="divide-y divide-line">
           {data.map((e) => (
             <tr key={e.seq} className="align-top">
-              <td className="whitespace-nowrap py-1.5 pr-4 text-slate-600">{dateTime(e.ts)}</td>
+              <td className="whitespace-nowrap py-1.5 pr-4 text-ink-2">{dateTime(e.ts)}</td>
               <td className="py-1.5 pr-4 font-medium">{label(e.action)}</td>
-              <td className="py-1.5 pr-4 text-slate-700">{e.actor}</td>
-              <td className="py-1.5 pr-4 text-slate-700">
+              <td className="py-1.5 pr-4 text-ink-2">{e.actor}</td>
+              <td className="py-1.5 pr-4 text-ink-2">
                 {e.reason && <p>{e.reason}</p>}
-                {e.after ? <p className="font-mono text-[11px] text-slate-500">{JSON.stringify(e.after).slice(0, 180)}</p> : null}
-                {(e.ruleSetVersion || e.aiRef) && <p className="font-mono text-[11px] text-slate-400">{[e.ruleSetVersion, e.aiRef].filter(Boolean).join(' · ')}</p>}
+                {e.after ? <p className="font-mono text-[11px] text-ink-3">{JSON.stringify(e.after).slice(0, 180)}</p> : null}
+                {(e.ruleSetVersion || e.aiRef) && <p className="font-mono text-[11px] text-ink-3">{[e.ruleSetVersion, e.aiRef].filter(Boolean).join(' · ')}</p>}
               </td>
-              <td className="py-1.5 font-mono text-[11px] text-slate-400">{e.hash.slice(0, 10)}</td>
+              <td className="py-1.5 font-mono text-[11px] text-ink-3">{e.hash.slice(0, 10)}</td>
             </tr>
           ))}
         </tbody>
@@ -528,12 +528,12 @@ export function TaskDecision({ task, compact = false }: { task: Task; compact?: 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold">{task.name}</p>
-          <p className="text-xs text-slate-600">Role {label(task.candidate_role)} · due {dateTime(task.due_at)}{task.escalation_level ? ` · escalated ×${task.escalation_level}` : ''}</p>
+          <p className="text-xs text-ink-2">Role {label(task.candidate_role)} · due {dateTime(task.due_at)}{task.escalation_level ? ` · escalated ×${task.escalation_level}` : ''}</p>
         </div>
         {overdue && <StatusChip status="OVERDUE" />}
       </div>
       {!compact && Object.keys(task.evidence ?? {}).length > 0 && (
-        <p className="mt-2 font-mono text-[11px] text-slate-500">{JSON.stringify(task.evidence).slice(0, 240)}</p>
+        <p className="mt-2 font-mono text-[11px] text-ink-3">{JSON.stringify(task.evidence).slice(0, 240)}</p>
       )}
       <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-end">
         <Textarea aria-label="Comment" placeholder="Comment (required to reject or return)" value={comment} onChange={(e) => setComment(e.target.value)} className="md:flex-1" />
@@ -558,19 +558,19 @@ export function ApprovalsTab({ type, objectRef }: { type: string; objectRef: str
   if (!data?.tasks.length) return <Empty title="No approvals on this document" hint="Approval tasks appear here when a rule routes the document to an approver." />;
   return (
     <div className="space-y-3">
-      {data.chain.length > 0 && <p className="text-sm text-slate-600">Approval chain: {data.chain.map(label).join(' → ')}</p>}
+      {data.chain.length > 0 && <p className="text-sm text-ink-2">Approval chain: {data.chain.map(label).join(' → ')}</p>}
       <ol className="space-y-2" aria-label="Approval tasks">
         {data.tasks.map((t) => (
-          <li key={t.id} className="rounded-lg border border-slate-200 p-3">
+          <li key={t.id} className="rounded-lg border border-line p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold">{t.name}</p>
               <StatusChip status={t.decision ?? t.status} />
             </div>
-            <p className="text-xs text-slate-600">
+            <p className="text-xs text-ink-2">
               Role {label(t.role)}{t.decidedBy ? ` · ${t.decidedBy}` : ''}{t.decidedAt ? ` · ${dateTime(t.decidedAt)}` : t.dueAt ? ` · due ${dateTime(t.dueAt)}` : ''}
               {t.escalationLevel ? ` · escalated ×${t.escalationLevel}` : ''}
             </p>
-            {t.comment && <p className="mt-1 text-sm text-slate-700">“{t.comment}”</p>}
+            {t.comment && <p className="mt-1 text-sm text-ink-2">“{t.comment}”</p>}
           </li>
         ))}
       </ol>
@@ -589,22 +589,22 @@ export function DocumentsTab({ type, objectRef }: { type: string; objectRef: str
   if (!data?.items.length) return <Empty title="No documents yet" hint="Printouts, EDI and ERP documents, signatures and linked documents are listed here." />;
   return (
     <div className="space-y-3">
-      <p className="text-sm text-slate-600">{Object.entries(data.counts).map(([k, n]) => `${n} ${label(k).toLowerCase()}`).join(' · ')}</p>
-      <ul className="divide-y divide-slate-100" aria-label="Documents">
+      <p className="text-sm text-ink-2">{Object.entries(data.counts).map(([k, n]) => `${n} ${label(k).toLowerCase()}`).join(' · ')}</p>
+      <ul className="divide-y divide-line" aria-label="Documents">
         {data.items.map((d, i) => {
           const link = d.linkedType && d.linkedRef ? docHref(d.linkedType, d.linkedRef, d.linkedId) : null;
           return (
             <li key={`${d.kind}-${i}`} className="flex flex-wrap items-start justify-between gap-2 py-2 text-sm">
               <div>
                 <p className="font-medium">
-                  <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] uppercase text-slate-600">{label(d.kind)}</span>
-                  {link ? <Link href={link} className="text-[#1A56DB] hover:underline">{d.title}</Link> : d.title}
+                  <span className="mr-2 rounded bg-surface-3 px-1.5 py-0.5 font-mono text-[10px] uppercase text-ink-2">{label(d.kind)}</span>
+                  {link ? <Link href={link} className="text-brand-ink hover:underline">{d.title}</Link> : d.title}
                 </p>
-                <p className="text-xs text-slate-500">{dateTime(d.at)}{d.recipient ? ` · to ${d.recipient}` : ''}{d.source ? ` · ${d.source}` : ''}{d.hash ? ` · sha256 ${d.hash.slice(0, 12)}…` : ''}</p>
+                <p className="text-xs text-ink-3">{dateTime(d.at)}{d.recipient ? ` · to ${d.recipient}` : ''}{d.source ? ` · ${d.source}` : ''}{d.hash ? ` · sha256 ${d.hash.slice(0, 12)}…` : ''}</p>
               </div>
               <div className="flex items-center gap-3">
                 {d.status && <StatusChip status={d.status} />}
-                {d.href && <a href={`/api/pic/v1${d.href}`} target="_blank" rel="noreferrer" className="text-[#1A56DB] hover:underline">Open<span className="sr-only"> {d.title} in a new tab</span></a>}
+                {d.href && <a href={`/api/pic/v1${d.href}`} target="_blank" rel="noreferrer" className="text-brand-ink hover:underline">Open<span className="sr-only"> {d.title} in a new tab</span></a>}
               </div>
             </li>
           );
@@ -627,9 +627,9 @@ export function ObjectPage({ type, docRef, eyebrow, title, status, facts, action
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="font-mono text-xs uppercase tracking-wider text-slate-500">{eyebrow}</p>
+          <p className="font-mono text-xs uppercase tracking-wider text-ink-3">{eyebrow}</p>
           <div className="mt-1 flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-semibold tracking-tight text-[#0B1020]">{title}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-ink">{title}</h1>
             {status && <StatusChip status={status} />}
           </div>
         </div>

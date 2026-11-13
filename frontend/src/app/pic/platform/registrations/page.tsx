@@ -32,11 +32,11 @@ export default function RegistrationsPage() {
   const list = useApi<Row[]>(`/platform/registrations${filter ? `?status=${filter}` : ''}`);
   const columns: Column<Row>[] = [
     { key: 'number', header: 'Request', render: (r) => (
-      <button type="button" onClick={() => setOpenId(r.id)} className="font-mono text-[#1A56DB] hover:underline">{r.number}</button>
+      <button type="button" onClick={() => setOpenId(r.id)} className="font-mono text-brand-ink hover:underline">{r.number}</button>
     ) },
-    { key: 'companyName', header: 'Company', render: (r) => <span>{r.companyName}<span className="block text-xs text-slate-500">{r.kind.toLowerCase()} · {r.country}</span></span> },
+    { key: 'companyName', header: 'Company', render: (r) => <span>{r.companyName}<span className="block text-xs text-ink-3">{r.kind.toLowerCase()} · {r.country}</span></span> },
     { key: 'organisationEmail', header: 'Shared mailbox' },
-    { key: 'adminEmail', header: 'First administrator', render: (r) => <span>{r.adminName}<span className="block text-xs text-slate-500">{r.adminEmail}</span></span> },
+    { key: 'adminEmail', header: 'First administrator', render: (r) => <span>{r.adminName}<span className="block text-xs text-ink-3">{r.adminEmail}</span></span> },
     { key: 'screeningOutcome', header: 'Screening', render: (r) => r.screeningOutcome ? <StatusChip status={r.screeningOutcome} /> : '–' },
     { key: 'status', header: 'Status', render: (r) => <StatusChip status={r.status} /> },
     { key: 'createdAt', header: 'Received', render: (r) => dateTime(r.createdAt) },
@@ -46,7 +46,7 @@ export default function RegistrationsPage() {
       <PageHeader eyebrow="Platform" title="Organisation registrations"
         subtitle="Approve to create the organisation and invite its first administrator; reject with a reason that is sent to the company." />
       <Card actions={
-        <label className="flex items-center gap-2 text-sm text-slate-600">Show
+        <label className="flex items-center gap-2 text-sm text-ink-2">Show
           <Select value={filter} onChange={(e) => setFilter(e.target.value)} options={FILTERS} className="w-auto" />
         </label>
       }>
@@ -101,9 +101,9 @@ function Decision({ id, onClose }: { id: string; onClose: () => void }) {
             ['Authorised by', d.authorisedByName ? `${d.authorisedByName}, ${d.authorisedByDesignation}` : '–'], ['Expected users', d.expectedUsers ?? '–'],
             ['Mailbox confirmed', d.verifiedAt ? dateTime(d.verifiedAt) : 'not yet'],
           ]} />
-          <section className="rounded-lg border border-slate-200 p-3 text-sm">
+          <section className="rounded-lg border border-line p-3 text-sm">
             <p className="font-medium">Screening {s.outcome ? <StatusChip status={s.outcome} /> : '–'}</p>
-            <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-700">
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-2">
               <li>Sanctions: {s.sanctionsHits?.length ? s.sanctionsHits.join(', ') : 'no match'}</li>
               <li>Similar organisations already on the platform: {s.similarOrganisations?.length ? s.similarOrganisations.join(', ') : 'none'}</li>
               <li>Domain already used by an organisation: {s.domainInUse ? 'yes' : 'no'}</li>
@@ -112,14 +112,14 @@ function Decision({ id, onClose }: { id: string; onClose: () => void }) {
             </ul>
           </section>
           {d.decidedAt && (
-            <p className="text-sm text-slate-700">Decided by {d.decidedBy} on {dateTime(d.decidedAt)}{d.decisionReason ? `: ${d.decisionReason}` : ''}
+            <p className="text-sm text-ink-2">Decided by {d.decidedBy} on {dateTime(d.decidedAt)}{d.decisionReason ? `: ${d.decisionReason}` : ''}
               {d.organisationCode ? ` · organisation ${d.organisationCode}` : ''}</p>
           )}
           {message && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">{message}</p>}
           <ProblemBox error={error} />
           {open && !message && (
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+              <div className="space-y-2 rounded-lg border border-line p-3">
                 <p className="font-medium">Approve</p>
                 <Field label="Organisation code" hint="2-20 capital letters and digits; users see it in the header">{(fid, hint) => (
                   <Input id={fid} aria-describedby={hint} value={code ?? d.proposedCode} onChange={(e) => setCode(e.target.value.toUpperCase())} className="font-mono" />
@@ -129,7 +129,7 @@ function Decision({ id, onClose }: { id: string; onClose: () => void }) {
                 )}</Field>
                 <Button variant="primary" busy={busy === 'approve'} disabled={busy !== null} onClick={() => decide('approve')}>Approve and create organisation</Button>
               </div>
-              <div className="space-y-2 rounded-lg border border-slate-200 p-3">
+              <div className="space-y-2 rounded-lg border border-line p-3">
                 <p className="font-medium">Reject</p>
                 <Field label="Reason (sent to the company)" required>{(fid) => (
                   <Textarea id={fid} value={reason} onChange={(e) => setReason(e.target.value)} />

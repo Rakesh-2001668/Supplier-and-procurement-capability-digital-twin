@@ -1,27 +1,151 @@
 @import "tailwindcss";
+@import "./theme-dark.css";
 
+/* `dark:` utilities follow the theme switch (data-theme on <html>), not only the operating-system setting. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ==========================================================================
+   Design tokens. Components use these (bg-surface, text-ink, border-line …) so one switch recolours the platform.
+   Light is the default; [data-theme="dark"] on <html> swaps every token. The pre-paint script in app/layout.tsx sets it.
+   ========================================================================== */
 :root {
-  --bg-app: #F8FAFC;
-  --bg-surface: #FFFFFF;
-  --border-light: #E2E8F0;
-  --text-primary: #0F172A;
-  --text-secondary: #64748B;
-  --primary: #2563EB;
-  --primary-hover: #1D4ED8;
-  --sidebar-hover: #EFF6FF;
-  --sidebar-active: #DBEAFE;
-  
-  --success: #10B981;
-  --warning: #F59E0B;
-  --danger: #EF4444;
-  --info: #3B82F6;
+  color-scheme: light;
+  --canvas: #f4f6fb;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #f1f5f9;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --ink: #0b1020;
+  --ink-2: #475569;
+  --ink-3: #64748b;
+  --brand: #1a56db;
+  --brand-strong: #1747b8;
+  --brand-ink: #1a56db;
+  --brand-soft: #eef4ff;
+  --accent: #7c3aed;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-raised: 0 10px 30px -12px rgb(16 24 40 / 0.18), 0 2px 6px rgb(16 24 40 / 0.06);
+  --glow: radial-gradient(1200px 380px at 12% -8%, rgb(26 86 219 / 0.07), transparent 60%),
+          radial-gradient(900px 320px at 95% -12%, rgb(124 58 237 / 0.06), transparent 60%);
+
+  /* kept for older screens */
+  --bg-app: var(--canvas);
+  --bg-surface: var(--surface);
+  --border-light: var(--line);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-3);
+  --primary: var(--brand);
+  --primary-hover: var(--brand-strong);
+  --sidebar-hover: #eff6ff;
+  --sidebar-active: #dbeafe;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
 }
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #0b1120;
+  --surface: #111a2e;
+  --surface-2: #152036;
+  --surface-3: #1c2840;
+  --line: #24314a;
+  --line-strong: #33415c;
+  --ink: #f1f5f9;
+  --ink-2: #b4c0d3;
+  --ink-3: #8b98ad;
+  --brand: #3b76f0;
+  --brand-strong: #2f64d6;
+  --brand-ink: #8ab0ff;
+  --brand-soft: rgb(59 118 240 / 0.14);
+  --accent: #a78bfa;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 1px rgb(255 255 255 / 0.02);
+  --shadow-raised: 0 14px 34px -12px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.35);
+  --glow: radial-gradient(1200px 380px at 12% -8%, rgb(59 118 240 / 0.14), transparent 60%),
+          radial-gradient(900px 320px at 95% -12%, rgb(167 139 250 / 0.10), transparent 60%);
+  --sidebar-hover: #1c2840;
+  --sidebar-active: #22335a;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+  --color-accent: var(--accent);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  /* System UI fonts (Segoe UI Variable on Windows 11, SF Pro on Apple, Roboto on Android): nothing to download. */
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --animate-rise: rise 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-pop: pop 0.18s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-fade: fade 0.18s ease-out both;
+}
+
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shimmer { from { background-position: -400px 0; } to { background-position: 400px 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+html { background-color: var(--canvas); }
 
 body {
-  background-color: var(--bg-app);
-  color: var(--text-primary);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Theme changes fade instead of flashing (the class is added for one frame by the theme switch). */
+html.theme-transition, html.theme-transition *, html.theme-transition *::before, html.theme-transition *::after {
+  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.2s ease, fill 0.2s ease !important;
+}
+
+::selection { background: rgb(26 86 219 / 0.22); }
+
+/* Quiet scrollbars that follow the theme. */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-3) 0px, var(--surface-2) 120px, var(--surface-3) 240px);
+  background-size: 800px 100%;
+  animation: shimmer 1.3s linear infinite;
+  border-radius: 8px;
+}
+
+/* Charts (recharts) draw with inline colours; in the dark theme the grid, axes and tooltip follow the tokens. */
+:root[data-theme="dark"] .recharts-cartesian-grid line,
+:root[data-theme="dark"] .recharts-polar-grid line,
+:root[data-theme="dark"] .recharts-polar-grid polygon { stroke: var(--line); }
+:root[data-theme="dark"] .recharts-cartesian-axis-line,
+:root[data-theme="dark"] .recharts-cartesian-axis-tick-line { stroke: var(--line-strong); }
+:root[data-theme="dark"] .recharts-text,
+:root[data-theme="dark"] .recharts-cartesian-axis-tick-value { fill: var(--ink-3); }
+:root[data-theme="dark"] .recharts-legend-item-text { color: var(--ink-2) !important; }
+:root[data-theme="dark"] .recharts-default-tooltip {
+  background-color: var(--surface) !important;
+  border-color: var(--line-strong) !important;
+  color: var(--ink) !important;
+}
+:root[data-theme="dark"] .recharts-tooltip-cursor { fill: rgb(255 255 255 / 0.04); }
 
 
 /* ==========================================================================

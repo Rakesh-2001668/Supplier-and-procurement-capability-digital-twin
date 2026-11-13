@@ -22,7 +22,7 @@ type Dashboard = {
 
 function StatusCounts({ counts }: { counts: Record<string, number> }) {
   const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  if (!entries.length) return <p className="text-sm text-slate-500">None yet</p>;
+  if (!entries.length) return <p className="text-sm text-ink-3">None yet</p>;
   return (
     <ul className="flex flex-wrap gap-2">
       {entries.map(([s, n]) => (
@@ -44,7 +44,7 @@ export default function CommandCentre() {
         subtitle={<>Live from posted transactions · as of {dateTime(data.asOf)}. Realised savings count only posted invoices.</>} />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6">
-        <Kpi label="My open tasks" value={data.tasks.mine} hint={<Link className="text-[#1A56DB] hover:underline" href="/pic/tasks">Open inbox →</Link>} tone={data.tasks.mine ? 'warn' : 'default'} />
+        <Kpi label="My open tasks" value={data.tasks.mine} hint={<Link className="text-brand-ink hover:underline" href="/pic/tasks">Open inbox →</Link>} tone={data.tasks.mine ? 'warn' : 'default'} />
         <Kpi label="Posted spend" value={inr(data.spend.totalMinor)} hint={`contracted ${pct(data.spend.contractCoveragePct)}`} />
         <Kpi label="Touchless PO" value={pct(data.purchasing.touchlessPct)} hint={`${data.purchasing.released} released`} tone="good" />
         <Kpi label="First-pass match" value={pct(data.payables.firstPassMatchPct)} hint={`${data.payables.openExceptions} open exceptions`} />
@@ -54,46 +54,46 @@ export default function CommandCentre() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Purchase orders"><StatusCounts counts={data.purchasing.byStatus} /></Card>
-        <Card title="Requisitions" actions={<span className="text-xs text-slate-500">avg approval {data.requisitions.avgApprovalHours ?? '–'} h</span>}>
+        <Card title="Requisitions" actions={<span className="text-xs text-ink-3">avg approval {data.requisitions.avgApprovalHours ?? '–'} h</span>}>
           <StatusCounts counts={data.requisitions.byStatus} />
         </Card>
-        <Card title="Invoices" actions={<span className="text-xs text-slate-500">{data.payables.paymentBlocked} on payment block</span>}>
+        <Card title="Invoices" actions={<span className="text-xs text-ink-3">{data.payables.paymentBlocked} on payment block</span>}>
           <StatusCounts counts={data.payables.byStatus} />
         </Card>
-        <Card title="Suppliers by category status" actions={<span className="text-xs text-slate-500">qualified {pct(data.suppliers.qualifiedCoveragePct)}</span>}>
+        <Card title="Suppliers by category status" actions={<span className="text-xs text-ink-3">qualified {pct(data.suppliers.qualifiedCoveragePct)}</span>}>
           <StatusCounts counts={data.suppliers.categoryStatus} />
         </Card>
-        <Card title="ERP integration" actions={<span className="text-xs text-slate-500">posting success {pct(data.integration.postingSuccessPct)}</span>}>
+        <Card title="ERP integration" actions={<span className="text-xs text-ink-3">posting success {pct(data.integration.postingSuccessPct)}</span>}>
           <StatusCounts counts={data.integration.byStatus} />
         </Card>
         <Card title="Controls">
           <dl className="grid grid-cols-3 gap-3 text-sm">
-            <div><dt className="text-xs text-slate-500">Open tasks</dt><dd className="text-lg font-semibold">{data.tasks.open}</dd></div>
-            <div><dt className="text-xs text-slate-500">Overdue</dt><dd className={`text-lg font-semibold ${data.tasks.overdue ? 'text-amber-700' : ''}`}>{data.tasks.overdue}</dd></div>
-            <div><dt className="text-xs text-slate-500">SoD blocks</dt><dd className="text-lg font-semibold">{data.controls.sodViolations}</dd></div>
+            <div><dt className="text-xs text-ink-3">Open tasks</dt><dd className="text-lg font-semibold">{data.tasks.open}</dd></div>
+            <div><dt className="text-xs text-ink-3">Overdue</dt><dd className={`text-lg font-semibold ${data.tasks.overdue ? 'text-amber-700' : ''}`}>{data.tasks.overdue}</dd></div>
+            <div><dt className="text-xs text-ink-3">SoD blocks</dt><dd className="text-lg font-semibold">{data.controls.sodViolations}</dd></div>
           </dl>
         </Card>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Live events" actions={<span className="text-xs text-slate-500">{live.connected ? 'streaming' : 'reconnecting…'}</span>}>
-          {live.events.length === 0 ? <p className="text-sm text-slate-500">Events appear here as people and agents act (approvals, releases, receipts, postings).</p> : (
-            <ul className="divide-y divide-slate-100 text-sm">
+        <Card title="Live events" actions={<span className="text-xs text-ink-3">{live.connected ? 'streaming' : 'reconnecting…'}</span>}>
+          {live.events.length === 0 ? <p className="text-sm text-ink-3">Events appear here as people and agents act (approvals, releases, receipts, postings).</p> : (
+            <ul className="divide-y divide-line text-sm">
               {live.events.map((e) => (
                 <li key={e.id} className="flex flex-wrap justify-between gap-2 py-1.5">
-                  <span><span className="font-mono text-xs text-[#1A56DB]">{e.type}</span> · {e.ref}</span>
-                  <span className="text-xs text-slate-500">{e.actor} · {dateTime(e.at)}</span>
+                  <span><span className="font-mono text-xs text-brand-ink">{e.type}</span> · {e.ref}</span>
+                  <span className="text-xs text-ink-3">{e.actor} · {dateTime(e.at)}</span>
                 </li>
               ))}
             </ul>
           )}
         </Card>
         <Card title="Recent activity (audit)">
-          <ul className="divide-y divide-slate-100 text-sm">
+          <ul className="divide-y divide-line text-sm">
             {data.activity.map((a, i) => (
               <li key={i} className="flex flex-wrap justify-between gap-2 py-1.5">
                 <span><span className="font-medium">{a.objectRef ?? a.objectType}</span> · {label(a.action)}</span>
-                <span className="text-xs text-slate-500">{a.actor} · {dateTime(a.ts)}</span>
+                <span className="text-xs text-ink-3">{a.actor} · {dateTime(a.ts)}</span>
               </li>
             ))}
           </ul>

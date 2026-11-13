@@ -23,17 +23,17 @@ export default function RegisterPage() {
   const status = useApi<Status>('/public/registrations/status');
   const [kind, setKind] = useState<Kind | null>(null);
   return (
-    <div className="min-h-screen bg-[#F4F6FB] text-slate-900">
+    <div className="min-h-screen bg-canvas text-ink">
       <div className="mx-auto max-w-3xl px-4 py-10">
         <div className="mb-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-[#1A56DB] font-bold text-white">α</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-brand font-bold text-white">α</span>
             <div>
               <p className="text-sm font-semibold">AlphaHelion Purchasing Intelligence Cloud</p>
-              <p className="text-xs text-slate-500">Register your organisation</p>
+              <p className="text-xs text-ink-3">Register your organisation</p>
             </div>
           </div>
-          <Link href="/signin" className="text-sm font-medium text-[#1A56DB] hover:underline">Already registered? Sign in</Link>
+          <Link href="/signin" className="text-sm font-medium text-brand-ink hover:underline">Already registered? Sign in</Link>
         </div>
         {status.isLoading ? <Loading /> : (
           <>
@@ -42,7 +42,7 @@ export default function RegisterPage() {
                 Registration opens shortly. Until then, contact the AlphaHelion team to have your organisation set up.
               </div>
             )}
-            <section className="rounded-xl border border-slate-200 bg-white p-6">
+            <section className="rounded-xl border border-line bg-surface p-6">
               <h1 className="text-lg font-semibold">1. Your organisation is a</h1>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <KindCard selected={kind === 'BUYER'} onSelect={() => setKind('BUYER')} icon={<Briefcase size={28} aria-hidden />} title="Buyer"
@@ -51,7 +51,7 @@ export default function RegisterPage() {
                   text="We supply buyers: answer RFQs, confirm orders, ship, invoice and show our capabilities." />
               </div>
               {kind === 'SUPPLIER' && !status.data?.openKinds.includes('SUPPLIER') && (
-                <p role="status" className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                <p role="status" className="mt-4 rounded-lg bg-surface-2 p-3 text-sm text-ink-2">
                   Supplier organisations can register from the next release. Meanwhile your buyer can invite you to its supplier portal.
                 </p>
               )}
@@ -69,10 +69,10 @@ export default function RegisterPage() {
 function KindCard({ selected, onSelect, icon, title, text }: { selected: boolean; onSelect: () => void; icon: React.ReactNode; title: string; text: string }) {
   return (
     <button type="button" onClick={onSelect} aria-pressed={selected}
-      className={`rounded-xl border-2 p-4 text-left transition ${selected ? 'border-[#1A56DB] bg-blue-50' : 'border-slate-200 hover:border-slate-300'}`}>
-      <span className={selected ? 'text-[#1A56DB]' : 'text-slate-400'}>{icon}</span>
+      className={`rounded-xl border-2 p-4 text-left transition ${selected ? 'border-brand bg-blue-50' : 'border-line hover:border-line-strong'}`}>
+      <span className={selected ? 'text-brand-ink' : 'text-ink-3'}>{icon}</span>
       <span className="mt-2 block text-base font-semibold">{title}</span>
-      <span className="mt-1 block text-sm text-slate-600">{text}</span>
+      <span className="mt-1 block text-sm text-ink-2">{text}</span>
     </button>
   );
 }
@@ -118,7 +118,7 @@ function RegistrationForm({ kind, status }: { kind: Kind; status: Status }) {
   }
 
   return (
-    <form onSubmit={submit} className="mt-4 space-y-6 rounded-xl border border-slate-200 bg-white p-6">
+    <form onSubmit={submit} className="mt-4 space-y-6 rounded-xl border border-line bg-surface p-6">
       <div>
         <h2 className="text-lg font-semibold">2. Organisation</h2>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
@@ -149,7 +149,7 @@ function RegistrationForm({ kind, status }: { kind: Kind; status: Status }) {
 
       <div>
         <h2 className="text-lg font-semibold">3. First administrator</h2>
-        <p className="mt-1 text-sm text-slate-600">The person who will set up your organisation on the platform (users, roles, rules). They sign in with their own e-mail,
+        <p className="mt-1 text-sm text-ink-2">The person who will set up your organisation on the platform (users, roles, rules). They sign in with their own e-mail,
           password and two-step verification.</p>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
           <Field label="Full name" required>{(id) => <Input id={id} value={form.adminName} onChange={set('adminName')} required />}</Field>
@@ -162,15 +162,15 @@ function RegistrationForm({ kind, status }: { kind: Kind; status: Status }) {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold">4. Authorised by <span className="text-sm font-normal text-slate-500">(optional)</span></h2>
-        <p className="mt-1 text-sm text-slate-600">A senior person who authorises this registration, for example a director. Shown to the platform team; this person does not get an account.</p>
+        <h2 className="text-lg font-semibold">4. Authorised by <span className="text-sm font-normal text-ink-3">(optional)</span></h2>
+        <p className="mt-1 text-sm text-ink-2">A senior person who authorises this registration, for example a director. Shown to the platform team; this person does not get an account.</p>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
           <Field label="Name">{(id) => <Input id={id} value={form.authorisedByName} onChange={set('authorisedByName')} />}</Field>
           <Field label="Designation">{(id) => <Input id={id} value={form.authorisedByDesignation} onChange={set('authorisedByDesignation')} placeholder="Managing Director" />}</Field>
         </div>
       </div>
 
-      <label className="flex items-start gap-2 text-sm text-slate-700">
+      <label className="flex items-start gap-2 text-sm text-ink-2">
         <input type="checkbox" checked={form.acceptTerms} onChange={set('acceptTerms')} className="mt-1" required />
         <span>I accept the terms of use and the privacy notice of AlphaHelion Purchasing Intelligence Cloud on behalf of the organisation.</span>
       </label>

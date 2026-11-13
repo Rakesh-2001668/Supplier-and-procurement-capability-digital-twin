@@ -6,6 +6,7 @@ venv/
 frontend/node_modules/
 frontend/.next/
 frontend/.next-ss/
+frontend/.next-theme/
 .env.*
 !.env.*.example
 !*.env.example

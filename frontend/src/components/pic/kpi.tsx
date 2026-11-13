@@ -14,10 +14,10 @@ export type KpiItem = {
 export type KpiResponse = { period: string | null; plant: string | null; items: KpiItem[]; summary: Record<string, number> };
 
 const TONE: Record<string, { ring: string; text: string; word: string }> = {
-  GOOD: { ring: 'border-emerald-200 bg-emerald-50/40', text: 'text-emerald-700', word: 'On target' },
-  WARN: { ring: 'border-amber-200 bg-amber-50/40', text: 'text-amber-700', word: 'Watch' },
-  BAD: { ring: 'border-red-200 bg-red-50/40', text: 'text-red-700', word: 'Off target' },
-  NA: { ring: 'border-slate-200 bg-white', text: 'text-[#0B1020]', word: 'No target' },
+  GOOD: { ring: 'from-emerald-400 to-teal-400', text: 'text-emerald-700', word: 'On target' },
+  WARN: { ring: 'from-amber-400 to-orange-400', text: 'text-amber-700', word: 'Watch' },
+  BAD: { ring: 'from-red-400 to-rose-400', text: 'text-red-700', word: 'Off target' },
+  NA: { ring: 'from-slate-300 to-slate-400', text: 'text-ink', word: 'No target' },
 };
 
 const crore = (minor: number) => (Math.abs(minor) >= 1e9 ? `₹${(minor / 1e9).toFixed(2)} Cr` : Math.abs(minor) >= 1e7 ? `₹${(minor / 1e7).toFixed(2)} L` : `₹${(minor / 100).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`);
@@ -53,7 +53,7 @@ export function Sparkline({ points, name }: { points: (number | null)[]; name: s
   const path = points.map((v, i) => (v === null ? null : `${(i * step).toFixed(1)},${(16 - ((v - min) / span) * 14).toFixed(1)}`)).filter(Boolean).join(' ');
   return (
     <>
-      <svg viewBox="0 0 60 18" className="h-5 w-16" aria-hidden><polyline points={path} fill="none" stroke="#1A56DB" strokeWidth="1.5" /></svg>
+      <svg viewBox="0 0 60 18" className="h-5 w-16 text-brand-ink" aria-hidden><polyline points={path} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
       <span className="sr-only">{name} trend over {points.length} months: {values.map((v) => v.toLocaleString('en-IN', { maximumFractionDigits: 1 })).join(', ')}</span>
     </>
   );
@@ -63,15 +63,16 @@ export function KpiCard({ item }: { item: KpiItem }) {
   const tone = TONE[item.status] ?? TONE.NA;
   const target = kpiTarget(item);
   return (
-    <div className={`rounded-xl border px-4 py-3 ${tone.ring}`}>
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-        <Link href={`/pic/kpis?module=${item.module}#${encodeURIComponent(item.code)}`} className="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB]">{item.name}</Link>
+    <div className="relative h-full overflow-hidden rounded-2xl border border-line bg-surface px-4 pb-3.5 pt-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-raised">
+      <span aria-hidden className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r opacity-80 ${tone.ring}`} />
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">
+        <Link href={`/pic/kpis?module=${item.module}#${encodeURIComponent(item.code)}`} className="hover:text-ink hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">{item.name}</Link>
       </p>
-      <div className="mt-1 flex items-end justify-between gap-2">
-        <p className={`text-2xl font-semibold tabular-nums ${tone.text}`}>{kpiValue(item)}</p>
+      <div className="mt-1.5 flex items-end justify-between gap-2">
+        <p className={`text-[26px] font-semibold leading-none tracking-tight tabular-nums ${tone.text}`}>{kpiValue(item)}</p>
         <Sparkline name={item.name} points={(item.trend ?? []).map((t) => (t.value === null ? null : Number(t.value)))} />
       </div>
-      <p className="mt-0.5 text-xs text-slate-500">
+      <p className="mt-2 text-xs text-ink-3">
         <span className={`font-semibold ${tone.text}`}>{item.value === null ? 'Not measurable yet' : tone.word}</span>
         {target ? ` · ${target}` : ''}
       </p>

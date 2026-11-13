@@ -24,7 +24,7 @@ export function MitigationRequest({ offer }: { offer: Offer }) {
   const send = useCommand(() => api.post('/sod/mitigations', { ruleCode: offer.ruleCode, action: offer.action, refs: offer.refs, justification }), {
     success: 'Exception requested: the approver has been notified', onSuccess: () => setOpen(false),
   });
-  if (offer.pendingRequest) return <p className="mt-2 text-xs text-slate-700">An exception request for this is already waiting for {offer.approverRoles.map(label).join(' / ')}.</p>;
+  if (offer.pendingRequest) return <p className="mt-2 text-xs text-ink-2">An exception request for this is already waiting for {offer.approverRoles.map(label).join(' / ')}.</p>;
   return (
     <div className="mt-2">
       <Button onClick={() => setOpen(true)}>Request an exception ({offer.ruleCode})</Button>

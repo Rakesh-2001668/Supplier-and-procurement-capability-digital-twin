@@ -21,12 +21,13 @@ const BLOCKED = ['REJECTED', 'BLOCKED', 'CANCELLED', 'DEAD_LETTER', 'EXPIRED', '
 
 export function StatusChip({ status }: { status: string | null | undefined }) {
   const s = (status ?? '').toUpperCase();
-  const tone = DONE.includes(s) ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
-    : ATTENTION.includes(s) ? 'bg-amber-50 text-amber-800 ring-amber-200'
-      : BLOCKED.includes(s) ? 'bg-red-50 text-red-800 ring-red-200'
-        : 'bg-blue-50 text-blue-800 ring-blue-200';
+  const [tone, dot] = DONE.includes(s) ? ['bg-emerald-50 text-emerald-800 ring-emerald-200', 'bg-emerald-500']
+    : ATTENTION.includes(s) ? ['bg-amber-50 text-amber-800 ring-amber-200', 'bg-amber-500']
+      : BLOCKED.includes(s) ? ['bg-red-50 text-red-800 ring-red-200', 'bg-red-500']
+        : ['bg-blue-50 text-blue-800 ring-blue-200', 'bg-blue-500'];
   return (
-    <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ring-1 ring-inset ${tone}`}>
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ring-1 ring-inset ${tone}`}>
+      {s && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
       {s ? s.replace(/_/g, ' ') : '–'}
     </span>
   );
@@ -36,11 +37,15 @@ export function StatusChip({ status }: { status: string | null | undefined }) {
 export function PageHeader({ eyebrow, title, subtitle, actions, kpis }: { eyebrow?: string; title: ReactNode; subtitle?: ReactNode; actions?: ReactNode; kpis?: string }) {
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+      <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          {eyebrow && <p className="font-mono text-xs uppercase tracking-wider text-slate-500">{eyebrow}</p>}
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-[#0B1020]">{title}</h1>
-          {subtitle && <div className="mt-1 max-w-3xl text-sm text-slate-600">{subtitle}</div>}
+          {eyebrow && (
+            <p className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/70 px-2.5 py-0.5 font-mono text-[11px] uppercase tracking-wider text-brand-ink">
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-brand to-accent" />{eyebrow}
+            </p>
+          )}
+          <h1 className="mt-2 text-[26px] font-semibold leading-tight tracking-tight text-ink">{title}</h1>
+          {subtitle && <div className="mt-1.5 max-w-3xl text-sm leading-relaxed text-ink-2">{subtitle}</div>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
@@ -51,10 +56,10 @@ export function PageHeader({ eyebrow, title, subtitle, actions, kpis }: { eyebro
 
 export function Card({ title, actions, children, className = '' }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={`rounded-xl border border-slate-200 bg-white ${className}`}>
+    <section className={`rounded-2xl border border-line bg-surface shadow-card ${className}`}>
       {(title || actions) && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3">
-          {title && <h2 className="text-sm font-semibold text-slate-900">{title}</h2>}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
+          {title && <h2 className="text-sm font-semibold tracking-tight text-ink">{title}</h2>}
           {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
         </div>
       )}
@@ -64,12 +69,14 @@ export function Card({ title, actions, children, className = '' }: { title?: Rea
 }
 
 export function Kpi({ label: name, value, hint, tone = 'default' }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'default' | 'good' | 'warn' | 'bad' }) {
-  const color = tone === 'good' ? 'text-emerald-700' : tone === 'warn' ? 'text-amber-700' : tone === 'bad' ? 'text-red-700' : 'text-[#0B1020]';
+  const color = tone === 'good' ? 'text-emerald-700' : tone === 'warn' ? 'text-amber-700' : tone === 'bad' ? 'text-red-700' : 'text-ink';
+  const bar = tone === 'good' ? 'from-emerald-400 to-teal-400' : tone === 'warn' ? 'from-amber-400 to-orange-400' : tone === 'bad' ? 'from-red-400 to-rose-400' : 'from-brand to-accent';
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{name}</p>
-      <p className={`mt-1 text-2xl font-semibold tabular-nums ${color}`}>{value ?? '–'}</p>
-      {hint && <p className="mt-0.5 text-xs text-slate-500">{hint}</p>}
+    <div className="relative overflow-hidden rounded-2xl border border-line bg-surface px-4 pb-3.5 pt-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-raised">
+      <span aria-hidden className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${bar} opacity-80`} />
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{name}</p>
+      <p className={`mt-1.5 text-[26px] font-semibold leading-none tracking-tight tabular-nums ${color}`}>{value ?? '–'}</p>
+      {hint && <p className="mt-2 text-xs text-ink-3">{hint}</p>}
     </div>
   );
 }
@@ -79,8 +86,8 @@ export function Facts({ items }: { items: [string, ReactNode][] }) {
     <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-4">
       {items.map(([k, v]) => (
         <div key={k} className="min-w-0">
-          <dt className="text-xs text-slate-500">{k}</dt>
-          <dd className="mt-0.5 break-words font-medium text-slate-900">{v ?? '–'}</dd>
+          <dt className="text-xs text-ink-3">{k}</dt>
+          <dd className="mt-0.5 break-words font-medium text-ink">{v ?? '–'}</dd>
         </div>
       ))}
     </dl>
@@ -92,17 +99,17 @@ type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: '
 
 export function Button({ variant = 'secondary', busy, children, className = '', disabled, ...rest }: ButtonProps) {
   const styles = {
-    primary: 'bg-[#1A56DB] text-white hover:bg-[#1747b8] border-transparent',
-    secondary: 'bg-white text-slate-800 hover:bg-slate-50 border-slate-300',
-    danger: 'bg-white text-red-700 hover:bg-red-50 border-red-300',
-    ghost: 'bg-transparent text-slate-700 hover:bg-slate-100 border-transparent',
+    primary: 'bg-gradient-to-b from-brand to-brand-strong text-white shadow-sm shadow-blue-900/20 hover:brightness-110 border-transparent',
+    secondary: 'bg-surface text-ink hover:bg-surface-3 border-line-strong shadow-sm',
+    danger: 'bg-surface text-red-700 hover:bg-red-50 border-red-300',
+    ghost: 'bg-transparent text-ink-2 hover:bg-surface-3 hover:text-ink border-transparent',
   }[variant];
   return (
     <button
       {...rest}
       aria-busy={busy || undefined}
       disabled={disabled || busy}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 ${styles} ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-1 focus-visible:ring-offset-canvas disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100 ${styles} ${className}`}
     >
       {busy && <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden />}
       {children}
@@ -111,8 +118,10 @@ export function Button({ variant = 'secondary', busy, children, className = '', 
 }
 
 export function LinkButton({ href, children, variant = 'secondary' }: { href: string; children: ReactNode; variant?: 'primary' | 'secondary' }) {
-  const styles = variant === 'primary' ? 'bg-[#1A56DB] text-white hover:bg-[#1747b8] border-transparent' : 'bg-white text-slate-800 hover:bg-slate-50 border-slate-300';
-  return <Link href={href} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium ${styles}`}>{children}</Link>;
+  const styles = variant === 'primary'
+    ? 'bg-gradient-to-b from-brand to-brand-strong text-white shadow-sm shadow-blue-900/20 hover:brightness-110 border-transparent'
+    : 'bg-surface text-ink hover:bg-surface-3 border-line-strong shadow-sm';
+  return <Link href={href} className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${styles}`}>{children}</Link>;
 }
 
 /** Labelled form field. The render function gets the input id and the id of the hint/error text for `aria-describedby`. */
@@ -124,16 +133,16 @@ export function Field({ label: name, hint, error, required, children }: {
   const note = error ?? hint;
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-xs font-medium text-slate-700">
+      <label htmlFor={id} className="text-xs font-medium text-ink-2">
         {name}{required && <span aria-hidden className="text-red-600"> *</span>}{required && <span className="sr-only"> (required)</span>}
       </label>
       {children(id, note ? noteId : undefined)}
-      {note && <p id={noteId} role={error ? 'alert' : undefined} className={`text-xs ${error ? 'text-red-700' : 'text-slate-500'}`}>{note}</p>}
+      {note && <p id={noteId} role={error ? 'alert' : undefined} className={`text-xs ${error ? 'text-red-700' : 'text-ink-3'}`}>{note}</p>}
     </div>
   );
 }
 
-export const inputClass = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#1A56DB] focus:outline-none focus:ring-2 focus:ring-[#1A56DB]/20';
+export const inputClass = 'w-full rounded-lg border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink shadow-sm placeholder:text-ink-3 transition focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/15';
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${inputClass} ${props.className ?? ''}`} />;
@@ -166,14 +175,22 @@ export function ProblemBox({ error }: { error: ApiError | Error | null | undefin
 }
 
 export function Loading({ text = 'Loading…' }: { text?: string }) {
-  return <p className="py-8 text-center text-sm text-slate-500" role="status" aria-live="polite" aria-busy="true">{text}</p>;
+  return (
+    <div className="flex items-center justify-center gap-2.5 py-10 text-sm text-ink-3" role="status" aria-live="polite" aria-busy="true">
+      <span aria-hidden className="h-4 w-4 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
+      {text}
+    </div>
+  );
 }
 
 export function Empty({ title, hint }: { title: string; hint?: ReactNode }) {
   return (
-    <div className="rounded-lg border border-dashed border-slate-300 px-6 py-10 text-center">
-      <p className="text-sm font-medium text-slate-700">{title}</p>
-      {hint && <p className="mt-1 text-sm text-slate-500">{hint}</p>}
+    <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/60 px-6 py-12 text-center">
+      <span aria-hidden className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-ink">
+        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M4 12h10M4 17h7" strokeLinecap="round" /></svg>
+      </span>
+      <p className="text-sm font-medium text-ink">{title}</p>
+      {hint && <p className="mt-1 text-sm text-ink-3">{hint}</p>}
     </div>
   );
 }
@@ -197,29 +214,29 @@ export function DataTable<T extends Record<string, unknown>>({ columns, rows, ro
   const someSelected = !!idOf && rows.some((r) => selection!.selected.has(idOf(r)));
   return (
     <div>
-      <div className="overflow-x-auto rounded-lg border border-slate-200">
-        <table className="min-w-full divide-y divide-slate-200 text-sm">
+      <div className="overflow-x-auto rounded-xl border border-line bg-surface shadow-card">
+        <table className="min-w-full divide-y divide-line text-sm">
           {caption && <caption className="sr-only">{caption}</caption>}
-          <thead className="bg-slate-50">
+          <thead className="bg-surface-2">
             <tr>
               {selection && idOf && (
                 <th scope="col" className="w-8 px-3 py-2">
-                  <input type="checkbox" className="accent-[#1A56DB]" aria-label="Select all rows" checked={allSelected}
+                  <input type="checkbox" className="accent-brand" aria-label="Select all rows" checked={allSelected}
                     ref={(el) => { if (el) el.indeterminate = !allSelected && someSelected; }}
                     onChange={() => selection.onChange(allSelected ? new Set() : new Set(rows.map(idOf)))} />
                 </th>
               )}
               {columns.map((c) => (
-                <th key={c.key} scope="col" className={`whitespace-nowrap px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.header}</th>
+                <th key={c.key} scope="col" className={`whitespace-nowrap px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-3 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.header}</th>
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
+          <tbody className="divide-y divide-line bg-surface">
             {rows.map((row, i) => (
-              <tr key={String(row.id ?? row.number ?? i)} className={rowHref ? 'hover:bg-blue-50/50' : ''} aria-selected={selection && idOf ? selection.selected.has(idOf(row)) : undefined}>
+              <tr key={String(row.id ?? row.number ?? i)} className={`transition-colors ${rowHref ? 'hover:bg-brand-soft' : 'hover:bg-surface-2'}`} aria-selected={selection && idOf ? selection.selected.has(idOf(row)) : undefined}>
                 {selection && idOf && (
                   <td className="px-3 py-2 align-top">
-                    <input type="checkbox" className="accent-[#1A56DB]" aria-label={`Select ${nameOf(row)}`} checked={selection.selected.has(idOf(row))}
+                    <input type="checkbox" className="accent-brand" aria-label={`Select ${nameOf(row)}`} checked={selection.selected.has(idOf(row))}
                       onChange={() => {
                         const next = new Set(selection.selected);
                         if (next.has(idOf(row))) next.delete(idOf(row)); else next.add(idOf(row));
@@ -230,8 +247,8 @@ export function DataTable<T extends Record<string, unknown>>({ columns, rows, ro
                 {columns.map((c, ci) => {
                   const content = c.render ? c.render(row) : (row[c.key] as ReactNode) ?? '–';
                   return (
-                    <td key={c.key} className={`px-3 py-2 align-top ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.className ?? ''}`}>
-                      {rowHref && ci === 0 ? <Link href={rowHref(row)} prefetch={false} className="font-medium text-[#1A56DB] hover:underline">{content}</Link> : content}
+                    <td key={c.key} className={`px-3 py-2.5 align-top text-ink ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.className ?? ''}`}>
+                      {rowHref && ci === 0 ? <Link href={rowHref(row)} prefetch={false} className="font-medium text-brand-ink hover:underline">{content}</Link> : content}
                     </td>
                   );
                 })}
@@ -264,13 +281,13 @@ export function Tabs({ tabs, label: name = 'Sections' }: { tabs: { id: string; l
   }
   return (
     <div>
-      <div role="tablist" aria-label={name} className="flex flex-wrap gap-1 border-b border-slate-200">
+      <div role="tablist" aria-label={name} className="flex flex-wrap gap-1 border-b border-line">
         {tabs.map((t, i) => {
           const on = current?.id === t.id;
           return (
             <button key={t.id} ref={(el) => { refs.current[i] = el; }} id={`${base}-tab-${t.id}`} role="tab" type="button" aria-selected={on}
               aria-controls={`${base}-panel`} tabIndex={on ? 0 : -1} onClick={() => setActive(t.id)} onKeyDown={(e) => onKey(e, i)}
-              className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${on ? 'border-[#1A56DB] text-[#1A56DB]' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
+              className={`-mb-px rounded-t-lg border-b-2 px-3.5 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${on ? 'border-brand text-brand-ink' : 'border-transparent text-ink-3 hover:bg-surface-3/60 hover:text-ink'}`}>
               {t.label}
             </button>
           );
@@ -306,12 +323,12 @@ export function Dialog({ open, title, onClose, children, wide = false }: { open:
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
   return (
-    <div className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-16" role="dialog" aria-modal="true" aria-labelledby={titleId}
+    <div className="fixed inset-0 z-40 flex animate-fade items-start justify-center overflow-y-auto bg-[#0B1020]/50 p-4 pt-16 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby={titleId}
       onKeyDown={onKeyDown}>
-      <div ref={panel} tabIndex={-1} className={`w-full ${wide ? 'max-w-5xl' : 'max-w-2xl'} rounded-xl bg-white shadow-xl focus:outline-none`}>
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
-          <h2 id={titleId} className="text-base font-semibold">{title}</h2>
-          <button type="button" onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB]" aria-label="Close dialog">✕</button>
+      <div ref={panel} tabIndex={-1} className={`w-full ${wide ? 'max-w-5xl' : 'max-w-2xl'} animate-pop rounded-2xl border border-line bg-surface text-ink shadow-raised focus:outline-none`}>
+        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
+          <h2 id={titleId} className="text-base font-semibold tracking-tight">{title}</h2>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-ink-3 hover:bg-surface-3 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand" aria-label="Close dialog">✕</button>
         </div>
         <div className="p-5">{children}</div>
       </div>
@@ -351,17 +368,17 @@ export function lifecycleStage(pathname: string | null | undefined): string | nu
 export function LifecycleStrip({ pathname }: { pathname: string | null | undefined }) {
   const current = lifecycleStage(pathname);
   return (
-    <nav aria-label="Procurement lifecycle" className="border-t border-slate-200 bg-white px-4 py-2 md:px-8">
+    <nav aria-label="Procurement lifecycle" className="border-t border-line bg-surface/80 px-4 py-2.5 backdrop-blur md:px-8">
       <ol className="flex flex-wrap items-center gap-x-1 gap-y-1 text-[11px]">
         {LIFECYCLE.map((stage, i) => {
           const on = stage.id === current;
           return (
             <li key={stage.id} className="flex items-center gap-1">
               <Link href={stage.href} prefetch={false} aria-current={on ? 'step' : undefined}
-                className={`rounded-full px-2 py-0.5 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1A56DB] ${on ? 'bg-[#1A56DB] text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
+                className={`rounded-full px-2.5 py-0.5 font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${on ? 'bg-gradient-to-r from-brand to-accent text-white shadow-sm' : 'bg-surface-3 text-ink-2 hover:bg-brand-soft hover:text-brand-ink'}`}>
                 <span className="font-mono opacity-70">{i + 1}</span> {stage.label}
               </Link>
-              {i < LIFECYCLE.length - 1 && <span aria-hidden className="text-slate-300">›</span>}
+              {i < LIFECYCLE.length - 1 && <span aria-hidden className="text-line-strong">›</span>}
             </li>
           );
         })}
