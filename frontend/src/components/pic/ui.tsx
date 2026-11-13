@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { MitigationRequest, Offer, offerOf } from './sod-mitigation';
-import { KeyboardEvent, ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { KeyboardEvent, ReactNode, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import type { ApiError } from '@/lib/pic/api';
 import { label } from '@/lib/pic/format';
 import { ModuleKpis } from './kpi';
@@ -65,11 +65,14 @@ export function CopyButton({ text, label: buttonLabel, className = '' }: { text:
 }
 
 // ---------------------------------------------------------------- quick search trigger pill (Header)
+const emptySubscribe = () => () => {};
+
 export function QuickSearchTrigger({ onClick }: { onClick: () => void }) {
-  const [isMac, setIsMac] = useState(false);
-  useEffect(() => {
-    setIsMac(typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent));
-  }, []);
+  const isMac = useSyncExternalStore(
+    emptySubscribe,
+    () => typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent),
+    () => false
+  );
 
   return (
     <button

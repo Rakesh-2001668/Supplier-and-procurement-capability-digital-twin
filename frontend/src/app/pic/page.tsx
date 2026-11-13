@@ -19,14 +19,10 @@ import {
   Activity,
   ArrowRight,
   CheckCircle2,
-  Filter,
-  Layers,
   Pause,
   Play,
-  RefreshCw,
   Search,
   ShieldAlert,
-  Sparkles,
 } from 'lucide-react';
 
 type Dashboard = {

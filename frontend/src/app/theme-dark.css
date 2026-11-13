@@ -269,6 +269,7 @@
 :root[data-theme="dark"] .hover\:text-red-600:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(70.4% 0.191 22.216); }
 :root[data-theme="dark"] .hover\:text-red-700:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(80.8% 0.114 19.571); }
 :root[data-theme="dark"] .hover\:text-rose-600:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(71.2% 0.194 13.428); }
+:root[data-theme="dark"] .hover\:text-rose-700:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(81% 0.117 11.638); }
 :root[data-theme="dark"] .hover\:text-slate-600:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: #aab6c8; }
 :root[data-theme="dark"] .hover\:text-slate-700:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: #cbd5e1; }
 :root[data-theme="dark"] .hover\:text-slate-800:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: #e2e8f0; }

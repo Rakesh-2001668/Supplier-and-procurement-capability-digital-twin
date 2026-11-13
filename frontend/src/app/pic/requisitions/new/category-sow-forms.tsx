@@ -278,7 +278,19 @@ function ProfessionalServicesModal({
                   />
                 </div>
                 <div className="col-span-5 md:col-span-2">
-                  <label className="text-[10px] font-semibold text-slate-500">Amount (₹)</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-semibold text-slate-500">Amount (₹)</label>
+                    {milestones.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeMilestone(m.id)}
+                        className="text-[10px] text-rose-500 hover:text-rose-700"
+                        title="Remove milestone"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
                   <Input
                     type="number"
                     min="0"

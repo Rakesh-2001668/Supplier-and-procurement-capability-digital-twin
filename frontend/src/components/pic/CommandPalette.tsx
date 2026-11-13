@@ -55,11 +55,25 @@ export default function CommandPalette({
   const listRef = useRef<HTMLUListElement>(null);
   const inputId = useId();
 
-  // Focus input when opened
-  useEffect(() => {
+  // Reset query and active index on palette open or query change without effect cascade
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
     if (open) {
       setQuery('');
       setActiveIndex(0);
+    }
+  }
+
+  const [prevQuery, setPrevQuery] = useState(query);
+  if (query !== prevQuery) {
+    setPrevQuery(query);
+    setActiveIndex(0);
+  }
+
+  // Focus input when opened
+  useEffect(() => {
+    if (open) {
       const timer = setTimeout(() => inputRef.current?.focus(), 40);
       return () => clearTimeout(timer);
     }
@@ -313,11 +327,6 @@ export default function CommandPalette({
 
     return matched;
   }, [query, items, onClose, router]);
-
-  // Keep active index in bounds
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [query]);
 
   // Scroll active item into view
   useEffect(() => {
