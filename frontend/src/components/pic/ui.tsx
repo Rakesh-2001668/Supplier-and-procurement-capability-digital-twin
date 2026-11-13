@@ -156,11 +156,11 @@ export function PageHeader({ eyebrow, title, subtitle, actions, kpis }: { eyebro
 
 export function Card({ title, actions, children, className = '', interactive = false }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; interactive?: boolean }) {
   return (
-    <section className={`rounded-2xl border border-line bg-surface shadow-card transition-all ${interactive ? 'hover:-translate-y-0.5 hover:border-line-strong hover:shadow-raised' : ''} ${className}`}>
+    <section className={`rounded-2xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface shadow-card transition-all duration-200 hover:border-line-strong hover:ring-black/[0.08] dark:hover:ring-white/[0.12] ${interactive ? 'hover:-translate-y-1 hover:border-brand/60 hover:ring-brand/30 hover:shadow-raised cursor-pointer' : ''} ${className}`}>
       {(title || actions) && (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
-          {title && <h2 className="text-sm font-semibold tracking-tight text-ink">{title}</h2>}
-          {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-surface-2/40 px-5 py-3.5">
+          {title && <h2 className="text-sm font-bold tracking-tight text-ink">{title}</h2>}
+          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
         </div>
       )}
       <div className="p-5">{children}</div>
@@ -189,50 +189,52 @@ export function Kpi({
   const bar = tone === 'good' ? 'from-emerald-400 to-teal-400' : tone === 'warn' ? 'from-amber-400 to-orange-400' : tone === 'bad' ? 'from-red-400 to-rose-400' : 'from-brand to-accent';
 
   const content = (
-    <div className={`group relative overflow-hidden rounded-2xl border border-line bg-surface px-4 pb-3.5 pt-4 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:border-line-strong hover:shadow-raised ${href ? 'cursor-pointer' : ''}`}>
-      <span aria-hidden className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${bar} opacity-80 group-hover:opacity-100 transition-opacity`} />
+    <div className={`group relative flex h-full flex-col justify-between overflow-hidden rounded-2xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface p-4 shadow-card transition-all duration-200 hover:-translate-y-1 hover:border-brand/60 hover:ring-brand/30 hover:shadow-raised ${href ? 'cursor-pointer' : ''}`}>
+      <span aria-hidden className={`absolute inset-x-0 top-0 h-[3.5px] bg-gradient-to-r ${bar} opacity-85 transition-all group-hover:opacity-100 group-hover:h-[4px]`} />
       
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{name}</p>
-        {href && (
-          <ArrowUpRight size={14} className="text-ink-3 opacity-0 transition group-hover:opacity-100 group-hover:text-brand-ink" />
-        )}
-      </div>
-
-      <div className="mt-1.5 flex items-baseline justify-between gap-2">
-        <p className={`text-[26px] font-semibold leading-none tracking-tight tabular-nums ${color}`}>{value ?? '–'}</p>
-        {trend && (
-          <span
-            className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
-              trend.neutral
-                ? 'bg-surface-3 text-ink-2'
-                : trend.positive
-                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-                : 'bg-red-500/10 text-red-700 dark:text-red-400'
-            }`}
-          >
-            {trend.value}
-          </span>
-        )}
-      </div>
-
-      {typeof progress === 'number' && (
-        <div className="mt-2.5">
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
-            <div
-              className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
-              style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-            />
-          </div>
+      <div>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-ink-3 transition-colors group-hover:text-brand-ink">{name}</p>
+          {href && (
+            <ArrowUpRight size={14} className="text-ink-3 opacity-0 transition-all group-hover:opacity-100 group-hover:text-brand-ink group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+          )}
         </div>
-      )}
 
-      {hint && <div className="mt-2 text-xs text-ink-3">{hint}</div>}
+        <div className="mt-2 flex items-baseline justify-between gap-2">
+          <p className={`text-[28px] md:text-[32px] font-extrabold leading-none tracking-tight tabular-nums ${color}`}>{value ?? '–'}</p>
+          {trend && (
+            <span
+              className={`inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[10px] font-bold border ${
+                trend.neutral
+                  ? 'bg-surface-3 text-ink-2 border-line'
+                  : trend.positive
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20'
+                  : 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20'
+              }`}
+            >
+              {trend.value}
+            </span>
+          )}
+        </div>
+
+        {typeof progress === 'number' && (
+          <div className="mt-2.5">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3 border border-line/40">
+              <div
+                className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
+                style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {hint && <div className="mt-3 border-t border-line/60 pt-2 text-xs text-ink-3">{hint}</div>}
     </div>
   );
 
   return href ? (
-    <Link href={href} prefetch={false} className="focus:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded-2xl block">
+    <Link href={href} prefetch={false} className="focus:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded-2xl block h-full">
       {content}
     </Link>
   ) : (
@@ -242,11 +244,14 @@ export function Kpi({
 
 export function Facts({ items }: { items: [string, ReactNode][] }) {
   return (
-    <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm md:grid-cols-4">
+    <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {items.map(([k, v]) => (
-        <div key={k} className="min-w-0">
-          <dt className="text-xs text-ink-3">{k}</dt>
-          <dd className="mt-0.5 break-words font-medium text-ink">{v ?? '–'}</dd>
+        <div
+          key={k}
+          className="min-w-0 rounded-xl border border-line-strong/70 ring-1 ring-inset ring-black/[0.03] dark:ring-white/[0.05] bg-surface-2/40 px-3.5 py-2.5 transition-all hover:border-line-strong hover:bg-surface-2"
+        >
+          <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-3">{k}</dt>
+          <dd className="mt-1 break-words text-sm font-semibold text-ink tabular-nums">{v ?? '–'}</dd>
         </div>
       ))}
     </dl>
@@ -301,7 +306,7 @@ export function Field({ label: name, hint, error, required, children }: {
   );
 }
 
-export const inputClass = 'w-full rounded-lg border border-line-strong bg-surface px-3 py-1.5 text-sm text-ink shadow-sm placeholder:text-ink-3 transition focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/15';
+export const inputClass = 'w-full rounded-xl border border-line-strong ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface px-3.5 py-2 text-sm text-ink shadow-xs placeholder:text-ink-3 transition-all hover:border-line-strong/90 focus:border-brand focus:outline-none focus:ring-4 focus:ring-brand/20';
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${inputClass} ${props.className ?? ''}`} />;
@@ -324,7 +329,7 @@ export function ProblemBox({ error }: { error: ApiError | Error | null | undefin
   if (!error) return null;
   const p = (error as ApiError).problem;
   return (
-    <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+    <div role="alert" className="rounded-xl border border-red-300 ring-1 ring-inset ring-red-400/20 bg-red-50/80 px-4 py-3.5 text-sm text-red-900 shadow-xs">
       <p className="font-semibold">{p?.title ? label(String(p.title)) : 'Could not load this'}</p>
       <p className="mt-0.5">{p?.detail ?? error.message}</p>
       {(p?.ruleRef || p?.traceId) && <p className="mt-1 font-mono text-[11px] opacity-70">{[p.ruleRef && `Rule ${p.ruleRef}`, p.traceId && `Trace ${p.traceId}`].filter(Boolean).join(' · ')}</p>}
@@ -344,11 +349,11 @@ export function Loading({ text = 'Loading…' }: { text?: string }) {
 
 export function Empty({ title, hint }: { title: string; hint?: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-dashed border-line-strong bg-surface-2/60 px-6 py-12 text-center">
+    <div className="rounded-2xl border-2 border-dashed border-line-strong/80 ring-1 ring-inset ring-black/[0.02] dark:ring-white/[0.04] bg-surface-2/50 px-6 py-12 text-center">
       <span aria-hidden className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-brand-soft text-brand-ink">
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7h16M4 12h10M4 17h7" strokeLinecap="round" /></svg>
       </span>
-      <p className="text-sm font-medium text-ink">{title}</p>
+      <p className="text-sm font-semibold text-ink">{title}</p>
       {hint && <p className="mt-1 text-sm text-ink-3">{hint}</p>}
     </div>
   );
@@ -373,29 +378,29 @@ export function DataTable<T extends Record<string, unknown>>({ columns, rows, ro
   const someSelected = !!idOf && rows.some((r) => selection!.selected.has(idOf(r)));
   return (
     <div>
-      <div className="overflow-x-auto rounded-xl border border-line bg-surface shadow-card">
+      <div className="overflow-x-auto rounded-2xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface shadow-card">
         <table className="min-w-full divide-y divide-line text-sm">
           {caption && <caption className="sr-only">{caption}</caption>}
-          <thead className="bg-surface-2">
+          <thead className="bg-surface-2/80 backdrop-blur">
             <tr>
               {selection && idOf && (
-                <th scope="col" className="w-8 px-3 py-2">
-                  <input type="checkbox" className="accent-brand" aria-label="Select all rows" checked={allSelected}
+                <th scope="col" className="w-8 px-3.5 py-3">
+                  <input type="checkbox" className="accent-brand rounded" aria-label="Select all rows" checked={allSelected}
                     ref={(el) => { if (el) el.indeterminate = !allSelected && someSelected; }}
                     onChange={() => selection.onChange(allSelected ? new Set() : new Set(rows.map(idOf)))} />
                 </th>
               )}
               {columns.map((c) => (
-                <th key={c.key} scope="col" className={`whitespace-nowrap px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-ink-3 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.header}</th>
+                <th key={c.key} scope="col" className={`whitespace-nowrap px-3.5 py-3 text-[11px] font-bold uppercase tracking-wider text-ink-3 ${c.align === 'right' ? 'text-right' : 'text-left'}`}>{c.header}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-line bg-surface">
             {rows.map((row, i) => (
-              <tr key={String(row.id ?? row.number ?? i)} className={`transition-colors ${rowHref ? 'hover:bg-brand-soft' : 'hover:bg-surface-2'}`} aria-selected={selection && idOf ? selection.selected.has(idOf(row)) : undefined}>
+              <tr key={String(row.id ?? row.number ?? i)} className={`transition-colors duration-150 ${rowHref ? 'hover:bg-brand-soft/70 cursor-pointer' : 'hover:bg-surface-2/60'}`} aria-selected={selection && idOf ? selection.selected.has(idOf(row)) : undefined}>
                 {selection && idOf && (
-                  <td className="px-3 py-2 align-top">
-                    <input type="checkbox" className="accent-brand" aria-label={`Select ${nameOf(row)}`} checked={selection.selected.has(idOf(row))}
+                  <td className="px-3.5 py-2.5 align-top">
+                    <input type="checkbox" className="accent-brand rounded" aria-label={`Select ${nameOf(row)}`} checked={selection.selected.has(idOf(row))}
                       onChange={() => {
                         const next = new Set(selection.selected);
                         if (next.has(idOf(row))) next.delete(idOf(row)); else next.add(idOf(row));
@@ -406,8 +411,8 @@ export function DataTable<T extends Record<string, unknown>>({ columns, rows, ro
                 {columns.map((c, ci) => {
                   const content = c.render ? c.render(row) : (row[c.key] as ReactNode) ?? '–';
                   return (
-                    <td key={c.key} className={`px-3 py-2.5 align-top text-ink ${c.align === 'right' ? 'text-right tabular-nums' : ''} ${c.className ?? ''}`}>
-                      {rowHref && ci === 0 ? <Link href={rowHref(row)} prefetch={false} className="font-medium text-brand-ink hover:underline">{content}</Link> : content}
+                    <td key={c.key} className={`px-3.5 py-2.5 align-top text-ink ${c.align === 'right' ? 'text-right tabular-nums font-semibold' : ''} ${c.className ?? ''}`}>
+                      {rowHref && ci === 0 ? <Link href={rowHref(row)} prefetch={false} className="font-semibold text-brand-ink hover:underline">{content}</Link> : content}
                     </td>
                   );
                 })}

@@ -219,7 +219,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                         <span className="text-lg font-bold">→</span>
                       </div>
                     )}
-                    <div className="flex-1 rounded-xl border border-line bg-surface-2/60 p-3">
+                    <div className="flex-1 rounded-2xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface-2/60 p-3.5 shadow-card">
                       <div className="mb-3 flex items-center justify-between border-b border-line/70 pb-2">
                         <div className="flex items-center gap-1.5">
                           <span className="text-sm">{group.stage.icon}</span>
@@ -227,7 +227,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                             {group.stage.label}
                           </h4>
                         </div>
-                        <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-ink-2">
+                        <span className="rounded-full bg-surface-3 border border-line px-2 py-0.5 text-[10px] font-bold text-ink-2">
                           {group.nodes.length}
                         </span>
                       </div>
@@ -252,12 +252,12 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                                   setSelectedRef(n.ref);
                                 }
                               }}
-                              className={`group relative cursor-pointer rounded-lg border p-2.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
+                              className={`group relative cursor-pointer rounded-xl border p-3 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand ${
                                 isSelected
-                                  ? 'border-brand bg-surface ring-2 ring-brand shadow-md'
+                                  ? 'border-brand bg-surface ring-2 ring-brand shadow-raised -translate-y-0.5'
                                   : isCurrent
-                                  ? 'border-blue-300 bg-blue-50/50 hover:border-brand'
-                                  : 'border-line bg-surface hover:border-line-strong hover:shadow-sm'
+                                  ? 'border-blue-400 bg-blue-50/50 hover:border-brand hover:shadow-card'
+                                  : 'border-line-strong/70 ring-1 ring-inset ring-black/[0.03] dark:ring-white/[0.05] bg-surface hover:border-brand/50 hover:shadow-card hover:-translate-y-0.5'
                               }`}
                             >
                               <div className="flex items-center justify-between gap-1">
@@ -319,14 +319,14 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
           </div>
 
           {/* Trace Relationship Cards */}
-          <div className="rounded-xl border border-line bg-surface p-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-2 mb-3">
+          <div className="rounded-2xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface p-5 shadow-card">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-ink mb-3.5">
               Direct Relationships for {activeNode?.ref}
             </h4>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {/* Predecessors */}
-              <div className="rounded-lg border border-line bg-surface-2/50 p-3">
-                <span className="text-[11px] font-semibold text-ink-3 uppercase tracking-wide">
+              <div className="rounded-xl border border-line-strong/70 ring-1 ring-inset ring-black/[0.03] dark:ring-white/[0.05] bg-surface-2/50 p-4 transition hover:border-line-strong hover:bg-surface-2/70">
+                <span className="text-[11px] font-bold text-ink-3 uppercase tracking-wider">
                   Upstream Predecessors ({incomingEdges.length})
                 </span>
                 {!incomingEdges.length ? (
@@ -341,7 +341,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                             <span className="font-mono text-ink-3">←</span>
                             <DocLink node={fromNode} line={e.fromLine} />
                           </div>
-                          <span className="rounded bg-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-ink-2">
+                          <span className="rounded bg-surface-3 border border-line px-1.5 py-0.5 font-mono text-[10px] text-ink-2 font-semibold">
                             {e.type.replace(/_/g, ' ').toLowerCase()}
                           </span>
                         </li>
@@ -352,8 +352,8 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
               </div>
 
               {/* Successors */}
-              <div className="rounded-lg border border-line bg-surface-2/50 p-3">
-                <span className="text-[11px] font-semibold text-ink-3 uppercase tracking-wide">
+              <div className="rounded-xl border border-line-strong/70 ring-1 ring-inset ring-black/[0.03] dark:ring-white/[0.05] bg-surface-2/50 p-4 transition hover:border-line-strong hover:bg-surface-2/70">
+                <span className="text-[11px] font-bold text-ink-3 uppercase tracking-wider">
                   Downstream Successors ({outgoingEdges.length})
                 </span>
                 {!outgoingEdges.length ? (
@@ -364,7 +364,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                       const toNode = nodes[e.to];
                       return (
                         <li key={idx} className="flex items-center justify-between text-xs">
-                          <span className="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] text-blue-800 font-semibold">
+                          <span className="rounded bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 font-mono text-[10px] text-brand-ink font-bold">
                             {e.type.replace(/_/g, ' ').toLowerCase()}
                           </span>
                           <div className="flex items-center gap-1.5">

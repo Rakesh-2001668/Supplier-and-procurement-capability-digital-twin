@@ -66,6 +66,7 @@
 :root[data-theme="dark"] .bg-red-50\/40:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, color-mix(in oklab, oklch(63.7% 0.237 25.331) 11%, #111a2e) 40%, transparent); }
 :root[data-theme="dark"] .bg-red-50\/50:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, color-mix(in oklab, oklch(63.7% 0.237 25.331) 11%, #111a2e) 50%, transparent); }
 :root[data-theme="dark"] .bg-red-50\/70:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, color-mix(in oklab, oklch(63.7% 0.237 25.331) 11%, #111a2e) 70%, transparent); }
+:root[data-theme="dark"] .bg-red-50\/80:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, color-mix(in oklab, oklch(63.7% 0.237 25.331) 11%, #111a2e) 80%, transparent); }
 :root[data-theme="dark"] .bg-rose-100:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, oklch(64.5% 0.246 16.439) 17%, #111a2e); }
 :root[data-theme="dark"] .bg-rose-200:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, oklch(64.5% 0.246 16.439) 26%, #111a2e); }
 :root[data-theme="dark"] .bg-rose-50:not(:where(.theme-fixed, .theme-fixed *)) { background-color: color-mix(in oklab, oklch(64.5% 0.246 16.439) 11%, #111a2e); }
@@ -264,7 +265,6 @@
 :root[data-theme="dark"] .hover\:text-blue-700:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(80.9% 0.105 251.813); }
 :root[data-theme="dark"] .hover\:text-blue-800:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(88.2% 0.059 254.128); }
 :root[data-theme="dark"] .hover\:text-emerald-900:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(90.5% 0.093 164.15); }
-:root[data-theme="dark"] .hover\:text-gray-600:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: #aab6c8; }
 :root[data-theme="dark"] .hover\:text-gray-700:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: #cbd5e1; }
 :root[data-theme="dark"] .hover\:text-red-600:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(70.4% 0.191 22.216); }
 :root[data-theme="dark"] .hover\:text-red-700:hover:not(:where(.theme-fixed, .theme-fixed *)) { color: oklch(80.8% 0.114 19.571); }

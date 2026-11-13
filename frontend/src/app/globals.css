@@ -24,8 +24,8 @@
   --brand-ink: #1a56db;
   --brand-soft: #eef4ff;
   --accent: #7c3aed;
-  --shadow-card: 0 1px 2px rgb(16 24 40 / 0.04), 0 1px 3px rgb(16 24 40 / 0.06);
-  --shadow-raised: 0 10px 30px -12px rgb(16 24 40 / 0.18), 0 2px 6px rgb(16 24 40 / 0.06);
+  --shadow-card: 0 1px 3px 0 rgb(16 24 40 / 0.06), 0 1px 2px -1px rgb(16 24 40 / 0.06), 0 0 0 1px rgb(16 24 40 / 0.04);
+  --shadow-raised: 0 12px 32px -8px rgb(16 24 40 / 0.14), 0 4px 12px -2px rgb(16 24 40 / 0.06), 0 0 0 1px rgb(16 24 40 / 0.05);
   --glow: radial-gradient(1200px 380px at 12% -8%, rgb(26 86 219 / 0.07), transparent 60%),
           radial-gradient(900px 320px at 95% -12%, rgb(124 58 237 / 0.06), transparent 60%);
 
@@ -61,8 +61,8 @@
   --brand-ink: #8ab0ff;
   --brand-soft: rgb(59 118 240 / 0.14);
   --accent: #a78bfa;
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 1px rgb(255 255 255 / 0.02);
-  --shadow-raised: 0 14px 34px -12px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.35);
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.4), 0 1px 2px -1px rgb(0 0 0 / 0.3), 0 0 0 1px rgb(255 255 255 / 0.05);
+  --shadow-raised: 0 16px 36px -8px rgb(0 0 0 / 0.65), 0 4px 12px -2px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.07);
   --glow: radial-gradient(1200px 380px at 12% -8%, rgb(59 118 240 / 0.14), transparent 60%),
           radial-gradient(900px 320px at 95% -12%, rgb(167 139 250 / 0.10), transparent 60%);
   --sidebar-hover: #1c2840;

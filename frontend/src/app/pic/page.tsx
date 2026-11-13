@@ -322,19 +322,19 @@ export default function CommandCentre() {
             }
           >
             <dl className="grid grid-cols-3 gap-3 text-sm">
-              <div className="rounded-xl border border-line bg-surface-2 p-2.5">
-                <dt className="text-[11px] font-medium uppercase text-ink-3">Open tasks</dt>
-                <dd className="mt-1 text-xl font-bold tabular-nums text-ink">{data.tasks.open}</dd>
+              <div className="rounded-xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface-2/60 p-3 transition hover:border-line-strong hover:bg-surface-2">
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-3">Open tasks</dt>
+                <dd className="mt-1 text-2xl font-extrabold tabular-nums text-ink">{data.tasks.open}</dd>
               </div>
-              <div className="rounded-xl border border-line bg-surface-2 p-2.5">
-                <dt className="text-[11px] font-medium uppercase text-ink-3">Overdue SLA</dt>
-                <dd className={`mt-1 text-xl font-bold tabular-nums ${data.tasks.overdue ? 'text-amber-600 dark:text-amber-400' : 'text-ink'}`}>
+              <div className="rounded-xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface-2/60 p-3 transition hover:border-line-strong hover:bg-surface-2">
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-3">Overdue SLA</dt>
+                <dd className={`mt-1 text-2xl font-extrabold tabular-nums ${data.tasks.overdue ? 'text-amber-600 dark:text-amber-400' : 'text-ink'}`}>
                   {data.tasks.overdue}
                 </dd>
               </div>
-              <div className="rounded-xl border border-line bg-surface-2 p-2.5">
-                <dt className="text-[11px] font-medium uppercase text-ink-3">SoD blocks</dt>
-                <dd className={`mt-1 text-xl font-bold tabular-nums ${data.controls.sodViolations ? 'text-red-600 dark:text-red-400' : 'text-ink'}`}>
+              <div className="rounded-xl border border-line-strong/80 ring-1 ring-inset ring-black/[0.04] dark:ring-white/[0.06] bg-surface-2/60 p-3 transition hover:border-line-strong hover:bg-surface-2">
+                <dt className="text-[11px] font-bold uppercase tracking-wider text-ink-3">SoD blocks</dt>
+                <dd className={`mt-1 text-2xl font-extrabold tabular-nums ${data.controls.sodViolations ? 'text-red-600 dark:text-red-400' : 'text-ink'}`}>
                   {data.controls.sodViolations}
                 </dd>
               </div>
