@@ -48,7 +48,7 @@ export default function CommandPalette({
   onClose: () => void;
 }) {
   const router = useRouter();
-  const { toast } = useToast();
+  const toast = useToast();
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
