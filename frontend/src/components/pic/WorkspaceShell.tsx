@@ -6,7 +6,8 @@ import { createContext, useContext, useEffect, useMemo, useState, useSyncExterna
 import { useQueryClient } from '@tanstack/react-query';
 import { readSessionUser, SessionUser, signOut } from '@/lib/pic/api';
 import { useApi } from '@/lib/pic/hooks';
-import { LifecycleStrip } from './ui';
+import { LifecycleStrip, QuickSearchTrigger } from './ui';
+import CommandPalette from './CommandPalette';
 import { legacyDemoEnabled } from '@/lib/pic/deployment';
 import { dateTime } from '@/lib/pic/format';
 import { NotificationBell } from '@/app/pic/notifications/_notifications';
@@ -89,6 +90,19 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
   const profileCookie = useSyncExternalStore(subscribeNothing, readCookies, () => '');
   const user = useMemo<SessionUser | null>(() => (profileCookie ? readSessionUser() : null), [profileCookie]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [cmdOpen, setCmdOpen] = useState(false);
+
+  // Global Ctrl+K / Cmd+K listener
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCmdOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
   // Sign-in and the public registration and activation pages render without the platform chrome.
   const isLogin = PUBLIC_PAGES.includes(pathname) || pathname.startsWith('/pic/register/');
   const live = useLiveStream(!isLogin && !!user);
@@ -179,6 +193,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                     {tenant.data.templateLabel} template
                   </span>
                 )}
+                <QuickSearchTrigger onClick={() => setCmdOpen(true)} />
               </div>
               <div className="flex items-center gap-3">
                 {twinPage && legacyDemoEnabled && !supplier && <IndustrySwitcher />}
@@ -221,6 +236,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
             {!supplier && !twinPage && !user?.roles.includes('PLATFORM_OPERATOR') && <footer><LifecycleStrip pathname={pathname} /></footer>}
           </div>
         </div>
+        <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
       </ToastProvider>
     </LiveContext.Provider>
   );

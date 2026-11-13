@@ -6,6 +6,7 @@ import { KeyboardEvent, ReactNode, useEffect, useId, useRef, useState } from 're
 import type { ApiError } from '@/lib/pic/api';
 import { label } from '@/lib/pic/format';
 import { ModuleKpis } from './kpi';
+import { Check, Copy, ArrowUpRight, Search } from 'lucide-react';
 
 // ---------------------------------------------------------------- status chip (colour + text, never colour alone)
 const DONE = ['APPROVED', 'ACTIVE', 'PAID', 'POSTED', 'CONFIRMED', 'QUALIFIED', 'PREFERRED', 'COMPLETED', 'ACCEPTED', 'VALIDATED', 'AWARDED',
@@ -21,15 +22,114 @@ const BLOCKED = ['REJECTED', 'BLOCKED', 'CANCELLED', 'DEAD_LETTER', 'EXPIRED', '
 
 export function StatusChip({ status }: { status: string | null | undefined }) {
   const s = (status ?? '').toUpperCase();
+  const isAttention = ATTENTION.includes(s);
   const [tone, dot] = DONE.includes(s) ? ['bg-emerald-50 text-emerald-800 ring-emerald-200', 'bg-emerald-500']
-    : ATTENTION.includes(s) ? ['bg-amber-50 text-amber-800 ring-amber-200', 'bg-amber-500']
+    : isAttention ? ['bg-amber-50 text-amber-800 ring-amber-200', 'bg-amber-500']
       : BLOCKED.includes(s) ? ['bg-red-50 text-red-800 ring-red-200', 'bg-red-500']
         : ['bg-blue-50 text-blue-800 ring-blue-200', 'bg-blue-500'];
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ring-1 ring-inset ${tone}`}>
-      {s && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />}
+      {s && <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot} ${isAttention ? 'animate-pulse' : ''}`} />}
       {s ? s.replace(/_/g, ' ') : '–'}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------- interactive copy button
+export function CopyButton({ text, label: buttonLabel, className = '' }: { text: string; label?: string; className?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      title={copied ? 'Copied to clipboard!' : `Copy ${text}`}
+      aria-label={copied ? 'Copied' : `Copy ${text}`}
+      className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[11px] text-ink-3 transition hover:bg-surface-3 hover:text-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-brand ${className}`}
+    >
+      {copied ? <Check size={12} className="text-emerald-500 animate-pop" /> : <Copy size={12} />}
+      {buttonLabel && <span className={copied ? 'text-emerald-600 font-semibold' : ''}>{copied ? 'Copied' : buttonLabel}</span>}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------- quick search trigger pill (Header)
+export function QuickSearchTrigger({ onClick }: { onClick: () => void }) {
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    setIsMac(typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent));
+  }, []);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="hidden sm:inline-flex items-center gap-2 rounded-xl border border-line bg-surface/60 px-3 py-1.5 text-xs text-ink-3 shadow-sm transition hover:border-line-strong hover:bg-surface hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+      title="Open Command Palette (Ctrl+K or Cmd+K)"
+      aria-label="Open universal command palette"
+    >
+      <Search size={14} className="text-brand-ink" />
+      <span className="hidden md:inline font-normal">Jump to module, action...</span>
+      <span className="md:hidden font-normal">Search...</span>
+      <kbd className="flex items-center gap-0.5 rounded border border-line-strong bg-surface-2 px-1.5 py-0.5 font-mono text-[10px] text-ink-2 shadow-xs">
+        {isMac ? '⌘K' : 'Ctrl K'}
+      </kbd>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------- interactive filter pills
+export function FilterPills<T extends string>({
+  options,
+  active,
+  onChange,
+  className = '',
+}: {
+  options: { id: T; label: string; count?: number }[];
+  active: T;
+  onChange: (id: T) => void;
+  className?: string;
+}) {
+  return (
+    <div className={`inline-flex flex-wrap items-center gap-1 rounded-xl border border-line bg-surface-2/80 p-1 text-xs font-medium ${className}`}>
+      {options.map((opt) => {
+        const selected = opt.id === active;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            onClick={() => onChange(opt.id)}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 transition-all ${
+              selected
+                ? 'bg-surface font-semibold text-brand-ink shadow-sm ring-1 ring-black/5 dark:ring-white/10'
+                : 'text-ink-2 hover:bg-surface-3/60 hover:text-ink'
+            }`}
+          >
+            <span>{opt.label}</span>
+            {typeof opt.count === 'number' && (
+              <span
+                className={`rounded-full px-1.5 py-0.2 font-mono text-[10px] ${
+                  selected ? 'bg-brand/10 text-brand-ink font-bold' : 'bg-surface-3 text-ink-3'
+                }`}
+              >
+                {opt.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -54,9 +154,9 @@ export function PageHeader({ eyebrow, title, subtitle, actions, kpis }: { eyebro
   );
 }
 
-export function Card({ title, actions, children, className = '' }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string }) {
+export function Card({ title, actions, children, className = '', interactive = false }: { title?: ReactNode; actions?: ReactNode; children: ReactNode; className?: string; interactive?: boolean }) {
   return (
-    <section className={`rounded-2xl border border-line bg-surface shadow-card ${className}`}>
+    <section className={`rounded-2xl border border-line bg-surface shadow-card transition-all ${interactive ? 'hover:-translate-y-0.5 hover:border-line-strong hover:shadow-raised' : ''} ${className}`}>
       {(title || actions) && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-5 py-3.5">
           {title && <h2 className="text-sm font-semibold tracking-tight text-ink">{title}</h2>}
@@ -68,16 +168,75 @@ export function Card({ title, actions, children, className = '' }: { title?: Rea
   );
 }
 
-export function Kpi({ label: name, value, hint, tone = 'default' }: { label: string; value: ReactNode; hint?: ReactNode; tone?: 'default' | 'good' | 'warn' | 'bad' }) {
-  const color = tone === 'good' ? 'text-emerald-700' : tone === 'warn' ? 'text-amber-700' : tone === 'bad' ? 'text-red-700' : 'text-ink';
+export function Kpi({
+  label: name,
+  value,
+  hint,
+  tone = 'default',
+  progress,
+  trend,
+  href,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  tone?: 'default' | 'good' | 'warn' | 'bad';
+  progress?: number;
+  trend?: { value: string; positive?: boolean; neutral?: boolean };
+  href?: string;
+}) {
+  const color = tone === 'good' ? 'text-emerald-700 dark:text-emerald-400' : tone === 'warn' ? 'text-amber-700 dark:text-amber-400' : tone === 'bad' ? 'text-red-700 dark:text-red-400' : 'text-ink';
   const bar = tone === 'good' ? 'from-emerald-400 to-teal-400' : tone === 'warn' ? 'from-amber-400 to-orange-400' : tone === 'bad' ? 'from-red-400 to-rose-400' : 'from-brand to-accent';
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-line bg-surface px-4 pb-3.5 pt-4 shadow-card transition hover:-translate-y-0.5 hover:shadow-raised">
-      <span aria-hidden className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${bar} opacity-80`} />
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{name}</p>
-      <p className={`mt-1.5 text-[26px] font-semibold leading-none tracking-tight tabular-nums ${color}`}>{value ?? '–'}</p>
-      {hint && <p className="mt-2 text-xs text-ink-3">{hint}</p>}
+
+  const content = (
+    <div className={`group relative overflow-hidden rounded-2xl border border-line bg-surface px-4 pb-3.5 pt-4 shadow-card transition-all duration-200 hover:-translate-y-0.5 hover:border-line-strong hover:shadow-raised ${href ? 'cursor-pointer' : ''}`}>
+      <span aria-hidden className={`absolute inset-x-0 top-0 h-[3px] bg-gradient-to-r ${bar} opacity-80 group-hover:opacity-100 transition-opacity`} />
+      
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-ink-3">{name}</p>
+        {href && (
+          <ArrowUpRight size={14} className="text-ink-3 opacity-0 transition group-hover:opacity-100 group-hover:text-brand-ink" />
+        )}
+      </div>
+
+      <div className="mt-1.5 flex items-baseline justify-between gap-2">
+        <p className={`text-[26px] font-semibold leading-none tracking-tight tabular-nums ${color}`}>{value ?? '–'}</p>
+        {trend && (
+          <span
+            className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+              trend.neutral
+                ? 'bg-surface-3 text-ink-2'
+                : trend.positive
+                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                : 'bg-red-500/10 text-red-700 dark:text-red-400'
+            }`}
+          >
+            {trend.value}
+          </span>
+        )}
+      </div>
+
+      {typeof progress === 'number' && (
+        <div className="mt-2.5">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
+            <div
+              className={`h-full rounded-full bg-gradient-to-r ${bar} transition-all duration-500`}
+              style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {hint && <div className="mt-2 text-xs text-ink-3">{hint}</div>}
     </div>
+  );
+
+  return href ? (
+    <Link href={href} prefetch={false} className="focus:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded-2xl block">
+      {content}
+    </Link>
+  ) : (
+    content
   );
 }
 

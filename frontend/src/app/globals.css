@@ -131,6 +131,20 @@ html.theme-transition, html.theme-transition *, html.theme-transition *::before,
   border-radius: 8px;
 }
 
+/* Interactive micro-interaction utilities */
+.glass-panel {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.interactive-hover {
+  transition: transform 0.2s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.2s cubic-bezier(0.2, 0.7, 0.2, 1), border-color 0.2s ease;
+}
+
+.interactive-hover:hover {
+  transform: translateY(-2px);
+}
+
 /* Charts (recharts) draw with inline colours; in the dark theme the grid, axes and tooltip follow the tokens. */
 :root[data-theme="dark"] .recharts-cartesian-grid line,
 :root[data-theme="dark"] .recharts-polar-grid line,

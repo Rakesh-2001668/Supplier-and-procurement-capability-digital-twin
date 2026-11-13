@@ -6,7 +6,7 @@ import { api, readSessionUser } from '@/lib/pic/api';
 import { dateTime, label } from '@/lib/pic/format';
 import { useApi, useCommand } from '@/lib/pic/hooks';
 import { docHref, TYPE_LABEL } from '@/lib/pic/links';
-import { Button, Card, Empty, Loading, ProblemBox, StatusChip, Tabs, Textarea } from './ui';
+import { Button, Card, CopyButton, Empty, Loading, ProblemBox, StatusChip, Tabs, Textarea } from './ui';
 import { ProcessDiagram } from './bpmn-viewer';
 
 type Step = { step: string; name: string; lane: string; type: string; status: string; actor: string | null; outcome: string | null; at: string };
@@ -166,6 +166,7 @@ export function LineageView({ type, objectRef }: { type: string; objectRef: stri
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-mono text-sm font-bold text-ink">{activeNode.ref}</span>
+                    <CopyButton text={activeNode.ref} />
                     <span className="rounded bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
                       {TYPE_LABEL[activeNode.type] ?? label(activeNode.type)}
                     </span>
@@ -496,7 +497,9 @@ export function AuditTrail({ type, objectRef }: { type: string; objectRef: strin
                 {e.after ? <p className="font-mono text-[11px] text-ink-3">{JSON.stringify(e.after).slice(0, 180)}</p> : null}
                 {(e.ruleSetVersion || e.aiRef) && <p className="font-mono text-[11px] text-ink-3">{[e.ruleSetVersion, e.aiRef].filter(Boolean).join(' · ')}</p>}
               </td>
-              <td className="py-1.5 font-mono text-[11px] text-ink-3">{e.hash.slice(0, 10)}</td>
+              <td className="py-1.5 font-mono text-[11px] text-ink-3">
+                <CopyButton text={e.hash} label={e.hash.slice(0, 8)} />
+              </td>
             </tr>
           ))}
         </tbody>
